@@ -1,0 +1,42 @@
+[package]
+name = "match3"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.android]
+package = "com.uneven3.lightcore"
+build_targets = ["aarch64-linux-android"]
+apk_name = "lightcore"
+strip = "strip"
+
+[package.metadata.android.sdk]
+min_sdk_version = 28
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Lightcore"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+orientation = "portrait"
+launch_mode = "singleTop"
+exported = true
+
+[dependencies]
+bevy = { workspace = true, features = ["wav", "debug", "android-native-activity"] }
+rand = "0.9"
+
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "match3_bin"
+path = "src/main.rs"
+
+[features]
+# Run with `cargo run --features dev` for much faster incremental builds.
+# Links bevy as a shared library instead of statically. Never use in release.
+dev = ["bevy/dynamic_linking"]
