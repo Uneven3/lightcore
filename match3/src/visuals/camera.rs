@@ -1,7 +1,7 @@
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use rand::Rng;
-use std::time::Instant;
+use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
@@ -52,7 +52,8 @@ pub(crate) fn record_frame_start(mut t: ResMut<FrameTimer>) {
     t.0 = Instant::now();
 }
 
-pub(crate) fn cap_framerate(_t: Res<FrameTimer>, _target: Res<FpsTarget>) {
+#[allow(unused_variables)]
+pub(crate) fn cap_framerate(t: Res<FrameTimer>, target: Res<FpsTarget>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let dur = match *target {
@@ -90,9 +91,7 @@ pub(crate) struct CameraShake {
     pub(crate) trauma: f32,
 }
 
-pub(crate) fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let canvas = render_target::create_canvas(&mut images, 1280, 720);
-
+pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -106,14 +105,12 @@ pub(crate) fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Ima
             order: -1,
             ..default()
         },
-        render_target::world_target(&canvas),
         Tonemapping::TonyMcMapface,
         DebandDither::Enabled,
         WorldCamera,
     ));
 
-    render_target::spawn_blit(&mut commands, canvas.clone());
-    commands.insert_resource(render_target::Canvas(canvas));
+    render_target::spawn_blit(&mut commands);
 }
 
 pub(crate) fn toggle_slow_mo(

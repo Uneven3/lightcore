@@ -3383,8 +3383,10 @@ name = "match3"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "console_error_panic_hook",
  "getrandom 0.3.4",
  "rand 0.9.4",
+ "web-time",
 ]
 
 [[package]]

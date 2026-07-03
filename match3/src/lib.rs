@@ -48,6 +48,11 @@ fn main() {
 }
 
 pub fn run_game() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+    }
+
     // Modo de presentación. Por defecto Mailbox (triple buffer): sin tearing y SIN el precipicio del
     // FIFO/AutoVsync, que en esta máquina (PRIME: render en la Radeon, pantalla en la Intel) castiga
     // cualquier dip bajo 60 cuantizando a 30/20/15 fps. Mailbox muestra el framerate real y suave.

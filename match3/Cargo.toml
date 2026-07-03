@@ -25,6 +25,8 @@ exported = true
 [dependencies]
 bevy = { workspace = true, features = ["wav", "debug", "android-native-activity"] }
 rand = "0.9"
+web-time = "1.1"
+console_error_panic_hook = "0.1"
 
 [target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }

@@ -96,11 +96,12 @@ pub(crate) fn tick_pop_anim(
         &mut PopAnim,
         Option<&mut PopDelay>,
         Option<&MeshMaterial2d<ColorMaterial>>,
+        Option<&LightColor>,
     )>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     time: Res<Time>,
 ) {
-    for (e, mut t, mut anim, delay, mat_handle) in &mut q {
+    for (e, mut t, mut anim, delay, mat_handle, color) in &mut q {
         if let Some(mut d) = delay {
             if !d.0.tick(time.delta()).is_finished() {
                 continue;
@@ -117,7 +118,11 @@ pub(crate) fn tick_pop_anim(
             mat.color = mat.color.with_alpha((1.0 - frac).max(0.0));
         }
         if frac >= 1.0 {
-            commands.trigger(LightPopped { pos: t.translation });
+            let color = color.copied().unwrap_or(LightColor::Red);
+            commands.trigger(LightPopped {
+                pos: t.translation,
+                color,
+            });
             commands.entity(e).try_despawn();
         }
     }

@@ -42,7 +42,7 @@ pub(crate) fn gather_pointer_input(
 ) {
     let (cam, cam_t) = *camera;
     let final_cam = *final_camera;
-    let (vp_pos, vp_size) = if let Some(ref viewport) = final_cam.viewport {
+    let (_vp_pos, vp_size) = if let Some(ref viewport) = final_cam.viewport {
         let scale_factor = window.scale_factor();
         let pos = Vec2::new(
             viewport.physical_position.x as f32,
@@ -79,8 +79,7 @@ pub(crate) fn gather_pointer_input(
         let win_pos = press_pos.or(held_pos).or(release_pos);
         next.position_window = win_pos;
         if let Some(pos) = win_pos {
-            let local_pos = pos - vp_pos;
-            next.position_world = window_point_to_world(cam, cam_t, vp_size, local_pos);
+            next.position_world = window_point_to_world(cam, cam_t, vp_size, pos);
         }
         *last = LastInputDevice::Touch;
     } else {
@@ -91,10 +90,11 @@ pub(crate) fn gather_pointer_input(
         next.held = mouse.pressed(MouseButton::Left);
         if let Some(pos) = window.cursor_position() {
             next.position_window = Some(pos);
-            let local_pos = pos - vp_pos;
-            next.position_world = window_point_to_world(cam, cam_t, vp_size, local_pos);
+            next.position_world = window_point_to_world(cam, cam_t, vp_size, pos);
         }
     }
+
+
 
     *pointer = next;
 }

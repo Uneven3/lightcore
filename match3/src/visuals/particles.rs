@@ -7,8 +7,6 @@ use crate::core::grid::TILE;
 const PARTICLE_DRAG: f32 = 4.0;
 
 const MEMBRANE_POP_COUNT: usize = 14;
-/// Bright cool-white, HDR so Bloom turns each speck into a tiny sparkle.
-const MEMBRANE_COLOR: Color = Color::srgb(2.4, 2.4, 2.7);
 
 /// Live-tunable particle parameters, edited from the Options screen. `burst_radius`/
 /// `membrane_radius` size the shared meshes cached in `VisualCache` — `sync_particle_mesh_settings`
@@ -57,6 +55,7 @@ pub(crate) fn spawn_membrane_pop(
     commands: &mut Commands,
     image: Handle<Image>,
     world_pos: Vec3,
+    color: Color,
     radius: f32,
 ) {
     let mut rng = rand::rng();
@@ -73,7 +72,7 @@ pub(crate) fn spawn_membrane_pop(
             },
             Sprite {
                 image: image.clone(),
-                color: MEMBRANE_COLOR,
+                color,
                 custom_size: Some(Vec2::splat(radius * 2.0)),
                 ..default()
             },

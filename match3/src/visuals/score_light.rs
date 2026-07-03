@@ -38,9 +38,9 @@ pub(crate) struct ShardSettings {
 impl Default for ShardSettings {
     fn default() -> Self {
         Self {
-            base_size_frac: 0.50,
-            max_size_frac: 0.90,
-            growth: 0.14,
+            base_size_frac: 0.18,
+            max_size_frac: 0.45,
+            growth: 0.18,
             curve_frac: 1.3,
             min_secs: 0.68,
             max_secs: 1.08,
@@ -132,11 +132,13 @@ pub(crate) fn on_chain_pop_score_light(
         let radial =
             Vec2::from_angle(rng.random_range(0.0..TAU)) * rng.random_range(0.0..TILE * 0.6);
         let ctrl = from + (line * along + perp * side + radial).extend(0.0);
-        // HDR overbright so bloom/glow is visible even without camera post-processing.
-        let lin = c.glow_color().to_linear();
-        let b = shards.hdr_boost;
-        let bright = Color::linear_rgb(lin.red * b, lin.green * b, lin.blue * b);
-        commands.spawn((
+        let core_lin = c.glow_color().to_linear();
+        let core_color = Color::linear_rgb(core_lin.red * 1.5, core_lin.green * 1.5, core_lin.blue * 1.5);
+
+        let glow_lin = c.ring_color().to_linear();
+        let glow_color = Color::linear_rgb(glow_lin.red * 1.5, glow_lin.green * 1.5, glow_lin.blue * 1.5);
+
+        let parent = commands.spawn((
             ScoreShard {
                 from,
                 ctrl,
@@ -151,13 +153,25 @@ pub(crate) fn on_chain_pop_score_light(
                 color: c,
             },
             Sprite {
-                image: cache.glow_image.clone(),
-                color: bright,
+                image: cache.core_image.clone(),
+                color: core_color,
                 custom_size: Some(Vec2::splat(size)),
                 ..default()
             },
             Transform::from_translation(from),
-        ));
+        )).id();
+
+        let glow_child = commands.spawn((
+            Sprite {
+                image: cache.glow_image.clone(),
+                color: glow_color,
+                custom_size: Some(Vec2::splat(size * 2.5)),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, -0.1),
+        )).id();
+
+        commands.entity(parent).add_child(glow_child);
     }
 }
 
@@ -171,11 +185,25 @@ pub(crate) fn tick_score_light(
     mut displayed: ResMut<DisplayedScore>,
     mut glow: ResMut<ScoreGlow>,
     mut displayed_cores: ResMut<DisplayedCollectedCores>,
-    mut q: Query<(Entity, &mut ScoreShard, &mut Transform, &mut Sprite)>,
+    mut q: Query<(
+        Entity,
+        &mut ScoreShard,
+        &mut Transform,
+        &mut Sprite,
+        Option<&Children>,
+    )>,
+    mut child_sprite_q: Query<&mut Sprite, Without<ScoreShard>>,
 ) {
-    for (e, mut shard, mut t, mut sprite) in &mut q {
+    for (e, mut shard, mut t, mut sprite, children) in &mut q {
         if !shard.pop_delay.tick(time.delta()).is_finished() {
             sprite.color = sprite.color.with_alpha(0.0);
+            if let Some(children) = children {
+                for child in children.iter() {
+                    if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
+                        child_sprite.color = child_sprite.color.with_alpha(0.0);
+                    }
+                }
+            }
             continue;
         }
         shard.timer.tick(time.delta());
@@ -193,11 +221,23 @@ pub(crate) fn tick_score_light(
             (1.0 - frac) / 0.35
         };
         sprite.color = sprite.color.with_alpha(alpha);
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
+                    child_sprite.color = child_sprite.color.with_alpha(alpha);
+                }
+            }
+        }
         if shard.timer.is_finished() {
             displayed.0 += shard.points;
             displayed_cores.0[shard.color.index()] += shard.points;
             glow.rgb = glow.rgb.lerp(shard.tint, GLOW_BLEND); // score drifts toward collected colors
             glow.pulse = (glow.pulse + 0.5).min(1.0); // each arrival re-triggers the rapid pulse
+            if let Some(children) = children {
+                for child in children.iter() {
+                    commands.entity(child).try_despawn();
+                }
+            }
             commands.entity(e).try_despawn();
         }
     }
@@ -216,6 +256,7 @@ pub(crate) fn on_light_popped(
         &mut commands,
         cache.core_image.clone(),
         trigger.pos,
+        trigger.color.ring_color(),
         particles.membrane_radius,
     );
 }

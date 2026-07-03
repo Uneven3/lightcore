@@ -7,6 +7,7 @@ use crate::core::components::{PopAnim, PopDelay};
 use crate::core::prelude::*;
 
 pub(crate) const CORE_SIZE: f32 = TILE * 0.10;
+pub(crate) const TIER2_3_CORE_SIZE: f32 = TILE * 0.082;
 pub(crate) const STAR_CORE_SIZE: f32 = TILE * 0.062; // the star's five cores are smaller, for the swarm feel
 const CORE_Z: f32 = 0.5;
 
@@ -53,7 +54,7 @@ struct CoreSpec {
 /// The cluster of cores that identifies each light kind. Core size is per-kind (only Starburst is
 /// smaller), so `rebuild_cores` picks the shared mesh from the kind, not from each spec.
 fn core_layout(kind: LightKind) -> Vec<CoreSpec> {
-    let s = TILE * 0.15; // line spacing
+    let s = TILE * 0.125; // line spacing
     match kind {
         // 1 core — a barely-there drift.
         LightKind::Normal => vec![CoreSpec {
@@ -91,7 +92,7 @@ fn core_layout(kind: LightKind) -> Vec<CoreSpec> {
             .map(|_| CoreSpec {
                 base: Vec2::ZERO,
                 pattern: CorePattern::RadialPulse,
-                radius: TILE * 0.16,
+                radius: TILE * 0.135,
             })
             .collect(),
         // 4 cores on the shuriken's cardinal arms; each shoots from center out toward its spike and
@@ -165,6 +166,11 @@ pub(crate) fn rebuild_cores(
             LightKind::Cross | LightKind::Starburst | LightKind::Blackhole
         ) {
             STAR_CORE_SIZE
+        } else if matches!(
+            *kind,
+            LightKind::RayH | LightKind::RayV | LightKind::Supernova
+        ) {
+            TIER2_3_CORE_SIZE
         } else {
             CORE_SIZE
         };
@@ -226,19 +232,19 @@ fn core_local(m: &CoreMotion, t: f32) -> Vec2 {
         CorePattern::Wander => {
             m.base + Vec2::new((t * 0.5 + p).sin(), (t * 0.63 + p * 1.7).sin()) * (TILE * 0.018)
         }
-        // Ray (tier 2): a calm bob along the axis.
+        // Ray (tier 2): bobbing along the axis.
         CorePattern::LineH => {
-            let bob = (t * 1.2 + m.index as f32 * 1.3).sin() * TILE * 0.045;
-            m.base + Vec2::new(bob, (t * 1.6 + p).sin() * TILE * 0.018)
+            let bob = (t * 3.2 + m.index as f32 * 1.5).sin() * TILE * 0.040;
+            m.base + Vec2::new(bob, 0.0)
         }
         CorePattern::LineV => {
-            let bob = (t * 1.2 + m.index as f32 * 1.3).sin() * TILE * 0.045;
-            m.base + Vec2::new((t * 1.6 + p).sin() * TILE * 0.018, bob)
+            let bob = (t * 3.2 + m.index as f32 * 1.5).sin() * TILE * 0.040;
+            m.base + Vec2::new(0.0, bob)
         }
         // Supernova (tier 3): a brisker in↔out beat.
         CorePattern::RadialPulse => {
-            let ang = m.index as f32 / m.count.max(1) as f32 * TAU;
-            let pulse = 0.42 + 0.58 * (0.5 + 0.5 * (t * 2.0 + p).sin());
+            let ang = m.index as f32 / m.count.max(1) as f32 * TAU + t * 0.8;
+            let pulse = 0.45 + 0.55 * (0.5 + 0.5 * (t * 2.8 + p).sin());
             Vec2::from_angle(ang) * m.radius * pulse
         }
         // Cross (tier 4): the shuriken's blades. Four cores locked to the membrane's cardinal spike

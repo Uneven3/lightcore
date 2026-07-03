@@ -389,6 +389,7 @@ pub(crate) struct SwapFailed;
 #[derive(Event, Clone, Copy)]
 pub(crate) struct LightPopped {
     pub(crate) pos: Vec3,
+    pub(crate) color: LightColor,
 }
 
 /// A normal light was upgraded to a power light this frame (via match-3, cascade, or shop booster).

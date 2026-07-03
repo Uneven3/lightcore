@@ -231,10 +231,10 @@ pub(crate) fn build_cache(
         shadow_mat: materials.add(ColorMaterial::from_color(Color::srgba(0.2, 0.5, 0.9, 0.45))),
         burst_mesh: meshes.add(Circle::new(particles.burst_radius)),
         membrane_mesh: meshes.add(Circle::new(particles.membrane_radius)),
-        // Solid disc with a soft anti-aliased rim (last 12% fades out).
-        core_image: radial_image(&mut images, 256, |d| 1.0 - smoothstep(0.88, 1.0, d)),
-        // Radial halo: bright center easing to nothing at the rim (squared = center-weighted).
-        glow_image: radial_image(&mut images, 256, |d| (1.0 - d) * (1.0 - d)),
+        // Solid disc with a soft anti-aliased rim (last 20% fades out, optimized for 32x32 size).
+        core_image: radial_image(&mut images, 32, |d| 1.0 - smoothstep(0.80, 1.0, d)),
+        // Radial halo: bright center easing to nothing at the rim, optimized for 128x128 size.
+        glow_image: radial_image(&mut images, 128, |d| (1.0 - d) * (1.0 - d)),
         // Horizontal beam: uniform brightness along length, soft perpendicular falloff.
         beam_image: make_beam_image(&mut images, 256),
         effect,

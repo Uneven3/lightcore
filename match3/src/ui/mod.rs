@@ -512,7 +512,12 @@ fn update_score_glow(
     let osc = (time.elapsed_secs() * SCORE_PULSE_FREQ).sin() * 0.5 + 0.5; // 0..1, fast
     let brightness = SCORE_NEON_BASE + glow.pulse * SCORE_NEON_PULSE * osc;
     let c = glow.rgb * brightness;
-    color.0 = Color::srgb(c.x, c.y, c.z); // HDR → Bloom; Text2d blooms (a UI node would not)
+    let max_val = c.x.max(c.y).max(c.z);
+    if max_val > 1.0 {
+        color.0 = Color::srgb(c.x / max_val, c.y / max_val, c.z / max_val);
+    } else {
+        color.0 = Color::srgb(c.x, c.y, c.z);
+    }
 }
 
 /// Parks the world-space score anchor at `SCORE_ANCHOR_SCREEN` projected through the camera,
@@ -527,18 +532,24 @@ fn position_score(
 ) {
     let (cam, cam_t) = *camera;
     let final_cam = *final_camera;
-    let vp_size = if let Some(ref viewport) = final_cam.viewport {
+    let (vp_pos, vp_size) = if let Some(ref viewport) = final_cam.viewport {
         let scale_factor = window.scale_factor();
-        Vec2::new(
+        let pos = Vec2::new(
+            viewport.physical_position.x as f32,
+            viewport.physical_position.y as f32,
+        ) / scale_factor;
+        let size = Vec2::new(
             viewport.physical_size.x as f32,
             viewport.physical_size.y as f32,
-        ) / scale_factor
+        ) / scale_factor;
+        (pos, size)
     } else {
-        window.size()
+        (Vec2::ZERO, window.size())
     };
     // Score siempre centrado en el tercio superior de la pantalla
     let score_screen_pos = Vec2::new(vp_size.x * 0.5, 36.0);
-    let Some(world) = window_point_to_world(cam, cam_t, vp_size, score_screen_pos) else {
+    let score_window_pos = score_screen_pos + vp_pos;
+    let Some(world) = window_point_to_world(cam, cam_t, vp_size, score_window_pos) else {
         return;
     };
     let pos = world.extend(6.0); // above the board and shards

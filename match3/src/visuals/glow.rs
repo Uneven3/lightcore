@@ -111,14 +111,17 @@ pub(crate) fn attach_glow_pools(
     }
 }
 
-/// Tints a raw color by a brightness multiplier and sets its alpha.
+/// Tints a raw color by a brightness multiplier, preserving its hue by preventing channel clipping.
 fn tint(raw: Srgba, brightness: f32, alpha: f32) -> Color {
-    Color::srgb(
-        raw.red * brightness,
-        raw.green * brightness,
-        raw.blue * brightness,
-    )
-    .with_alpha(alpha)
+    let r = raw.red * brightness;
+    let g = raw.green * brightness;
+    let b = raw.blue * brightness;
+    let max_val = r.max(g).max(b);
+    if max_val > 1.0 {
+        Color::srgb(r / max_val, g / max_val, b / max_val).with_alpha((alpha * max_val).min(1.0))
+    } else {
+        Color::srgb(r, g, b).with_alpha(alpha)
+    }
 }
 
 /// Every halo breathes in lockstep with its `LightCore` — same slow waveform and phase. Re-reads

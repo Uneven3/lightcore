@@ -4,6 +4,37 @@
     <meta charset="utf-8" />
     <title>Lightcore</title>
     <link data-trunk rel="rust" href="Cargo.toml" data-bin="match3_bin" />
+    <script>
+      (function() {
+        const audioContexts = [];
+        const OriginalAudioContext = window.AudioContext || window.webkitAudioContext;
+        if (OriginalAudioContext) {
+          window.AudioContext = class extends OriginalAudioContext {
+            constructor(...args) {
+              super(...args);
+              audioContexts.push(this);
+            }
+          };
+          if (window.webkitAudioContext) {
+            window.webkitAudioContext = window.AudioContext;
+          }
+        }
+        function resumeAudio() {
+          audioContexts.forEach(ctx => {
+            if (ctx.state === 'suspended') {
+              ctx.resume().then(() => {
+                console.log("AudioContext reactivado con éxito.");
+              }).catch(err => {
+                console.error("Error al reactivar el AudioContext:", err);
+              });
+            }
+          });
+        }
+        window.addEventListener('click', resumeAudio);
+        window.addEventListener('keydown', resumeAudio);
+        window.addEventListener('touchstart', resumeAudio);
+      })();
+    </script>
     <style>
       html, body {
         margin: 0;
