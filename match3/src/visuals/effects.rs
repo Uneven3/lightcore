@@ -51,7 +51,9 @@ pub(crate) fn build_effect_mesh(kind: LightKind) -> Mesh {
         // void/rim meshes built straight into `VisualCache` (see `assets::build_cache`), not via
         // this function. Neither ever reaches `build_cache`'s call into `build_effect_mesh` —
         // both degenerate the same as Normal.
-        LightKind::Cross | LightKind::Normal | LightKind::Blackhole => Circle::new(1.0).into(),
+        LightKind::Cross | LightKind::Normal | LightKind::Hollow | LightKind::Blackhole => {
+            Circle::new(1.0).into()
+        }
     }
 }
 
@@ -126,7 +128,7 @@ fn spawn_power_effect(
             0.35,
         ),
         // Cross and Blackhole are intercepted above (their own choreography); Normal has no blast.
-        LightKind::Cross | LightKind::Normal | LightKind::Blackhole => return,
+        LightKind::Cross | LightKind::Normal | LightKind::Hollow | LightKind::Blackhole => return,
     };
     let base_alpha = mat_color.alpha();
     commands.spawn((

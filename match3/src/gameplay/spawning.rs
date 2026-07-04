@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use super::{SpawnComplete, SuperComboPending};
-use crate::board::spawn_light;
+use super::{GameMode, SpawnComplete, SuperComboPending};
+use crate::board::{HOLLOW_BASE_CHANCE, random_basic_kind, spawn_light};
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::state::GameState;
 use crate::visuals::assets::VisualCache;
 
@@ -22,6 +23,8 @@ pub(crate) fn spawn_new_lights(
     mut commands: Commands,
     cache: Res<VisualCache>,
     mut super_combo: ResMut<SuperComboPending>,
+    mode: Res<GameMode>,
+    run: Res<RunState>,
     lights: Query<&GridPos, With<Light>>,
     sparks: Query<&GridPos, With<Spark>>,
     blockers: Query<&GridPos, With<Blocker>>,
@@ -40,6 +43,11 @@ pub(crate) fn spawn_new_lights(
     let mut power_placed = 0usize;
 
     let mut rng = rand::rng();
+    let hollow_chance = if mode.is_run() {
+        run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
+    } else {
+        HOLLOW_BASE_CHANCE
+    };
     for x in 0..GRID_W {
         let empty_positions: Vec<GridPos> = (0..GRID_H)
             .map(|y| GridPos { x, y })
@@ -57,7 +65,7 @@ pub(crate) fn spawn_new_lights(
                 power_placed += 1;
                 k
             } else {
-                LightKind::Normal
+                random_basic_kind(&mut rng, hollow_chance)
             };
             let e = spawn_light(&mut commands, &cache, pos, color, kind, above);
             commands.entity(e).insert(FallSpeed(fall_speed));

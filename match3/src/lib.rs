@@ -26,19 +26,18 @@ impl Plugin for GamePlugin {
         // already-despawned entity) — preferable to crashing for a non-critical game.
         app.set_error_handler(bevy::ecs::error::warn);
         embedded_asset!(app, "", "../assets/bevy_bird_dark.png");
-        app.init_state::<state::GameState>()
-            .init_resource::<core::run::RunState>()
-            .add_plugins((
-                core::campaign::CampaignPlugin,
-                platform::PlatformPlugin,
-                input::InputPlugin,
-                audio::AudioPlugin,
-                ui::UiPlugin,
-                visuals::VisualsPlugin,
-                gameplay::GameplayPlugin,
-                menu::MenuPlugin,
-                debug::DebugOverlayPlugin,
-            ));
+        app.init_state::<state::GameState>().add_plugins((
+            core::run::RunPlugin,
+            core::campaign::CampaignPlugin,
+            platform::PlatformPlugin,
+            input::InputPlugin,
+            audio::AudioPlugin,
+            ui::UiPlugin,
+            visuals::VisualsPlugin,
+            gameplay::GameplayPlugin,
+            menu::MenuPlugin,
+            debug::DebugOverlayPlugin,
+        ));
         // More feature plugins get added here as the migration proceeds.
     }
 }

@@ -7,11 +7,14 @@ use super::particles::{ParticleSettings, spawn_membrane_pop};
 use crate::core::grid::TILE;
 use crate::core::prelude::LightColor;
 use crate::gameplay::{
-    ChainPop, DisplayedCollectedCores, DisplayedScore, LightPopped, ScoreAnchor, ScoreGlow,
+    ChainPop, DisplayedCollectedCores, DisplayedScore, LightPopped, ScoreAnchor, ScoreDrained,
+    ScoreGlow,
 };
 
 const SHARDS_PER_POP: usize = 2;
 const MAX_TOTAL_SHARDS: usize = 48;
+const SCORE_DRAIN_SHARDS: usize = 34;
+const HOLLOW_LOCAL_DRAIN_SHARDS: usize = 8;
 /// How strongly each arriving shard drags the score's tint toward its own color.
 const GLOW_BLEND: f32 = 0.18;
 
@@ -38,13 +41,13 @@ pub(crate) struct ShardSettings {
 impl Default for ShardSettings {
     fn default() -> Self {
         Self {
-            base_size_frac: 0.18,
-            max_size_frac: 0.45,
-            growth: 0.18,
+            base_size_frac: 0.22,
+            max_size_frac: 0.40,
+            growth: 0.10,
             curve_frac: 1.3,
             min_secs: 0.68,
             max_secs: 1.08,
-            hdr_boost: 2.5,
+            hdr_boost: 5.0,
         }
     }
 }
@@ -71,6 +74,20 @@ pub(crate) struct ScoreShard {
     color: LightColor,
 }
 
+#[derive(Component)]
+pub(crate) struct ScoreShardScatter {
+    velocity: Vec3,
+    timer: Timer,
+}
+
+#[derive(Component)]
+pub(crate) struct ScoreShardAbsorb {
+    from: Vec3,
+    ctrl: Vec3,
+    to: Vec3,
+    timer: Timer,
+}
+
 fn quad_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
     let u = 1.0 - t;
     p0 * (u * u) + p1 * (2.0 * u * t) + p2 * (t * t)
@@ -79,6 +96,25 @@ fn quad_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
 fn tint_of(color: LightColor) -> Vec3 {
     let lin = color.bevy_color().to_linear();
     Vec3::new(lin.red, lin.green, lin.blue)
+}
+
+fn shard_core_color(color: LightColor, hdr_boost: f32) -> Color {
+    let lin = color.bevy_color().to_linear();
+    Color::linear_rgb(
+        lin.red * hdr_boost,
+        lin.green * hdr_boost,
+        lin.blue * hdr_boost,
+    )
+}
+
+fn shard_halo_color(color: LightColor, hdr_boost: f32) -> Color {
+    let lin = color.bevy_color().to_linear();
+    let halo_boost = hdr_boost * 0.85;
+    Color::linear_rgb(
+        lin.red * halo_boost,
+        lin.green * halo_boost,
+        lin.blue * halo_boost,
+    )
 }
 
 pub(crate) fn on_chain_pop_score_light(
@@ -132,19 +168,8 @@ pub(crate) fn on_chain_pop_score_light(
         let radial =
             Vec2::from_angle(rng.random_range(0.0..TAU)) * rng.random_range(0.0..TILE * 0.6);
         let ctrl = from + (line * along + perp * side + radial).extend(0.0);
-        let core_lin = c.glow_color().to_linear();
-        let core_color = Color::linear_rgb(
-            core_lin.red * 1.5,
-            core_lin.green * 1.5,
-            core_lin.blue * 1.5,
-        );
-
-        let glow_lin = c.ring_color().to_linear();
-        let glow_color = Color::linear_rgb(
-            glow_lin.red * 1.5,
-            glow_lin.green * 1.5,
-            glow_lin.blue * 1.5,
-        );
+        let core_color = shard_core_color(c, shards.hdr_boost);
+        let glow_color = shard_halo_color(c, shards.hdr_boost);
 
         let parent = commands
             .spawn((
@@ -176,7 +201,7 @@ pub(crate) fn on_chain_pop_score_light(
                 Sprite {
                     image: cache.glow_image.clone(),
                     color: glow_color,
-                    custom_size: Some(Vec2::splat(size * 2.5)),
+                    custom_size: Some(Vec2::splat(size * 2.8)),
                     ..default()
                 },
                 Transform::from_xyz(0.0, 0.0, -0.1),
@@ -185,6 +210,164 @@ pub(crate) fn on_chain_pop_score_light(
 
         commands.entity(parent).add_child(glow_child);
     }
+}
+
+pub(crate) fn on_score_drained(
+    trigger: On<ScoreDrained>,
+    mut commands: Commands,
+    cache: Res<VisualCache>,
+    anchor: Res<ScoreAnchor>,
+    score_glow: Res<ScoreGlow>,
+    mut q: Query<(Entity, &Transform, &mut Sprite, Option<&Children>), With<ScoreShard>>,
+    mut child_sprite_q: Query<&mut Sprite, Without<ScoreShard>>,
+) {
+    if trigger.origins.is_empty() {
+        return;
+    }
+    let mut rng = rand::rng();
+    for (e, t, mut sprite, children) in &mut q {
+        let from = t.translation;
+        let to = nearest_origin(from, &trigger.origins)
+            + Vec3::new(
+                rng.random_range(-TILE * 0.08..TILE * 0.08),
+                rng.random_range(-TILE * 0.08..TILE * 0.08),
+                0.0,
+            );
+        let ctrl = drain_ctrl(from, to, &mut rng);
+        sprite.color = sprite.color.with_alpha(1.0);
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
+                    child_sprite.color = child_sprite.color.with_alpha(0.62);
+                }
+            }
+        }
+        commands.entity(e).remove::<ScoreShard>().insert((
+            ScoreShardAbsorb {
+                from,
+                ctrl,
+                to,
+                timer: Timer::from_seconds(rng.random_range(0.42..0.68), TimerMode::Once),
+            },
+            Transform::from_translation(t.translation),
+        ));
+    }
+
+    let score_color = Color::linear_rgb(
+        score_glow.rgb.x * 4.2,
+        score_glow.rgb.y * 4.2,
+        score_glow.rgb.z * 4.2,
+    );
+    let score_halo = Color::linear_rgba(
+        score_glow.rgb.x * 2.4,
+        score_glow.rgb.y * 2.4,
+        score_glow.rgb.z * 2.4,
+        0.55,
+    );
+    for _ in 0..SCORE_DRAIN_SHARDS {
+        let from = anchor.0
+            + Vec3::new(
+                rng.random_range(-TILE * 0.42..TILE * 0.42),
+                rng.random_range(-TILE * 0.24..TILE * 0.24),
+                0.0,
+            );
+        let to = trigger.origins[rng.random_range(0..trigger.origins.len())]
+            + Vec3::new(
+                rng.random_range(-TILE * 0.12..TILE * 0.12),
+                rng.random_range(-TILE * 0.12..TILE * 0.12),
+                0.0,
+            );
+        let parent = commands
+            .spawn((
+                ScoreShardAbsorb {
+                    from,
+                    ctrl: drain_ctrl(from, to, &mut rng),
+                    to,
+                    timer: Timer::from_seconds(rng.random_range(0.46..0.76), TimerMode::Once),
+                },
+                Sprite {
+                    image: cache.core_image.clone(),
+                    color: score_color,
+                    custom_size: Some(Vec2::splat(rng.random_range(TILE * 0.10..TILE * 0.16))),
+                    ..default()
+                },
+                Transform::from_translation(from.with_z(6.0)),
+            ))
+            .id();
+
+        let glow = commands
+            .spawn((
+                Sprite {
+                    image: cache.glow_image.clone(),
+                    color: score_halo,
+                    custom_size: Some(Vec2::splat(TILE * 0.42)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, -0.1),
+            ))
+            .id();
+        commands.entity(parent).add_child(glow);
+    }
+
+    for &origin in &trigger.origins {
+        for _ in 0..HOLLOW_LOCAL_DRAIN_SHARDS {
+            let angle = rng.random_range(0.0..TAU);
+            let start = origin + (Vec2::from_angle(angle) * TILE * 0.34).extend(0.0);
+            let path = start - origin;
+            // Perpendicular offset creates a beautiful curved path
+            let perp = Vec3::new(-path.y, path.x, 0.0).normalize_or_zero() * (TILE * 0.14);
+            let ctrl = (start + origin) * 0.5 + perp;
+
+            let parent = commands
+                .spawn((
+                    ScoreShardAbsorb {
+                        from: start,
+                        ctrl,
+                        to: origin,
+                        timer: Timer::from_seconds(rng.random_range(0.50..0.85), TimerMode::Once),
+                    },
+                    Sprite {
+                        image: cache.core_image.clone(),
+                        color: Color::srgba(0.0, 0.0, 0.0, 0.85),
+                        custom_size: Some(Vec2::splat(TILE * 0.085)),
+                        ..default()
+                    },
+                    Transform::from_translation(start),
+                ))
+                .id();
+
+            let glow = commands
+                .spawn((
+                    Sprite {
+                        image: cache.glow_image.clone(),
+                        color: Color::srgba(0.0, 0.0, 0.0, 0.18),
+                        custom_size: Some(Vec2::splat(TILE * 0.26)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, 0.0, -0.1),
+                ))
+                .id();
+            commands.entity(parent).add_child(glow);
+        }
+    }
+}
+
+fn nearest_origin(from: Vec3, origins: &[Vec3]) -> Vec3 {
+    origins
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            from.distance_squared(*a)
+                .total_cmp(&from.distance_squared(*b))
+        })
+        .unwrap_or(from)
+}
+
+fn drain_ctrl(from: Vec3, to: Vec3, rng: &mut impl Rng) -> Vec3 {
+    let line = (to - from).truncate();
+    let perp = Vec2::new(-line.y, line.x).normalize_or_zero();
+    let side = rng.random_range(-TILE * 1.1..TILE * 1.1);
+    from + (line * rng.random_range(0.35..0.68) + perp * side).extend(0.0)
 }
 
 /// Deliberately not gated by `not(in_state(GameOver))` like the rest of `visuals` — a match can
@@ -255,6 +438,92 @@ pub(crate) fn tick_score_light(
     }
 }
 
+pub(crate) fn tick_score_shard_scatter(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &mut ScoreShardScatter,
+        &mut Transform,
+        &mut Sprite,
+        Option<&Children>,
+    )>,
+    mut child_sprite_q: Query<&mut Sprite, (Without<ScoreShard>, Without<ScoreShardScatter>)>,
+) {
+    for (e, mut scatter, mut t, mut sprite, children) in &mut q {
+        scatter.timer.tick(time.delta());
+        let dt = time.delta_secs();
+        scatter.velocity += Vec3::new(0.0, -TILE * 3.2, 0.0) * dt;
+        t.translation += scatter.velocity * dt;
+
+        let frac = scatter.timer.fraction();
+        let alpha = (1.0 - frac).powf(1.4);
+        let scale = 1.0 + 0.45 * frac;
+        t.scale = Vec3::splat(scale);
+        sprite.color = sprite.color.with_alpha(alpha * 0.85);
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
+                    child_sprite.color = child_sprite.color.with_alpha(alpha * 0.42);
+                }
+            }
+        }
+
+        if scatter.timer.is_finished() {
+            if let Some(children) = children {
+                for child in children.iter() {
+                    commands.entity(child).try_despawn();
+                }
+            }
+            commands.entity(e).try_despawn();
+        }
+    }
+}
+
+pub(crate) fn tick_score_shard_absorb(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &mut ScoreShardAbsorb,
+        &mut Transform,
+        &mut Sprite,
+        Option<&Children>,
+    )>,
+    mut child_sprite_q: Query<&mut Sprite, (Without<ScoreShard>, Without<ScoreShardAbsorb>)>,
+) {
+    for (e, mut absorb, mut t, mut sprite, children) in &mut q {
+        absorb.timer.tick(time.delta());
+        let frac = absorb.timer.fraction();
+        let eased = 1.0 - (1.0 - frac).powi(3);
+        t.translation = quad_bezier(absorb.from, absorb.ctrl, absorb.to, eased);
+        t.scale = Vec3::splat(1.0 - 0.82 * frac);
+
+        let alpha = if frac < 0.78 {
+            1.0
+        } else {
+            (1.0 - frac) / 0.22
+        };
+        sprite.color = sprite.color.with_alpha(alpha);
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
+                    child_sprite.color = child_sprite.color.with_alpha(alpha * 0.55);
+                }
+            }
+        }
+
+        if absorb.timer.is_finished() {
+            if let Some(children) = children {
+                for child in children.iter() {
+                    commands.entity(child).try_despawn();
+                }
+            }
+            commands.entity(e).try_despawn();
+        }
+    }
+}
+
 /// Spawns the membrane-burst particles the moment a light's fade animation completes.
 /// Fired by `gameplay::popping::tick_pop_anim` via `LightPopped` — decoupled from `ChainPop`
 /// so particles appear AFTER the ring dissolves, not at the same time as the pop starts.
@@ -268,7 +537,7 @@ pub(crate) fn on_light_popped(
         &mut commands,
         cache.core_image.clone(),
         trigger.pos,
-        trigger.color.ring_color(),
+        trigger.kind.visual_ring_color(trigger.color),
         particles.membrane_radius,
     );
 }

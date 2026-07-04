@@ -7,11 +7,12 @@ use super::{
     ResetParams, Score, ShadowCount, StatsBook,
 };
 use crate::board::{
-    generate_board, spawn_blocker, spawn_ingredient_exits, spawn_light, spawn_shadow, spawn_sparks,
+    HOLLOW_BASE_CHANCE, generate_board, spawn_blocker, spawn_hard_shadow, spawn_ingredient_exits,
+    spawn_light, spawn_shadow, spawn_sparks,
 };
 use crate::core::campaign::CampaignProgress;
 use crate::core::prelude::*;
-use crate::core::run::RunState;
+use crate::core::run::{BoonKind, RUN_LEVELS, RunState};
 use crate::input::InputActions;
 use crate::state::GameState;
 use crate::visuals::EffectAnim;
@@ -24,7 +25,7 @@ use crate::visuals::score_light::ScoreShard;
 /// only for timed-score levels, `None` (inert) for everything else.
 fn level_timer_for(goal: &LevelGoal) -> LevelTimer {
     match goal {
-        LevelGoal::TimedScore { secs, .. } => {
+        LevelGoal::TimedScore { secs, .. } | LevelGoal::TimedCollectColor { secs, .. } => {
             LevelTimer(Some(Timer::from_seconds(*secs, TimerMode::Once)))
         }
         _ => LevelTimer(None),
@@ -42,6 +43,7 @@ pub(crate) fn tick_level_timer(
     mut level_timer: ResMut<LevelTimer>,
     level: Res<LevelConfig>,
     score: Res<Score>,
+    collected_cores: Res<CollectedCores>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if level_timer.0.is_none() {
@@ -49,13 +51,23 @@ pub(crate) fn tick_level_timer(
     }
     let t = level_timer.0.as_mut().unwrap();
     t.tick(time.delta());
-    if t.is_finished()
-        && let LevelGoal::TimedScore { target, .. } = &level.goal
-    {
-        if score.0 >= *target {
-            next_state.set(GameState::LevelComplete);
-        } else {
-            next_state.set(GameState::GameOver);
+    if t.is_finished() {
+        match &level.goal {
+            LevelGoal::TimedScore { target, .. } => {
+                if score.0 >= *target {
+                    next_state.set(GameState::LevelComplete);
+                } else {
+                    next_state.set(GameState::GameOver);
+                }
+            }
+            LevelGoal::TimedCollectColor { color, target, .. } => {
+                if collected_cores.0[color.index()] >= *target {
+                    next_state.set(GameState::LevelComplete);
+                } else {
+                    next_state.set(GameState::GameOver);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -82,6 +94,31 @@ pub(crate) struct GameOverOverlay;
 #[derive(Component)]
 pub(crate) struct LevelCompleteOverlay;
 
+#[derive(Component, Clone, Copy)]
+pub(crate) struct LevelRewardButton(BoonKind);
+
+#[derive(Component)]
+pub(crate) struct LevelRewardInstructionText;
+
+#[derive(Resource, Default)]
+pub(crate) struct LevelRewardOffer {
+    offered: Vec<BoonKind>,
+    selected: Option<BoonKind>,
+    just_selected: bool,
+}
+
+impl LevelRewardOffer {
+    fn reset(&mut self, offered: Vec<BoonKind>) {
+        self.offered = offered;
+        self.selected = None;
+        self.just_selected = false;
+    }
+
+    fn active(&self) -> bool {
+        !self.offered.is_empty()
+    }
+}
+
 /// Spawns a full board (lights, plus sparks/shadow per the level's goal) for `level` —
 /// shared by `setup_level`/`handle_level_advance`/`handle_restart` so the three can't drift
 /// out of sync with each other.
@@ -90,6 +127,7 @@ fn populate_board(
     cache: &VisualCache,
     level: &LevelConfig,
     shadow_count: &mut u32,
+    hollow_chance: f32,
 ) {
     let spark_positions: HashSet<GridPos> = if level.goal == LevelGoal::Sparks {
         spark_columns(level.sparks_total)
@@ -105,16 +143,9 @@ fn populate_board(
     blocked_positions.extend(blocker_positions.iter().copied());
 
     let mut rng = rand::rng();
-    for (pos, color) in generate_board(&mut rng, &blocked_positions) {
+    for (pos, color, kind) in generate_board(&mut rng, &blocked_positions, hollow_chance) {
         if !spark_positions.contains(&pos) && !blocker_positions.contains(&pos) {
-            spawn_light(
-                commands,
-                cache,
-                pos,
-                color,
-                LightKind::Normal,
-                to_world(pos),
-            );
+            spawn_light(commands, cache, pos, color, kind, to_world(pos));
         }
     }
 
@@ -129,9 +160,12 @@ fn populate_board(
     }
 
     if level.goal == LevelGoal::ClearShadow {
-        *shadow_count = level.shadow_positions.len() as u32;
+        *shadow_count = (level.shadow_positions.len() + level.hard_shadow_positions.len()) as u32;
         for &pos in &level.shadow_positions {
             spawn_shadow(commands, cache, pos);
+        }
+        for &pos in &level.hard_shadow_positions {
+            spawn_hard_shadow(commands, cache, pos, 3);
         }
     }
 }
@@ -151,15 +185,8 @@ fn spark_columns(count: u32) -> Vec<i32> {
 /// by the shared Classic pipeline (`gameplay::chain`/`swap`) during play.
 fn populate_blackhole_board(commands: &mut Commands, cache: &VisualCache) {
     let mut rng = rand::rng();
-    for (pos, color) in generate_board(&mut rng, &HashSet::new()) {
-        spawn_light(
-            commands,
-            cache,
-            pos,
-            color,
-            LightKind::Normal,
-            to_world(pos),
-        );
+    for (pos, color, kind) in generate_board(&mut rng, &HashSet::new(), HOLLOW_BASE_CHANCE) {
+        spawn_light(commands, cache, pos, color, kind, to_world(pos));
     }
 }
 
@@ -183,7 +210,7 @@ fn populate_sandbox_board(commands: &mut Commands, cache: &VisualCache) {
     let total: u32 = KINDS.iter().map(|(_, w)| w).sum();
 
     let mut rng = rand::rng();
-    for (pos, color) in generate_board(&mut rng, &HashSet::new()) {
+    for (pos, color, _) in generate_board(&mut rng, &HashSet::new(), 0.0) {
         let mut roll = rng.random_range(0..total);
         let kind = KINDS
             .iter()
@@ -223,17 +250,36 @@ pub(crate) fn setup_match(
             reserve.0 = 0;
             spent.0 = 0;
             *level_timer = level_timer_for(&level.goal);
-            populate_board(&mut commands, &cache, &level, &mut shadow_count.0);
+            populate_board(
+                &mut commands,
+                &cache,
+                &level,
+                &mut shadow_count.0,
+                HOLLOW_BASE_CHANCE,
+            );
         }
         GameMode::Run(depth) => {
-            run.enter_depth(depth);
+            // The booster wallet (`CoreReserve`) is the run's persistent currency: it carries over
+            // level to level so the shop stays meaningful across a run, and only wipes when a
+            // fresh run actually starts (new run picked, or the previous one ended — see
+            // `show_game_over`/`show_level_complete` for how `RunState::active` goes false).
+            let new_run = run.enter_depth(depth);
             *level = make_generated_level(depth, run.seed);
             moves.0 = level.total_moves;
             shadow_count.0 = 0;
-            reserve.0 = 0;
-            spent.0 = 0;
+            if new_run {
+                reserve.0 = 0;
+                spent.0 = 0;
+            }
             *level_timer = level_timer_for(&level.goal);
-            populate_board(&mut commands, &cache, &level, &mut shadow_count.0);
+            let hollow_chance = run.hollow_spawn_chance(HOLLOW_BASE_CHANCE);
+            populate_board(
+                &mut commands,
+                &cache,
+                &level,
+                &mut shadow_count.0,
+                hollow_chance,
+            );
         }
         GameMode::ConsumeAll | GameMode::Sandbox => {
             // Sandbox modes: run the Classic detonation pipeline with no win/lose yet. An
@@ -246,6 +292,7 @@ pub(crate) fn setup_match(
                 goal: LevelGoal::Score(u32::MAX),
                 sparks_total: 0,
                 shadow_positions: vec![],
+                hard_shadow_positions: vec![],
                 blocker_positions: vec![],
                 grade_baseline: 0,
             };
@@ -269,6 +316,8 @@ pub(crate) fn setup_match(
 /// overlays) and resets all pipeline resources, so a fresh mode starts clean.
 pub(crate) fn teardown_match(
     mut commands: Commands,
+    mode: Res<GameMode>,
+    run: Res<RunState>,
     mut level: ResMut<LevelConfig>,
     mut res: ResetParams,
     match_entities: Query<
@@ -293,8 +342,13 @@ pub(crate) fn teardown_match(
     *res.level_timer = LevelTimer(None);
     res.score.0 = 0;
     res.displayed.0 = 0;
-    res.reserve.0 = 0;
-    res.spent.0 = 0;
+    // The run's booster wallet survives leaving to the menu mid-run (e.g. picking the next node,
+    // or Esc'ing out to browse the map) — only a mode switch or a run that has actually ended
+    // wipes it; `setup_match`'s Run branch zeroes it explicitly when a *new* run starts instead.
+    if !(mode.is_run() && run.active) {
+        res.reserve.0 = 0;
+        res.spent.0 = 0;
+    }
     res.moves.0 = level.total_moves;
     res.pending.0 = None;
     *res.drag = DragState::default();
@@ -328,6 +382,7 @@ pub(crate) fn show_level_complete(
     mut progress: ResMut<CampaignProgress>,
     collected_cores: Res<CollectedCores>,
     stats: Res<StatsBook>,
+    mut reward: ResMut<LevelRewardOffer>,
 ) {
     let title = if *mode == GameMode::ConsumeAll {
         "Tablero Consumido!"
@@ -335,12 +390,16 @@ pub(crate) fn show_level_complete(
         "Nivel Completado!"
     };
 
+    let mut reward_offer = Vec::new();
     let details = if *mode == GameMode::ConsumeAll {
         format!("Lightcores capturados: {}", score.0)
     } else {
         let unlock = progress.record_score(level.level, score.0);
         if mode.is_run() {
             run.complete_depth(level.level);
+            if level.level < RUN_LEVELS {
+                reward_offer = run.reward_offer(level.level, 3);
+            }
         }
         format!(
             "Lightcores capturados: {}\n{}",
@@ -348,6 +407,7 @@ pub(crate) fn show_level_complete(
             level_complete_meta(&unlock)
         )
     };
+    reward.reset(reward_offer.clone());
 
     bevy::log::info!(
         "match_end result=win mode={:?} level={} captured={} reserve={} spent={} outcome=\"{}\"",
@@ -382,7 +442,12 @@ pub(crate) fn show_level_complete(
             parent
                 .spawn((
                     Node {
-                        width: Val::Px(360.0),
+                        width: Val::Px(if reward_offer.is_empty() {
+                            360.0
+                        } else {
+                            430.0
+                        }),
+                        max_width: Val::Percent(90.0),
                         padding: UiRect::all(Val::Px(24.0)),
                         border: UiRect::all(Val::Px(2.0)),
                         flex_direction: FlexDirection::Column,
@@ -429,86 +494,157 @@ pub(crate) fn show_level_complete(
                                 },
                                 TextColor(Color::srgb(0.65, 0.85, 1.0)),
                             ));
-                            if stats.reds > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Rojos: {}", stats.reds)),
+                            summary.spawn((Node {
+                                flex_direction: FlexDirection::Row,
+                                flex_wrap: FlexWrap::Wrap,
+                                justify_content: JustifyContent::Center,
+                                column_gap: Val::Px(12.0),
+                                row_gap: Val::Px(4.0),
+                                ..default()
+                            },))
+                            .with_children(|grid| {
+                                if stats.reds > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Rojos: {}", stats.reds)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                if stats.greens > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Verdes: {}", stats.greens)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                if stats.blues > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Azules: {}", stats.blues)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                if stats.yellows > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Amarillos: {}", stats.yellows)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                if stats.purples > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Morados: {}", stats.purples)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                if stats.lightkinds > 0 {
+                                    grid.spawn((
+                                        Text::new(format!("Chispas: {}", stats.lightkinds)),
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                    ));
+                                }
+                                grid.spawn((
+                                    Text::new(format!("Max Cascada: {}", stats.max_cascade)),
                                     TextFont {
                                         font_size: FontSize::Px(12.0),
                                         ..default()
                                     },
                                     TextColor(Color::srgb(0.9, 0.9, 0.9)),
                                 ));
-                            }
-                            if stats.greens > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Verdes: {}", stats.greens)),
+                                grid.spawn((
+                                    Text::new(format!("Cadenas: {}", stats.total_chains)),
                                     TextFont {
                                         font_size: FontSize::Px(12.0),
                                         ..default()
                                     },
                                     TextColor(Color::srgb(0.9, 0.9, 0.9)),
                                 ));
-                            }
-                            if stats.blues > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Azules: {}", stats.blues)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                            }
-                            if stats.yellows > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Amarillos: {}", stats.yellows)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                            }
-                            if stats.purples > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Morados: {}", stats.purples)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                            }
-                            if stats.lightkinds > 0 {
-                                summary.spawn((
-                                    Text::new(format!("Chispas: {}", stats.lightkinds)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                            }
-                            summary.spawn((
-                                Text::new(format!("Max Cascada: {}", stats.max_cascade)),
-                                TextFont {
-                                    font_size: FontSize::Px(12.0),
-                                    ..default()
-                                },
-                                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                            ));
-                            summary.spawn((
-                                Text::new(format!("Cadenas: {}", stats.total_chains)),
-                                TextFont {
-                                    font_size: FontSize::Px(12.0),
-                                    ..default()
-                                },
-                                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                            ));
+                            });
                         });
 
+                    if !reward_offer.is_empty() {
+                        card.spawn((
+                            Text::new("Elige 1 modificador"),
+                            TextFont {
+                                font_size: FontSize::Px(13.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.72, 0.88, 1.0)),
+                        ));
+                        card.spawn((Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            ..default()
+                        },))
+                            .with_children(|list| {
+                                for boon in reward_offer.iter().copied() {
+                                    list.spawn((
+                                        Button,
+                                        LevelRewardButton(boon),
+                                        crate::ui::get_item_tooltip(crate::gameplay::shop::ShopItem::Boon(boon)),
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            min_height: Val::Px(50.0),
+                                            justify_content: JustifyContent::SpaceBetween,
+                                            align_items: AlignItems::Center,
+                                            column_gap: Val::Px(12.0),
+                                            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                                            border: UiRect::all(Val::Px(1.5)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgba(0.09, 0.13, 0.20, 0.94)),
+                                        BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.28)),
+                                    ))
+                                    .with_children(|button| {
+                                        button.spawn((
+                                            Text::new(boon.label()),
+                                            TextFont {
+                                                font_size: FontSize::Px(16.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::WHITE),
+                                        ));
+                                        button.spawn((
+                                            Text::new(boon.status_label()),
+                                            TextFont {
+                                                font_size: FontSize::Px(11.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.64, 0.81, 0.98)),
+                                        ));
+                                    });
+                                }
+                            });
+                    }
+
                     card.spawn((
-                        Text::new("[Click/Tap o Espacio] para continuar"),
+                        LevelRewardInstructionText,
+                        Text::new(if reward_offer.is_empty() {
+                            "[Click/Tap o Espacio] para continuar"
+                        } else {
+                            "Selecciona un boon para seguir"
+                        }),
                         TextFont {
                             font_size: FontSize::Px(12.0),
                             ..default()
@@ -517,6 +653,48 @@ pub(crate) fn show_level_complete(
                     ));
                 });
         });
+}
+
+pub(crate) fn level_reward_button_system(
+    mut reward: ResMut<LevelRewardOffer>,
+    mut run: ResMut<RunState>,
+    interactions: Query<(&Interaction, &LevelRewardButton), Changed<Interaction>>,
+    mut buttons: Query<(&LevelRewardButton, &mut BackgroundColor, &mut BorderColor)>,
+    mut instruction: Query<&mut Text, With<LevelRewardInstructionText>>,
+) {
+    if !reward.active() || reward.selected.is_some() {
+        return;
+    }
+
+    let mut picked = None;
+    for (interaction, button) in &interactions {
+        if *interaction == Interaction::Pressed {
+            picked = Some(button.0);
+            break;
+        }
+    }
+
+    let Some(boon) = picked else {
+        return;
+    };
+    if !reward.offered.contains(&boon) || !run.grant(boon) {
+        return;
+    }
+
+    reward.selected = Some(boon);
+    reward.just_selected = true;
+    for (button, mut bg, mut border) in &mut buttons {
+        if button.0 == boon {
+            bg.0 = Color::srgba(0.28, 0.21, 0.05, 0.96);
+            *border = BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.88));
+        } else {
+            bg.0 = Color::srgba(0.05, 0.06, 0.09, 0.74);
+            *border = BorderColor::all(Color::srgba(0.35, 0.40, 0.48, 0.18));
+        }
+    }
+    for mut text in &mut instruction {
+        text.0 = "Listo · Click/Tap o Espacio".to_string();
+    }
 }
 
 /// Resetea todos los recursos de partida para el nivel dado. Compartido por
@@ -563,10 +741,21 @@ fn level_complete_meta(unlock: &crate::core::campaign::CampaignUnlockResult) -> 
 pub(crate) fn handle_level_advance(
     actions: Res<InputActions>,
     mode: Res<GameMode>,
+    mut reward: ResMut<LevelRewardOffer>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if !actions.confirm {
         return;
+    }
+
+    if mode.is_run() && reward.active() {
+        if reward.selected.is_none() {
+            return;
+        }
+        if reward.just_selected {
+            reward.just_selected = false;
+            return;
+        }
     }
 
     if mode.is_sandbox() || matches!(*mode, GameMode::Classic(_) | GameMode::Run(_)) {
@@ -577,6 +766,7 @@ pub(crate) fn handle_level_advance(
 pub(crate) fn show_game_over(
     mut commands: Commands,
     mode: Res<GameMode>,
+    mut run: ResMut<RunState>,
     score: Res<Score>,
     reserve: Res<CoreReserve>,
     spent: Res<CoresSpent>,
@@ -586,6 +776,12 @@ pub(crate) fn show_game_over(
     shadow_count: Res<ShadowCount>,
     collected_cores: Res<CollectedCores>,
 ) {
+    let can_retry = mode.is_run() && run.active && run.lives > 0;
+    let ends_run = mode.is_run() && run.active && run.lives == 0;
+    if ends_run {
+        run.active = false;
+    }
+
     let outcome = goal_outcome_summary(&level, score.0, sparks.0, shadow_count.0, &collected_cores);
     bevy::log::info!(
         "match_end result=loss mode={:?} level={} captured={} reserve={} spent={} moves_left={} outcome=\"{}\"",
@@ -597,7 +793,26 @@ pub(crate) fn show_game_over(
         moves.0,
         outcome
     );
-    let details = format!("Lightcores capturados: {}\n{}", score.0, outcome);
+    let title = if ends_run {
+        "Run Terminado"
+    } else if can_retry {
+        "Nivel Fallido"
+    } else {
+        "Fin de Partida"
+    };
+    let details = if ends_run {
+        format!(
+            "Lightcores capturados: {}\n{}\n¡Te quedaste sin vidas!\nSe perdieron los boons y el reserve acumulados.",
+            score.0, outcome
+        )
+    } else if can_retry {
+        format!(
+            "Lightcores capturados: {}\n{}\nTe quedan {} vidas de reserva.\nPuedes reintentar este nivel.",
+            score.0, outcome, run.lives
+        )
+    } else {
+        format!("Lightcores capturados: {}\n{}", score.0, outcome)
+    };
     commands
         .spawn((
             GameOverOverlay,
@@ -618,6 +833,7 @@ pub(crate) fn show_game_over(
                 .spawn((
                     Node {
                         width: Val::Px(360.0),
+                        max_width: Val::Percent(90.0),
                         padding: UiRect::all(Val::Px(24.0)),
                         border: UiRect::all(Val::Px(2.0)),
                         flex_direction: FlexDirection::Column,
@@ -630,7 +846,7 @@ pub(crate) fn show_game_over(
                 ))
                 .with_children(|card| {
                     card.spawn((
-                        Text::new("Fin de Partida"),
+                        Text::new(title),
                         TextFont {
                             font_size: FontSize::Px(26.0),
                             ..default()
@@ -648,7 +864,13 @@ pub(crate) fn show_game_over(
                     ));
 
                     card.spawn((
-                        Text::new("[Click/Tap o Espacio] para reiniciar"),
+                        Text::new(if ends_run {
+                            "[Click/Tap o Espacio] para volver al mapa"
+                        } else if can_retry {
+                            "[Click/Tap o Espacio] para reintentar (Cuesta 1 vida)"
+                        } else {
+                            "[Click/Tap o Espacio] para reiniciar"
+                        }),
                         TextFont {
                             font_size: FontSize::Px(12.0),
                             ..default()
@@ -663,7 +885,7 @@ pub(crate) fn handle_restart(
     mut commands: Commands,
     actions: Res<InputActions>,
     mode: Res<GameMode>,
-    run: Res<RunState>,
+    mut run: ResMut<RunState>,
     mut level: ResMut<LevelConfig>,
     mut res: ResetParams,
     mut next_state: ResMut<NextState<GameState>>,
@@ -691,6 +913,14 @@ pub(crate) fn handle_restart(
         next_state.set(GameState::LevelMenu);
         return;
     }
+    if mode.is_run() {
+        if run.lives > 0 {
+            run.lives -= 1;
+        } else {
+            next_state.set(GameState::LevelMenu);
+            return;
+        }
+    }
 
     for e in &physics_entities {
         commands.entity(e).try_despawn();
@@ -714,7 +944,18 @@ pub(crate) fn handle_restart(
         GameMode::ConsumeAll | GameMode::Sandbox => make_level(level.level),
     };
     reset_for_replay(replay_level, &mut level, &mut res);
-    populate_board(&mut commands, &cache, &level, &mut res.shadow.0);
+    let hollow_chance = if mode.is_run() {
+        run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
+    } else {
+        HOLLOW_BASE_CHANCE
+    };
+    populate_board(
+        &mut commands,
+        &cache,
+        &level,
+        &mut res.shadow.0,
+        hollow_chance,
+    );
     next_state.set(GameState::Playing);
 }
 
@@ -755,6 +996,21 @@ fn goal_outcome_summary(
             };
             format!(
                 "Faltaron {} cores {}",
+                target.saturating_sub(current),
+                color_name
+            )
+        }
+        LevelGoal::TimedCollectColor { color, target, .. } => {
+            let current = collected_cores.0[color.index()];
+            let color_name = match color {
+                LightColor::Red => "rojos",
+                LightColor::Green => "verdes",
+                LightColor::Blue => "azules",
+                LightColor::Yellow => "amarillos",
+                LightColor::Purple => "morados",
+            };
+            format!(
+                "Faltaron {} cores {} antes del reloj",
                 target.saturating_sub(current),
                 color_name
             )

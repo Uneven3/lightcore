@@ -7,6 +7,20 @@ use super::light::{LightColor, LightKind};
 pub(crate) type Grid = HashMap<GridPos, (Entity, LightColor, LightKind)>;
 pub(crate) type EntityInfo = HashMap<Entity, (GridPos, LightColor, LightKind)>;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MatchKey {
+    Color(LightColor),
+    Hollow,
+}
+
+pub(crate) fn match_key(color: LightColor, kind: LightKind) -> MatchKey {
+    if kind.is_hollow() {
+        MatchKey::Hollow
+    } else {
+        MatchKey::Color(color)
+    }
+}
+
 /// Power light activation queue entry — fires its effect after the board refills.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PowerActivation {
@@ -295,6 +309,7 @@ pub(crate) fn resolve_wave(
 pub(crate) struct MatchResult {
     pub(crate) to_remove: HashSet<Entity>,
     pub(crate) to_upgrade: Vec<(Entity, LightKind)>,
+    pub(crate) score_reset: bool,
     /// Power lights that already occupied a cell chosen to host a newly created upgrade —
     /// the caller must fire their effect (excluding the host, which survives) before applying
     /// the upgrade in place.
@@ -310,10 +325,11 @@ fn detect_runs(grid: &Grid) -> (Vec<Vec<Entity>>, Vec<Vec<Entity>>) {
     for y in 0..GRID_H {
         let mut x = 0;
         while x < GRID_W {
-            let Some(&(_, color, _)) = grid.get(&GridPos { x, y }) else {
+            let Some(&(_, color, kind)) = grid.get(&GridPos { x, y }) else {
                 x += 1;
                 continue;
             };
+            let key = match_key(color, kind);
             let mut run = vec![grid[&GridPos { x, y }].0];
             loop {
                 let nx = x + run.len() as i32;
@@ -321,7 +337,7 @@ fn detect_runs(grid: &Grid) -> (Vec<Vec<Entity>>, Vec<Vec<Entity>>) {
                     break;
                 }
                 match grid.get(&GridPos { x: nx, y }) {
-                    Some(&(e, c, _)) if c == color => run.push(e),
+                    Some(&(e, c, k)) if match_key(c, k) == key => run.push(e),
                     _ => break,
                 }
             }
@@ -336,10 +352,11 @@ fn detect_runs(grid: &Grid) -> (Vec<Vec<Entity>>, Vec<Vec<Entity>>) {
     for x in 0..GRID_W {
         let mut y = 0;
         while y < GRID_H {
-            let Some(&(_, color, _)) = grid.get(&GridPos { x, y }) else {
+            let Some(&(_, color, kind)) = grid.get(&GridPos { x, y }) else {
                 y += 1;
                 continue;
             };
+            let key = match_key(color, kind);
             let mut run = vec![grid[&GridPos { x, y }].0];
             loop {
                 let ny = y + run.len() as i32;
@@ -347,7 +364,7 @@ fn detect_runs(grid: &Grid) -> (Vec<Vec<Entity>>, Vec<Vec<Entity>>) {
                     break;
                 }
                 match grid.get(&GridPos { x, y: ny }) {
-                    Some(&(e, c, _)) if c == color => run.push(e),
+                    Some(&(e, c, k)) if match_key(c, k) == key => run.push(e),
                     _ => break,
                 }
             }
@@ -372,6 +389,7 @@ pub(crate) fn scan_runs(
     let mut to_remove: HashSet<Entity> = HashSet::new();
     let mut upgrade_map: HashMap<Entity, LightKind> = HashMap::new();
     let mut replaced_powers: Vec<PowerActivation> = Vec::new();
+    let mut score_reset = false;
 
     let mut entity_in_h: HashMap<Entity, usize> = HashMap::new();
     let mut entity_in_v: HashMap<Entity, usize> = HashMap::new();
@@ -396,6 +414,17 @@ pub(crate) fn scan_runs(
         .collect();
 
     for (e, hi, vi) in intersections {
+        if entity_info
+            .get(&e)
+            .is_some_and(|(_, _, kind)| kind.is_hollow())
+        {
+            to_remove.extend(h_runs[hi].iter().copied());
+            to_remove.extend(v_runs[vi].iter().copied());
+            score_reset = true;
+            handled_h.insert(hi);
+            handled_v.insert(vi);
+            continue;
+        }
         for &re in &h_runs[hi] {
             if re != e {
                 to_remove.insert(re);
@@ -407,7 +436,7 @@ pub(crate) fn scan_runs(
             }
         }
         if let Some((pos, _, kind)) = entity_info.get(&e)
-            && *kind != LightKind::Normal
+            && kind.is_power()
         {
             replaced_powers.push(PowerActivation {
                 pos: *pos,
@@ -444,6 +473,15 @@ pub(crate) fn scan_runs(
         .collect();
 
     for (entities, is_h) in &remaining {
+        if entities
+            .first()
+            .and_then(|e| entity_info.get(e))
+            .is_some_and(|(_, _, kind)| kind.is_hollow())
+        {
+            to_remove.extend(entities.iter().copied());
+            score_reset = true;
+            continue;
+        }
         // A run of exactly 3 just clears; 4+ forges a power whose kind is set by `from_line`.
         if entities.len() == 3 {
             to_remove.extend(entities);
@@ -458,7 +496,7 @@ pub(crate) fn scan_runs(
             }
         }
         if let Some((pos, _, kind)) = entity_info.get(&upgrade)
-            && *kind != LightKind::Normal
+            && kind.is_power()
         {
             replaced_powers.push(PowerActivation {
                 pos: *pos,
@@ -478,6 +516,7 @@ pub(crate) fn scan_runs(
     MatchResult {
         to_remove,
         to_upgrade,
+        score_reset,
         replaced_powers,
     }
 }
@@ -567,7 +606,7 @@ pub(crate) fn fire_single_activation(
                 r.insert(e);
             }
         }
-        LightKind::Normal => {}
+        LightKind::Normal | LightKind::Hollow => {}
     }
     r
 }
@@ -712,42 +751,42 @@ pub(crate) fn blast_path(activation: &PowerActivation, entity_info: &EntityInfo)
             cells.sort_by_key(|p| (p.x - pos.x).pow(2) + (p.y - pos.y).pow(2));
             cells
         }
-        LightKind::Normal => vec![],
+        LightKind::Normal | LightKind::Hollow => vec![],
     }
 }
 
-fn has_match(board: &[[Option<LightColor>; GRID_H as usize]; GRID_W as usize]) -> bool {
+fn has_match(board: &[[Option<MatchKey>; GRID_H as usize]; GRID_W as usize]) -> bool {
     // Check horizontal runs
     for y in 0..GRID_H as usize {
         let mut run_len = 1;
-        let mut last_color = None;
+        let mut last_key = None;
         for x in 0..GRID_W as usize {
-            let color = board[x][y];
-            if color.is_some() && color == last_color {
+            let key = board[x][y];
+            if key.is_some() && key == last_key {
                 run_len += 1;
                 if run_len >= 3 {
                     return true;
                 }
             } else {
                 run_len = 1;
-                last_color = color;
+                last_key = key;
             }
         }
     }
     // Check vertical runs
     for x in 0..GRID_W as usize {
         let mut run_len = 1;
-        let mut last_color = None;
+        let mut last_key = None;
         for y in 0..GRID_H as usize {
-            let color = board[x][y];
-            if color.is_some() && color == last_color {
+            let key = board[x][y];
+            if key.is_some() && key == last_key {
                 run_len += 1;
                 if run_len >= 3 {
                     return true;
                 }
             } else {
                 run_len = 1;
-                last_color = color;
+                last_key = key;
             }
         }
     }
@@ -759,9 +798,9 @@ pub(crate) fn find_valid_swap(
     shadow: &HashSet<GridPos>,
 ) -> Option<(GridPos, GridPos)> {
     let mut board = [[None; GRID_H as usize]; GRID_W as usize];
-    for (pos, &(_, color, _)) in grid {
+    for (pos, &(_, color, kind)) in grid {
         if (0..GRID_W).contains(&pos.x) && (0..GRID_H).contains(&pos.y) && !shadow.contains(pos) {
-            board[pos.x as usize][pos.y as usize] = Some(color);
+            board[pos.x as usize][pos.y as usize] = Some(match_key(color, kind));
         }
     }
 
@@ -832,6 +871,47 @@ mod tests {
         // cell is always part of its own result, since the snapshot is taken before any
         // removal happens — callers must exclude activators explicitly, not assume otherwise.
         assert!(result.contains(&activator));
+    }
+
+    #[test]
+    fn hollow_lights_match_by_kind_and_reset_score() {
+        let mut grid: Grid = HashMap::new();
+        let mut info: EntityInfo = HashMap::new();
+        let cells = [
+            (GridPos { x: 1, y: 2 }, LightColor::Red, 1),
+            (GridPos { x: 2, y: 2 }, LightColor::Blue, 2),
+            (GridPos { x: 3, y: 2 }, LightColor::Green, 3),
+        ];
+        for (pos, color, n) in cells {
+            let ent = e(n);
+            grid.insert(pos, (ent, color, LightKind::Hollow));
+            info.insert(ent, (pos, color, LightKind::Hollow));
+        }
+
+        let result = scan_runs(&grid, &info, None);
+
+        assert_eq!(result.to_remove.len(), 3);
+        assert!(result.score_reset);
+        assert!(result.to_upgrade.is_empty());
+    }
+
+    #[test]
+    fn four_hollow_lights_do_not_forge_power() {
+        let mut grid: Grid = HashMap::new();
+        let mut info: EntityInfo = HashMap::new();
+        for x in 0..4 {
+            let ent = e(x as u32 + 1);
+            let pos = GridPos { x, y: 2 };
+            let color = LightColor::from_index(x as usize);
+            grid.insert(pos, (ent, color, LightKind::Hollow));
+            info.insert(ent, (pos, color, LightKind::Hollow));
+        }
+
+        let result = scan_runs(&grid, &info, None);
+
+        assert_eq!(result.to_remove.len(), 4);
+        assert!(result.score_reset);
+        assert!(result.to_upgrade.is_empty());
     }
 
     #[test]

@@ -75,12 +75,12 @@ pub(crate) fn attach_glow_pools(
     mut commands: Commands,
     cache: Res<VisualCache>,
     settings: Res<GlowSettings>,
-    new_lights: Query<(Entity, &LightColor, &BreathPhase), Added<Light>>,
+    new_lights: Query<(Entity, &LightColor, &LightKind, &BreathPhase), Added<Light>>,
 ) {
-    for (e, color, breath) in &new_lights {
+    for (e, color, kind, breath) in &new_lights {
         let Srgba {
             red, green, blue, ..
-        } = color.bevy_color().to_srgba();
+        } = kind.visual_base_color(*color).to_srgba();
         let raw = Srgba {
             red,
             green,

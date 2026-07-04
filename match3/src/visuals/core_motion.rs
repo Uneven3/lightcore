@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use super::assets::VisualCache;
 use super::breathing::{BreathPhase, Breathing};
@@ -45,6 +45,12 @@ pub(crate) struct CoreMotion {
     radius: f32,
 }
 
+#[derive(Component)]
+pub(crate) struct HollowFlowParticle {
+    dir: Vec2,
+    phase: f32,
+}
+
 struct CoreSpec {
     base: Vec2,
     pattern: CorePattern,
@@ -56,6 +62,7 @@ struct CoreSpec {
 fn core_layout(kind: LightKind) -> Vec<CoreSpec> {
     let s = TILE * 0.125; // line spacing
     match kind {
+        LightKind::Hollow => Vec::new(),
         // 1 core — a barely-there drift.
         LightKind::Normal => vec![CoreSpec {
             base: Vec2::ZERO,
@@ -143,12 +150,12 @@ pub(crate) fn rebuild_cores(
         ),
         Changed<LightKind>,
     >,
-    cores: Query<(), With<LightCore>>,
+    transient_children: Query<(), Or<(With<LightCore>, With<HollowFlowParticle>)>>,
 ) {
     for (light, kind, color, phase, children) in &changed {
         if let Some(children) = children {
             for c in children.iter() {
-                if cores.contains(c) {
+                if transient_children.contains(c) {
                     commands.entity(c).try_despawn();
                 }
             }
@@ -156,9 +163,13 @@ pub(crate) fn rebuild_cores(
         // The membrane shape encodes the kind for the top powers (shuriken/star/circle), so an
         // in-place upgrade must swap the body mesh too — not just the cores. Material (color) is
         // left as-is. For non-shaped kinds this re-sets the same per-color mesh (a no-op handle).
-        commands
-            .entity(light)
-            .insert(Mesh2d(cache.light_mesh(*kind, *color)));
+        commands.entity(light).insert((
+            Mesh2d(cache.light_mesh(*kind, *color)),
+            MeshMaterial2d(cache.light_mat(*kind, *color)),
+        ));
+        if matches!(*kind, LightKind::Hollow) {
+            spawn_hollow_flow(&mut commands, &cache, light, phase.0);
+        }
         // Shared core texture. The shaped powers (Cross/Starburst/Blackhole) use the smaller size so
         // their cores read as fine sparks riding the silhouette, never bulging past it.
         let core_size = if matches!(
@@ -184,7 +195,7 @@ pub(crate) fn rebuild_cores(
             let base_color = if is_void_nucleus {
                 Color::srgb(0.10, 0.02, 0.16) // deep violet "black light"
             } else {
-                color.glow_color()
+                kind.visual_core_color(*color)
             };
             let size = if is_void_nucleus {
                 core_size * 3.0
@@ -219,6 +230,34 @@ pub(crate) fn rebuild_cores(
                 ))
                 .id();
             commands.entity(light).add_child(core);
+        }
+    }
+}
+
+fn spawn_hollow_flow(commands: &mut Commands, cache: &VisualCache, light: Entity, base_phase: f32) {
+    let dirs = [
+        Vec2::new(1.0, 1.0).normalize(),
+        Vec2::new(-1.0, 1.0).normalize(),
+        Vec2::new(-1.0, -1.0).normalize(),
+        Vec2::new(1.0, -1.0).normalize(),
+    ];
+    let radius = TILE * 0.34;
+    for (arm, dir) in dirs.into_iter().enumerate() {
+        for lane in 0..3 {
+            let phase = (base_phase * 0.13 + arm as f32 * 0.17 + lane as f32 / 3.0).fract();
+            let particle = commands
+                .spawn((
+                    HollowFlowParticle { dir, phase },
+                    Sprite {
+                        image: cache.core_image.clone(),
+                        color: Color::srgba(0.0, 0.0, 0.0, 0.0),
+                        custom_size: Some(Vec2::splat(TILE * 0.060)),
+                        ..default()
+                    },
+                    Transform::from_translation((dir * radius).extend(CORE_Z + 0.20)),
+                ))
+                .id();
+            commands.entity(light).add_child(particle);
         }
     }
 }
@@ -290,6 +329,42 @@ pub(crate) fn animate_cores(time: Res<Time>, mut q: Query<(&CoreMotion, &mut Tra
     }
 }
 
+pub(crate) fn animate_hollow_flow(
+    time: Res<Time>,
+    mut q: Query<(&HollowFlowParticle, &mut Transform, &mut Sprite)>,
+) {
+    let t = time.elapsed_secs();
+    let radius = TILE * 0.34;
+    for (flow, mut tf, mut sprite) in &mut q {
+        let frac = (t * 0.55 + flow.phase).fract();
+        let eased = frac * frac;
+        // Calculate a spiral curve by rotating the direction angle based on progress
+        let base_ang = flow.dir.y.atan2(flow.dir.x);
+        let ang = base_ang + (1.0 - eased) * 1.6;
+        let pos = Vec2::from_angle(ang) * radius * (1.0 - eased);
+
+        tf.translation.x = pos.x;
+        tf.translation.y = pos.y;
+        tf.scale = Vec3::splat(0.75 + 0.35 * (1.0 - frac));
+        let alpha = (frac * PI).sin().max(0.0) * 0.82;
+        sprite.color = Color::srgba(0.0, 0.0, 0.0, alpha);
+    }
+}
+
+pub(crate) fn animate_hollow_material(
+    time: Res<Time>,
+    cache: Res<VisualCache>,
+    mut color_materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let t = time.elapsed_secs();
+    // Blink red slowly (slower frequency, less bright red warning)
+    let blink = (t * 1.2).sin() * 0.5 + 0.5; // 0..1 oscillating
+    let color = Color::srgb(0.18 + 0.52 * blink, 0.02 + 0.04 * blink, 0.03 + 0.05 * blink);
+    if let Some(mut mat) = color_materials.get_mut(&cache.hollow_mat) {
+        mat.color = color;
+    }
+}
+
 /// Despawns CoreMotion children per-light when that light's pop actually starts, so cores vanish
 /// individually as the bolt reaches each light — not all at once at activation time.
 /// Two cases: (1) no-delay lights (source, d=0) fire on Added<PopAnim>+Without<PopDelay>;
@@ -299,14 +374,14 @@ pub(crate) fn despawn_cores_on_pop(
     no_delay: Query<&Children, (Added<PopAnim>, Without<PopDelay>)>,
     mut removed_delay: RemovedComponents<PopDelay>,
     children_q: Query<&Children, With<PopAnim>>,
-    cores: Query<(), With<CoreMotion>>,
+    transient_children: Query<(), Or<(With<CoreMotion>, With<HollowFlowParticle>)>>,
 ) {
     for children in &no_delay {
-        despawn_cores(&mut commands, children, &cores);
+        despawn_cores(&mut commands, children, &transient_children);
     }
     for entity in removed_delay.read() {
         if let Ok(children) = children_q.get(entity) {
-            despawn_cores(&mut commands, children, &cores);
+            despawn_cores(&mut commands, children, &transient_children);
         }
     }
 }
@@ -314,7 +389,7 @@ pub(crate) fn despawn_cores_on_pop(
 fn despawn_cores(
     commands: &mut Commands,
     children: &Children,
-    cores: &Query<(), With<CoreMotion>>,
+    cores: &Query<(), Or<(With<CoreMotion>, With<HollowFlowParticle>)>>,
 ) {
     for &child in children {
         if cores.contains(child) {

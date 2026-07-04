@@ -29,6 +29,16 @@ pub(crate) struct Shadow;
 #[derive(Component)]
 pub(crate) struct Blocker;
 
+/// "Jalea ultra dura": a `Shadow` that needs several hits before it clears. A match on its own
+/// cell OR on an orthogonally adjacent cell chips away one hit (see `board::clear_shadow_at`);
+/// it clears like a normal `Shadow` once hits reach 0.
+#[derive(Component)]
+pub(crate) struct HardShadow(pub(crate) u8);
+
+/// The world-space hit-counter text child spawned under a `HardShadow` tile.
+#[derive(Component)]
+pub(crate) struct HardShadowLabel;
+
 /// Non-interactive hint drawn on the board to show where ingredients are rescued.
 #[derive(Component)]
 pub(crate) struct IngredientExit;

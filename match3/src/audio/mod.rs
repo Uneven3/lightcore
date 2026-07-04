@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::core::prelude::*;
 use crate::gameplay::{
-    CascadeDepth, ChainPop, PowerCombo, PowerConsumed, PowerCreated, SwapFailed,
+    CascadeDepth, ChainPop, PowerCombo, PowerConsumed, PowerCreated, ScoreDrained, SwapFailed,
 };
 use crate::state::GameState;
 
@@ -14,6 +14,7 @@ impl Plugin for AudioPlugin {
             .add_observer(on_chain_pop)
             .add_observer(on_power_consumed)
             .add_observer(on_power_combo)
+            .add_observer(on_score_drained)
             .add_observer(on_swap_failed)
             .add_observer(on_power_created)
             .add_systems(OnEnter(GameState::LevelComplete), on_level_complete)
@@ -31,6 +32,7 @@ pub(crate) struct SoundAssets {
     cascade_base: Handle<AudioSource>, // cascade chain (pitch scaled per wave)
     // Power upgrades / lifecycle
     power_created: Handle<AudioSource>,  // light upgraded to power
+    score_drained: Handle<AudioSource>,  // Hollow consumed the score
     swap_failed: Handle<AudioSource>,    // swap reverted
     level_complete: Handle<AudioSource>, // level won
     game_over: Handle<AudioSource>,      // game lost
@@ -64,6 +66,7 @@ fn setup_sounds(mut commands: Commands, mut sources: ResMut<Assets<AudioSource>>
             &[(659.0, 0.04), (784.0, 0.04), (1047.0, 0.04), (1319.0, 0.06)],
             0.55,
         )),
+        score_drained: sources.add(make_score_drain()),
         swap_failed: sources.add(make_sweep(320.0, 120.0, 0.10, 0.40)),
         level_complete: sources.add(make_arpeggio(
             &[
@@ -159,7 +162,7 @@ fn on_power_consumed(
         Supernova => sounds.supernova.clone(),
         Starburst => sounds.starburst.clone(),
         Blackhole => sounds.blackhole.clone(),
-        Normal => return,
+        Normal | Hollow => return,
     };
     play(&mut commands, handle, virtual_time.relative_speed());
 }
@@ -183,6 +186,19 @@ fn on_power_combo(
         SuperCombo => sounds.combo_super_combo.clone(),
     };
     play(&mut commands, handle, virtual_time.relative_speed());
+}
+
+fn on_score_drained(
+    _: On<ScoreDrained>,
+    sounds: Res<SoundAssets>,
+    virtual_time: Res<Time<Virtual>>,
+    mut commands: Commands,
+) {
+    play(
+        &mut commands,
+        sounds.score_drained.clone(),
+        virtual_time.relative_speed(),
+    );
 }
 
 fn on_swap_failed(
@@ -311,6 +327,32 @@ fn make_sweep(start_hz: f32, end_hz: f32, duration_secs: f32, amplitude: f32) ->
         phase = (phase + freq / SR as f32).fract();
         let s =
             (f32::sin(std::f32::consts::TAU * phase) * env * amplitude * i16::MAX as f32) as i16;
+        bytes.extend_from_slice(&s.to_le_bytes());
+    }
+    AudioSource {
+        bytes: bytes.into(),
+    }
+}
+
+/// Bad-event cue: a short downward void pull with a faint dissonant beating tone.
+fn make_score_drain() -> AudioSource {
+    let duration_secs = 0.46;
+    let n = (SR as f32 * duration_secs) as usize;
+    let mut bytes = wav_header((n * 2) as u32);
+    let mut phase_low = 0.0f32;
+    let mut phase_grit = 0.0f32;
+    for i in 0..n {
+        let t = i as f32 / SR as f32;
+        let progress = t / duration_secs;
+        let env = ((duration_secs - t) / duration_secs).max(0.0).powf(0.35);
+        let wobble = 0.55 + 0.45 * f32::sin(std::f32::consts::TAU * 18.0 * t);
+        let low_freq = 170.0 + (42.0 - 170.0) * progress.powf(0.65);
+        let grit_freq = 245.0 + (118.0 - 245.0) * progress;
+        phase_low = (phase_low + low_freq / SR as f32).fract();
+        phase_grit = (phase_grit + grit_freq / SR as f32).fract();
+        let low = f32::sin(std::f32::consts::TAU * phase_low) * 0.72;
+        let grit = f32::sin(std::f32::consts::TAU * phase_grit) * 0.28 * wobble;
+        let s = ((low + grit) * env * 0.55 * i16::MAX as f32) as i16;
         bytes.extend_from_slice(&s.to_le_bytes());
     }
     AudioSource {

@@ -7,7 +7,7 @@ use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use super::grid::TILE;
 
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LightColor {
     Red,
     Green,
@@ -249,6 +249,49 @@ pub(crate) fn circle_ring_mesh(r: f32) -> Mesh {
     build_ring_mesh(&ring_polygon_points(48, r, FRAC_PI_2), inset)
 }
 
+/// Filled X mark used by Hollow lights. It intentionally has no central hole/core: Hollow is a
+/// hazard silhouette, not another membrane holding a lightcore.
+pub(crate) fn x_mark_mesh(half_len: f32, thickness: f32) -> Mesh {
+    let half_w = thickness * 0.5;
+    let mut quads = Vec::with_capacity(2);
+    for angle in [FRAC_PI_4, -FRAC_PI_4] {
+        let axis = Vec2::from_angle(angle);
+        let perp = Vec2::new(-axis.y, axis.x);
+        quads.push([
+            axis * -half_len + perp * -half_w,
+            axis * half_len + perp * -half_w,
+            axis * half_len + perp * half_w,
+            axis * -half_len + perp * half_w,
+        ]);
+    }
+
+    let mut positions = Vec::with_capacity(8);
+    let mut normals = Vec::with_capacity(8);
+    let mut uvs = Vec::with_capacity(8);
+    let mut indices = Vec::with_capacity(12);
+    for quad in quads {
+        let base = positions.len() as u32;
+        for p in quad {
+            positions.push([p.x, p.y, 0.0]);
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([
+                0.5 * (p.x / half_len + 1.0),
+                1.0 - 0.5 * (p.y / half_len + 1.0),
+            ]);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_indices(Indices::U32(indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+}
+
 /// How powerful a [`Light`](crate::core::components::Light) is, read by the player as its number
 /// of **lightcores**. `Normal` lights just match; the rest are "power lights" forged by larger
 /// matches (see [`LightKind::from_line`] / [`LightKind::from_intersection`]) and detonate in a
@@ -267,6 +310,9 @@ pub(crate) fn circle_ring_mesh(r: f32) -> Mesh {
 pub(crate) enum LightKind {
     #[default]
     Normal,
+    /// Hollow hazard — matches with other Hollows and drains the score instead of granting points.
+    /// It is a kind, not a power: it has no lightcore, does not detonate, and does not combine.
+    Hollow,
     /// Horizontal ray (2 cores) — sweeps its whole row.
     RayH,
     /// Vertical ray (2 cores) — sweeps its whole column.
@@ -283,6 +329,38 @@ pub(crate) enum LightKind {
 }
 
 impl LightKind {
+    pub(crate) fn is_power(self) -> bool {
+        !matches!(self, LightKind::Normal | LightKind::Hollow)
+    }
+
+    pub(crate) fn is_hollow(self) -> bool {
+        matches!(self, LightKind::Hollow)
+    }
+
+    pub(crate) fn visual_ring_color(self, color: LightColor) -> Color {
+        if self.is_hollow() {
+            Color::srgb(2.4, 2.5, 2.6)
+        } else {
+            color.ring_color()
+        }
+    }
+
+    pub(crate) fn visual_core_color(self, color: LightColor) -> Color {
+        if self.is_hollow() {
+            Color::srgb(4.0, 4.2, 4.4)
+        } else {
+            color.glow_color()
+        }
+    }
+
+    pub(crate) fn visual_base_color(self, color: LightColor) -> Color {
+        if self.is_hollow() {
+            Color::srgb(0.92, 0.96, 1.0)
+        } else {
+            color.bevy_color()
+        }
+    }
+
     /// The power forged by a straight run with no perpendicular intersection. A run of exactly 3
     /// just clears (the caller filters that out before calling this); 4 forges a directional Ray,
     /// 5+ always forges a Starburst — straight is the easiest shape to read on the board, so it's
@@ -324,6 +402,7 @@ impl LightKind {
     pub(crate) fn next_tier(self) -> Option<LightKind> {
         Some(match self {
             LightKind::Normal => LightKind::RayH,
+            LightKind::Hollow => return None,
             LightKind::RayH | LightKind::RayV => LightKind::Supernova,
             LightKind::Supernova => LightKind::Cross,
             LightKind::Cross => LightKind::Starburst,

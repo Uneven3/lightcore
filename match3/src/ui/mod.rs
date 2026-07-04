@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
 use crate::core::prelude::*;
-use crate::core::run::RunState;
+use crate::core::run::{BoonKind, RunState};
 use crate::embedded;
 use crate::gameplay::shop::{
     BTN_BORDER_ARMED, BTN_BORDER_BROKE, BTN_BORDER_IDLE, BTN_IDLE, Shop, ShopBar, ShopButton,
@@ -12,7 +12,9 @@ use crate::gameplay::{
     CoreReserve, DisplayedCollectedCores, DisplayedScore, GameMode, LevelTimer, MovesLeft,
     ScoreAnchor, ScoreGlow, ShadowCount, SparksCollected, StatsBook, StatsPopupOpen,
 };
+use crate::menu::options::WindowSettings;
 use crate::state::GameState;
+use crate::visuals::assets::VisualCache;
 use crate::visuals::render_target::{FinalCamera, WorldCamera, window_point_to_world};
 
 const SCORE_NEON_BASE: f32 = 1.7;
@@ -25,6 +27,8 @@ pub(crate) struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GoalHintTouchTimer>()
+            .init_resource::<TutorialState>()
+            .init_resource::<LevelTutorialShown>()
             .add_systems(Startup, (setup_ui, setup_watermark))
             // The HUD is only meaningful during a match — hide it on every menu screen (the app
             // boots straight into `MainMenu`, so this also covers first launch) and bring it back
@@ -33,10 +37,12 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::MainMenu), hide_hud)
             .add_systems(OnEnter(GameState::LevelMenu), hide_hud)
             .add_systems(OnEnter(GameState::Options), hide_hud)
-            .add_systems(OnEnter(GameState::Loading), show_hud)
+            .add_systems(OnEnter(GameState::Loading), (show_hud, reset_level_tutorial_shown))
             // The match stays alive while paused — keep the HUD up; this also restores it when
             // returning from Options (which hid it) back to the pause overlay.
             .add_systems(OnEnter(GameState::Paused), show_hud)
+            .add_systems(OnEnter(GameState::Playing), check_show_tutorial_on_start)
+            .add_systems(OnExit(GameState::Playing), reset_tutorial_state)
             .add_systems(
                 Update,
                 (
@@ -60,9 +66,21 @@ impl Plugin for UiPlugin {
                     update_shop_bar_visibility,
                     update_shop_button_texts,
                     update_shop_active_badge,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
                     update_goal_hint,
                     stats_button_system,
                     update_stats_popup,
+                    update_boon_indicators.run_if(resource_changed::<RunState>),
+                    tutorial_close_button_system,
+                    tutorial_overlay_toggle_system,
+                    update_tutorial_overlay_toggle_text,
+                    update_tutorial_visibility,
+                    update_lives_text,
+                    update_tooltip_system,
                 ),
             );
     }
@@ -78,8 +96,11 @@ pub(crate) struct MovesNumberText;
 pub(crate) struct GoalText;
 #[derive(Component)]
 pub(crate) struct GoalIcon;
+/// The goal icon's actual visual: a tinted swatch of the real in-game asset the player needs to
+/// consume for the current goal (a core, an ingredient, a jelly tile...), not a text glyph — some
+/// glyphs (e.g. `▧`) render as an empty tofu box on fonts missing that codepoint.
 #[derive(Component)]
-pub(crate) struct GoalIconText;
+pub(crate) struct GoalIconImage;
 #[derive(Component)]
 pub(crate) struct GoalPrimaryText;
 #[derive(Component)]
@@ -112,7 +133,8 @@ pub(crate) struct ShopButtonCostText(pub(crate) ShopItem);
 #[derive(Resource, Default)]
 struct GoalHintTouchTimer(Option<Timer>);
 
-fn setup_ui(mut commands: Commands) {
+fn setup_ui(mut commands: Commands, cache: Res<VisualCache>) {
+    // ScoreText is in world space (Text2d), so keep it independent of Bevy UI HudRoot.
     commands.spawn((
         ScoreText,
         Text2d::new("0"),
@@ -121,278 +143,394 @@ fn setup_ui(mut commands: Commands) {
             ..default()
         },
         TextColor(Color::srgb(0.65, 0.85, 1.0)),
-        Anchor::CENTER, // Centrado de score
+        Anchor::CENTER,
         Transform::default(),
         Visibility::Hidden,
     ));
 
-    // Botón invisible que intercepta clicks sobre el score para abrir los detalles
-    commands.spawn((
-        Button,
-        StatsButton,
+    // Fullscreen transparent container that centers HudRoot horizontally
+    let mut screen = commands.spawn((
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Percent(50.0),
-            width: Val::Px(120.0),
-            height: Val::Px(44.0),
-            margin: UiRect::left(Val::Px(-60.0)),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::FlexStart,
             ..default()
         },
-        Visibility::Hidden,
     ));
 
-    // Menú desplegable/popup de estadísticas (inicialmente oculto)
-    commands
-        .spawn((
-            StatsPopupContainer,
+    let mut hud_root_id = Entity::PLACEHOLDER;
+    screen.with_children(|screen_parent| {
+        hud_root_id = screen_parent.spawn((
+            HudRoot,
             Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(80.0),
-                left: Val::Percent(50.0),
-                width: Val::Px(240.0),
-                margin: UiRect::left(Val::Px(-120.0)),
+                width: Val::Px(600.0),
+                max_width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                display: Display::None,
                 ..default()
             },
-            BorderColor::all(Color::srgba(0.65, 0.85, 1.0, 0.35)),
-            BackgroundColor(Color::srgba(0.08, 0.08, 0.15, 0.95)),
             Visibility::Hidden,
         ))
-        .with_children(|parent| {
-            parent.spawn((
-                StatsPopupText,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.65, 0.85, 1.0)),
-            ));
-        });
-
-    // Botón de Pausa minimalista y circular en la esquina superior izquierda
-    commands
-        .spawn((
-            Button,
-            PauseButton,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(12.0),
-                left: Val::Px(12.0),
-                width: Val::Px(36.0),
-                height: Val::Px(36.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.5)),
-                ..default()
-            },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-            BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
-            Visibility::Hidden,
-        ))
-        .with_children(|b| {
-            b.spawn((
-                Text::new("||"),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-        });
-
-    // Indicador de movimientos restante en la esquina superior derecha (Mobile Friendly)
-    commands
-        .spawn((
-            MovesText,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(12.0),
-                right: Val::Px(12.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                ..default()
-            },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-            BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
-            Visibility::Hidden,
-        ))
-        .with_children(|m| {
-            m.spawn((
-                MovesNumberText,
-                Text::new("30"),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-            m.spawn((
-                Text::new("moves"),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-            ));
-        });
-
-    // Meta compacta: icono visual + progreso, sin etiquetas verbales durante el nivel.
-    commands
-        .spawn((
-            Button,
-            GoalText,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(16.0),
-                left: Val::Px(12.0),
-                min_width: Val::Px(96.0),
-                min_height: Val::Px(40.0),
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
-            BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
-            Visibility::Hidden,
-        ))
-        .with_children(|goal| {
-            goal.spawn((
-                GoalIcon,
+        .with_children(|hud| {
+            // StatsButton
+            hud.spawn((
+                Button,
+                StatsButton,
                 Node {
-                    width: Val::Px(24.0),
-                    height: Val::Px(24.0),
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(12.0),
+                    left: Val::Percent(50.0),
+                    width: Val::Px(120.0),
+                    height: Val::Px(44.0),
+                    margin: UiRect::left(Val::Px(-60.0)),
+                    ..default()
+                },
+                Visibility::Hidden,
+            ));
+
+            // StatsPopupContainer
+            hud.spawn((
+                StatsPopupContainer,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(80.0),
+                    left: Val::Percent(50.0),
+                    width: Val::Px(240.0),
+                    margin: UiRect::left(Val::Px(-120.0)),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    display: Display::None,
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(0.65, 0.85, 1.0, 0.35)),
+                BackgroundColor(Color::srgba(0.08, 0.08, 0.15, 0.95)),
+                Visibility::Hidden,
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    StatsPopupText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.65, 0.85, 1.0)),
+                ));
+            });
+
+            // PauseButton
+            hud.spawn((
+                Button,
+                PauseButton,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(12.0),
+                    left: Val::Px(12.0),
+                    width: Val::Px(36.0),
+                    height: Val::Px(36.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.5)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                Visibility::Hidden,
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    Text::new("||"),
+                    TextFont {
+                        font_size: FontSize::Px(15.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+
+            // MovesText
+            hud.spawn((
+                MovesText,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(12.0),
+                    right: Val::Px(12.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                Visibility::Hidden,
+            ))
+            .with_children(|m| {
+                m.spawn((
+                    MovesNumberText,
+                    Text::new("30"),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                m.spawn((
+                    Text::new("moves"),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                ));
+            });
+
+            // LivesText
+            hud.spawn((
+                LivesText,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(72.0),
+                    right: Val::Px(12.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                BackgroundColor(Color::srgba(0.12, 0.05, 0.05, 0.7)),
+                Visibility::Hidden,
+            ))
+            .with_children(|l| {
+                l.spawn((
+                    LivesNumberText,
+                    Text::new("2"),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(1.0, 0.45, 0.45)),
+                ));
+                l.spawn((
+                    Text::new("vidas"),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
+                ));
+            });
+
+            // BoonIndicatorBar
+            hud.spawn((
+                BoonIndicatorBar,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(56.0),
+                    left: Val::Px(12.0),
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                },
+                Visibility::Hidden,
+            ));
+
+            // GoalText
+            hud.spawn((
+                Button,
+                GoalText,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(16.0),
+                    left: Val::Px(12.0),
+                    min_width: Val::Px(96.0),
+                    min_height: Val::Px(40.0),
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                    border: UiRect::all(Val::Px(1.5)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
                 },
+                BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
+                BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
+                Visibility::Hidden,
             ))
-            .with_children(|icon| {
-                icon.spawn((
-                    GoalIconText,
-                    Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(21.0),
+            .with_children(|goal| {
+                goal.spawn((
+                    GoalIcon,
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.8, 1.0, 0.8)),
+                ))
+                .with_children(|icon| {
+                    icon.spawn((
+                        GoalIconImage,
+                        ImageNode {
+                            image: cache.core_image.clone(),
+                            color: Color::srgb(0.8, 1.0, 0.8),
+                            ..default()
+                        },
+                        Node {
+                            width: Val::Px(22.0),
+                            height: Val::Px(22.0),
+                            ..default()
+                        },
+                    ));
+                });
+                goal.spawn((
+                    GoalPrimaryText,
+                    Text::new("0"),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.90, 1.0, 0.90)),
+                ));
+                goal.spawn((
+                    GoalTargetText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(13.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
                 ));
             });
-            goal.spawn((
-                GoalPrimaryText,
-                Text::new("0"),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.90, 1.0, 0.90)),
-            ));
-            goal.spawn((
-                GoalTargetText,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-                TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
-            ));
-        });
 
-    commands
-        .spawn((
-            GoalHintContainer,
+            // GoalHintContainer
+            hud.spawn((
+                GoalHintContainer,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(64.0),
+                    left: Val::Px(12.0),
+                    max_width: Val::Px(180.0),
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    display: Display::None,
+                    ..default()
+                },
+                BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
+                BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
+                Visibility::Hidden,
+            ))
+            .with_children(|hint| {
+                hint.spawn((
+                    GoalHintText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(13.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+
+            // ShopToggleButton
+            hud.spawn((
+                Button,
+                ShopToggleButton,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(16.0),
+                    right: Val::Px(12.0),
+                    width: Val::Px(78.0),
+                    height: Val::Px(76.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    ..default()
+                },
+                BorderColor::all(BTN_BORDER_IDLE),
+                BackgroundColor(Color::srgba(0.07, 0.10, 0.17, 0.88)),
+                Visibility::Hidden,
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    Text::new("SHOP"),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.70, 0.86, 1.0)),
+                ));
+                b.spawn((
+                    ShopReserveText,
+                    Text::new("0"),
+                    TextFont {
+                        font_size: FontSize::Px(24.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                b.spawn((
+                    Text::new("cores"),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
+                ));
+            });
+        })
+        .id();
+    });
+
+    // BoonTooltipContainer
+    commands.entity(hud_root_id).with_children(|parent| {
+        parent.spawn((
+            BoonTooltipContainer,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(64.0),
-                left: Val::Px(12.0),
-                max_width: Val::Px(180.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                display: Display::None,
-                ..default()
-            },
-            BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
-            BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
-            Visibility::Hidden,
-        ))
-        .with_children(|hint| {
-            hint.spawn((
-                GoalHintText,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.92, 0.98, 1.0)),
-            ));
-        });
-
-    // Botón de tienda minimalista en la esquina inferior derecha
-    commands
-        .spawn((
-            Button,
-            ShopToggleButton,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(16.0),
-                right: Val::Px(12.0),
-                width: Val::Px(78.0),
-                height: Val::Px(76.0),
+                top: Val::Px(120.0),
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-200.0)),
+                width: Val::Px(400.0),
+                max_width: Val::Percent(90.0),
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(2.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                justify_content: JustifyContent::Center,
+                padding: UiRect::all(Val::Px(10.0)),
                 border: UiRect::all(Val::Px(1.5)),
                 ..default()
             },
-            BorderColor::all(BTN_BORDER_IDLE),
-            BackgroundColor(Color::srgba(0.07, 0.10, 0.17, 0.88)),
+            BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75)),
+            BackgroundColor(Color::srgba(0.06, 0.07, 0.10, 0.95)),
             Visibility::Hidden,
         ))
-        .with_children(|b| {
-            b.spawn((
-                Text::new("SHOP"),
+        .with_children(|t| {
+            t.spawn((
+                BoonTooltipText,
+                Text::new(""),
                 TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.70, 0.86, 1.0)),
-            ));
-            b.spawn((
-                ShopReserveText,
-                Text::new("0"),
-                TextFont {
-                    font_size: FontSize::Px(24.0),
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
             ));
-            b.spawn((
-                Text::new("cores"),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
-            ));
         });
+    });
 
-    spawn_shop_bar(&mut commands);
-    spawn_shop_active_badge(&mut commands);
+    spawn_shop_bar(&mut commands, hud_root_id);
+    spawn_shop_active_badge(&mut commands, hud_root_id);
+    spawn_tutorial_overlay(&mut commands);
 }
 
 #[derive(Component)]
@@ -438,10 +576,8 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-/// The in-game booster bar: three buttons centered along the bottom edge. `gameplay::shop` handles
-/// arming/targeting; `update_shop_buttons` recolors them (affordable / armed / too dear) each frame.
-fn spawn_shop_bar(commands: &mut Commands) {
-    commands
+fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
+    let bar = commands
         .spawn((
             ShopBar,
             Node {
@@ -449,6 +585,7 @@ fn spawn_shop_bar(commands: &mut Commands) {
                 bottom: Val::Px(102.0),
                 right: Val::Px(12.0),
                 width: Val::Px(360.0),
+                max_width: Val::Percent(93.0),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Stretch,
@@ -471,8 +608,10 @@ fn spawn_shop_bar(commands: &mut Commands) {
             ));
             bar.spawn((Node {
                 width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(6.0),
+                row_gap: Val::Px(6.0),
                 ..default()
             },))
                 .with_children(|list| {
@@ -481,12 +620,14 @@ fn spawn_shop_bar(commands: &mut Commands) {
                             Button,
                             ShopCard,
                             ShopButton(item),
+                            get_item_tooltip(item),
                             Node {
-                                width: Val::Percent(100.0),
-                                min_height: Val::Px(62.0),
+                                width: Val::Percent(48.0),
+                                min_height: Val::Px(52.0),
                                 justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::Center,
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Stretch,
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
                                 border: UiRect::all(Val::Px(1.5)),
                                 ..default()
                             },
@@ -497,14 +638,14 @@ fn spawn_shop_bar(commands: &mut Commands) {
                             b.spawn((Node {
                                 width: Val::Percent(100.0),
                                 justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::FlexStart,
+                                align_items: AlignItems::Center,
                                 ..default()
                             },))
                                 .with_children(|row| {
                                     row.spawn((
                                         Text::new(item.label()),
                                         TextFont {
-                                            font_size: FontSize::Px(17.0),
+                                            font_size: FontSize::Px(14.0),
                                             ..default()
                                         },
                                         TextColor(Color::WHITE),
@@ -513,7 +654,7 @@ fn spawn_shop_bar(commands: &mut Commands) {
                                         ShopButtonCostText(item),
                                         Text::new(""),
                                         TextFont {
-                                            font_size: FontSize::Px(15.0),
+                                            font_size: FontSize::Px(13.0),
                                             ..default()
                                         },
                                         TextColor(Color::srgb(1.0, 0.86, 0.48)),
@@ -523,7 +664,7 @@ fn spawn_shop_bar(commands: &mut Commands) {
                                 ShopButtonStatusText(item),
                                 Text::new(item.status_label()),
                                 TextFont {
-                                    font_size: FontSize::Px(12.0),
+                                    font_size: FontSize::Px(10.0),
                                     ..default()
                                 },
                                 TextColor(Color::srgb(0.64, 0.81, 0.98)),
@@ -531,11 +672,132 @@ fn spawn_shop_bar(commands: &mut Commands) {
                         });
                     }
                 });
+        })
+        .id();
+    commands.entity(parent).add_child(bar);
+}
+
+fn spawn_tutorial_overlay(commands: &mut Commands) {
+    // Tutorial Overlay (inicialmente oculto)
+    commands
+        .spawn((
+            TutorialOverlayRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Column,
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.02, 0.85)),
+            Visibility::Hidden,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: Val::Px(360.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(Val::Px(20.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    row_gap: Val::Px(16.0),
+                    ..default()
+                },
+                BorderColor::all(Color::srgb(0.65, 0.85, 1.0)),
+                BackgroundColor(Color::srgba(0.05, 0.05, 0.10, 0.95)),
+            ))
+            .with_children(|box_node| {
+                box_node.spawn((
+                    TutorialTitleText,
+                    Text::new("TUTORIAL - CÓMO JUGAR"),
+                    TextFont {
+                        font_size: FontSize::Px(22.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(1.2, 1.4, 2.0)),
+                ));
+
+                box_node.spawn((
+                    TutorialText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.85, 0.90, 1.0)),
+                ));
+
+                // Fila de controles del tutorial (Toggle Checkbox + Botón Entendí)
+                box_node.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(16.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    // Checkbox / Toggle
+                    row.spawn((
+                        Button,
+                        TutorialOverlayToggle,
+                        Node {
+                            width: Val::Px(160.0),
+                            height: Val::Px(40.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.5)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                        BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            TutorialOverlayToggleText,
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
+
+                    // Botón "Entendí" (verde)
+                    row.spawn((
+                        Button,
+                        TutorialCloseButton,
+                        Node {
+                            width: Val::Px(120.0),
+                            height: Val::Px(40.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.5)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgb(0.4, 1.0, 0.4)),
+                        BackgroundColor(Color::srgba(0.05, 0.18, 0.05, 0.90)),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new("Entendí"),
+                            TextFont {
+                                font_size: FontSize::Px(16.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.85, 1.0, 0.85)),
+                        ));
+                    });
+                });
+            });
         });
 }
 
-fn spawn_shop_active_badge(commands: &mut Commands) {
-    commands
+fn spawn_shop_active_badge(commands: &mut Commands, parent: Entity) {
+    let badge = commands
         .spawn((
             ShopActiveBadge,
             Node {
@@ -562,7 +824,9 @@ fn spawn_shop_active_badge(commands: &mut Commands) {
                 },
                 TextColor(Color::srgb(1.0, 0.95, 0.78)),
             ));
-        });
+        })
+        .id();
+    commands.entity(parent).add_child(badge);
 }
 
 /// The in-match HUD entities (spawned once at `Startup`) are hidden while the main menu is up and
@@ -571,6 +835,7 @@ type HudFilter = Or<(
     With<ScoreText>,
     With<MovesText>,
     With<GoalText>,
+    With<LivesText>,
     // The booster bar root — its children inherit visibility, so hiding the root hides the bar.
     With<ShopBar>,
     With<PauseButton>,
@@ -579,6 +844,8 @@ type HudFilter = Or<(
     With<GoalHintContainer>,
     With<StatsButton>,
     With<StatsPopupContainer>,
+    With<BoonIndicatorBar>,
+    With<HudRoot>,
 )>;
 
 fn hide_hud(mut q: Query<&mut Visibility, HudFilter>) {
@@ -658,7 +925,7 @@ fn update_moves_text(
     mut q_num: Query<&mut Text, With<MovesNumberText>>,
     mut q_badge: Query<&mut Node, With<MovesText>>,
 ) {
-    let is_unbounded = mode.is_sandbox() || matches!(level.goal, LevelGoal::TimedScore { .. });
+    let is_unbounded = mode.is_sandbox() || matches!(level.goal, LevelGoal::TimedScore { .. } | LevelGoal::TimedCollectColor { .. });
 
     if let Ok(mut text) = q_num.single_mut() {
         if is_unbounded {
@@ -685,11 +952,12 @@ fn update_goal_text(
     shadow_count: Res<ShadowCount>,
     level_timer: Res<LevelTimer>,
     displayed_cores: Res<DisplayedCollectedCores>,
+    cache: Res<VisualCache>,
     panel: Single<(&mut BackgroundColor, &mut BorderColor), With<GoalText>>,
     icon: Single<
-        (&mut Text, &mut TextColor),
+        &mut ImageNode,
         (
-            With<GoalIconText>,
+            With<GoalIconImage>,
             Without<GoalPrimaryText>,
             Without<GoalTargetText>,
         ),
@@ -698,7 +966,7 @@ fn update_goal_text(
         (&mut Text, &mut TextColor),
         (
             With<GoalPrimaryText>,
-            Without<GoalIconText>,
+            Without<GoalIconImage>,
             Without<GoalTargetText>,
         ),
     >,
@@ -706,14 +974,18 @@ fn update_goal_text(
         (&mut Text, &mut TextColor),
         (
             With<GoalTargetText>,
-            Without<GoalIconText>,
+            Without<GoalIconImage>,
             Without<GoalPrimaryText>,
         ),
     >,
 ) {
-    let (icon_symbol, icon_color, primary_value, target_value) = if mode.is_sandbox() {
+    // The goal icon is a tinted swatch of the actual asset the player needs to consume: a round
+    // "core" for anything that collects lightcores/ingredients/colors, a square for jelly tiles —
+    // deliberately not a text glyph, since some (e.g. `▧`) render as an empty box on fonts missing
+    // that codepoint (see `GoalIconImage`'s doc comment).
+    let (icon_image, icon_color, primary_value, target_value) = if mode.is_sandbox() {
         (
-            "∞",
+            cache.core_image.clone(),
             Color::srgb(0.65, 0.85, 1.0),
             format!("{}", score.0),
             String::new(),
@@ -721,19 +993,19 @@ fn update_goal_text(
     } else {
         match &level.goal {
             LevelGoal::Score(target) => (
-                "◆",
+                cache.core_image.clone(),
                 Color::srgb(0.65, 0.85, 1.0),
                 format!("{}", score.0),
                 format!("/ {}", target),
             ),
             LevelGoal::Sparks => (
-                "✦",
+                cache.core_image.clone(),
                 Color::srgb(1.0, 0.58, 0.12),
                 format!("{}", collected.0),
                 format!("/ {}", level.sparks_total),
             ),
             LevelGoal::ClearShadow => (
-                "▧",
+                cache.square_image.clone(),
                 Color::srgba(0.22, 0.55, 1.0, 0.82),
                 format!("{}", shadow_count.0),
                 String::new(),
@@ -747,7 +1019,7 @@ fn update_goal_text(
                     .max(0.0);
                 let (mins, secs) = (remaining as u32 / 60, remaining as u32 % 60);
                 (
-                    "⏱",
+                    cache.core_image.clone(),
                     Color::srgb(1.0, 0.86, 0.34),
                     format!("{mins:02}:{secs:02}"),
                     format!("{} / {}", score.0, target),
@@ -756,10 +1028,26 @@ fn update_goal_text(
             LevelGoal::CollectColor { color, target } => {
                 let current = displayed_cores.0[color.index()];
                 (
-                    "●",
+                    cache.core_image.clone(),
                     color.bevy_color(),
                     format!("{}", current),
                     format!("/ {}", target),
+                )
+            }
+            LevelGoal::TimedCollectColor { color, target, .. } => {
+                let remaining = level_timer
+                    .0
+                    .as_ref()
+                    .map(Timer::remaining_secs)
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let (mins, secs) = (remaining as u32 / 60, remaining as u32 % 60);
+                let current = displayed_cores.0[color.index()];
+                (
+                    cache.core_image.clone(),
+                    color.bevy_color(),
+                    format!("{mins:02}:{secs:02}"),
+                    format!("{} / {}", current, target),
                 )
             }
         }
@@ -768,9 +1056,9 @@ fn update_goal_text(
     let (mut bg, mut border) = panel.into_inner();
     bg.0 = Color::srgba(0.05, 0.08, 0.10, 0.78);
     *border = BorderColor::all(icon_color.with_alpha(0.38));
-    let (mut icon_text, mut icon_text_color) = icon.into_inner();
-    icon_text.0 = icon_symbol.to_string();
-    icon_text_color.0 = icon_color;
+    let mut icon_node = icon.into_inner();
+    icon_node.image = icon_image;
+    icon_node.color = icon_color;
 
     let (mut primary_text, mut primary_color) = primary.into_inner();
     primary_text.0 = primary_value;
@@ -833,6 +1121,7 @@ fn goal_hint_text(mode: &GameMode, level: &LevelConfig) -> String {
         LevelGoal::ClearShadow => "Limpia sombras".to_string(),
         LevelGoal::TimedScore { .. } => "Score antes del reloj".to_string(),
         LevelGoal::CollectColor { .. } => "Junta este color".to_string(),
+        LevelGoal::TimedCollectColor { .. } => "Color antes del reloj".to_string(),
     }
 }
 
@@ -884,8 +1173,13 @@ fn update_stats_popup(
 
 fn pause_button_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<PauseButton>)>,
+    state: Res<State<GameState>>,
+    tutorial: Res<TutorialState>,
     mut next: ResMut<NextState<GameState>>,
 ) {
+    if *state.get() != GameState::Playing || tutorial.open {
+        return;
+    }
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
             next.set(GameState::Paused);
@@ -895,8 +1189,13 @@ fn pause_button_system(
 
 fn shop_toggle_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<ShopToggleButton>)>,
+    state: Res<State<GameState>>,
+    tutorial: Res<TutorialState>,
     mut shop: ResMut<Shop>,
 ) {
+    if *state.get() != GameState::Playing || tutorial.open {
+        return;
+    }
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
             shop.open = !shop.open;
@@ -998,5 +1297,350 @@ fn update_shop_active_badge(
         *visibility = Visibility::Hidden;
         node.display = Display::None;
         text.0.clear();
+    }
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct TutorialState {
+    pub(crate) open: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct TutorialOverlayRoot;
+#[derive(Component)]
+struct TutorialCloseButton;
+
+fn check_show_tutorial_on_start(
+    settings: Res<WindowSettings>,
+    level: Res<LevelConfig>,
+    mut state: ResMut<TutorialState>,
+    mut shown: ResMut<LevelTutorialShown>,
+    mut q_title: Single<&mut Text, (With<TutorialTitleText>, Without<TutorialText>)>,
+    mut q_text: Single<&mut Text, (With<TutorialText>, Without<TutorialTitleText>)>,
+) {
+    if settings.tutorial_enabled && !shown.0 {
+        state.open = true;
+        shown.0 = true;
+
+        let (title, description) = match &level.goal {
+            LevelGoal::Score(target) => (
+                "TUTORIAL: META DE PUNTAJE",
+                format!(
+                    "• Desliza núcleos adyacentes para alinearlos en grupos de 3 o más del mismo color.\n\n\
+                     • OBJETIVO: Consigue al menos {} puntos en total.\n\n\
+                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                    target
+                ),
+            ),
+            LevelGoal::Sparks => (
+                "TUTORIAL: RECOLECTAR CHISPAS",
+                "• OBJETIVO: Lleva las chispas (ingredientes con forma hexagonal) hasta el final de su columna (fila inferior) para recolectarlas.\n\n\
+                 • Las chispas solo caen en vertical (no deslizan diagonalmente como las piezas normales).\n\n\
+                 • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                 • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string(),
+            ),
+            LevelGoal::ClearShadow => (
+                "TUTORIAL: LIMPIAR SOMBRAS",
+                "• OBJETIVO: Limpia todas las casillas oscuras (sombras) del tablero.\n\n\
+                 • Para limpiar una sombra, realiza una combinación de 3 o más piezas sobre ella.\n\n\
+                 • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                 • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string(),
+            ),
+            LevelGoal::TimedScore { target, .. } => (
+                "TUTORIAL: CONTRARRELOJ",
+                format!(
+                    "• OBJETIVO: Consigue al menos {} puntos antes de que el reloj de arriba llegue a cero.\n\n\
+                     • ¡No hay límite de movimientos! Combina rápido para maximizar tu puntuación.\n\n\
+                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                    target
+                ),
+            ),
+            LevelGoal::CollectColor { color, target } => {
+                let color_name = match color {
+                    LightColor::Red => "rojos",
+                    LightColor::Green => "verdes",
+                    LightColor::Blue => "azules",
+                    LightColor::Yellow => "amarillos",
+                    LightColor::Purple => "morados",
+                };
+                (
+                    "TUTORIAL: RECOLECTAR COLOR",
+                    format!(
+                        "• OBJETIVO: Junta al menos {} núcleos de color {}.\n\n\
+                         • Solo los núcleos de este color sumarán a tu meta, pero puedes combinar los otros para despejar el tablero.\n\n\
+                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                         • Puedes desactivar este tutorial con el toggle de abajo.",
+                        target, color_name
+                    ),
+                )
+            }
+            LevelGoal::TimedCollectColor { color, target, .. } => {
+                let color_name = match color {
+                    LightColor::Red => "rojos",
+                    LightColor::Green => "verdes",
+                    LightColor::Blue => "azules",
+                    LightColor::Yellow => "amarillos",
+                    LightColor::Purple => "morados",
+                };
+                (
+                    "TUTORIAL: COLOR BAJO TIEMPO",
+                    format!(
+                        "• OBJETIVO: Junta al menos {} núcleos de color {} antes de que el reloj llegue a cero.\n\n\
+                         • ¡No hay límite de movimientos! Combina rápido enfocado en este color.\n\n\
+                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                         • Puedes desactivar este tutorial con el toggle de abajo.",
+                        target, color_name
+                    ),
+                )
+            }
+        };
+
+        q_title.0 = title.to_string();
+        q_text.0 = description;
+    }
+}
+
+fn reset_tutorial_state(mut state: ResMut<TutorialState>) {
+    state.open = false;
+}
+
+fn update_tutorial_visibility(
+    state: Res<TutorialState>,
+    mut q_visible: Single<&mut Visibility, With<TutorialOverlayRoot>>,
+    mut q_node: Single<&mut Node, With<TutorialOverlayRoot>>,
+) {
+    if state.open {
+        **q_visible = Visibility::Visible;
+        q_node.display = Display::Flex;
+    } else {
+        **q_visible = Visibility::Hidden;
+        q_node.display = Display::None;
+    }
+}
+
+fn tutorial_close_button_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<TutorialCloseButton>)>,
+    mut state: ResMut<TutorialState>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            state.open = false;
+        }
+    }
+}
+
+// Removed tutorial_disable_button_system as global toggle is controlled from menus.
+
+#[derive(Component)]
+pub(crate) struct BoonIndicatorBar;
+
+#[derive(Component)]
+pub(crate) struct HudRoot;
+
+#[derive(Component)]
+struct TutorialTitleText;
+
+#[derive(Component)]
+struct TutorialText;
+
+fn update_boon_indicators(
+    run: Res<RunState>,
+    mut commands: Commands,
+    bar: Single<Entity, With<BoonIndicatorBar>>,
+) {
+    let bar_entity = *bar;
+    
+    // Clear old indicators
+    commands.entity(bar_entity).despawn_children();
+    
+    // Spawn new indicators for active boons
+    commands.entity(bar_entity).with_children(|parent| {
+        for boon in BoonKind::ALL {
+            let lvl = run.level(boon);
+            if lvl > 0 {
+                let (label, color) = match boon {
+                    BoonKind::RedValue => ("R", Color::srgba(1.2, 0.4, 0.4, 0.85)),
+                    BoonKind::GreenReserve => ("G", Color::srgba(0.4, 1.2, 0.4, 0.85)),
+                    BoonKind::BlueMoves => ("B", Color::srgba(0.4, 0.6, 1.3, 0.85)),
+                    BoonKind::SparkBounty => ("S", Color::srgba(1.3, 0.7, 0.1, 0.85)),
+                    BoonKind::PowerBounty => ("P", Color::srgba(1.1, 0.4, 1.2, 0.85)),
+                    BoonKind::HollowWard => ("H", Color::srgba(0.5, 0.5, 0.6, 0.85)),
+                };
+                
+                parent.spawn((
+                    Interaction::default(),
+                    get_item_tooltip(ShopItem::Boon(boon)),
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
+                    BackgroundColor(color),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new(format!("{}{}", label, lvl)),
+                        TextFont {
+                            font_size: FontSize::Px(11.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            }
+        }
+    });
+}
+
+#[derive(Component)]
+struct TutorialOverlayToggle;
+
+#[derive(Component)]
+struct TutorialOverlayToggleText;
+
+#[derive(Resource, Default)]
+pub(crate) struct LevelTutorialShown(pub(crate) bool);
+
+fn reset_level_tutorial_shown(mut shown: ResMut<LevelTutorialShown>) {
+    shown.0 = false;
+}
+
+fn tutorial_overlay_toggle_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<TutorialOverlayToggle>)>,
+    mut settings: ResMut<WindowSettings>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            settings.tutorial_enabled = !settings.tutorial_enabled;
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct LivesText;
+
+#[derive(Component)]
+pub(crate) struct LivesNumberText;
+
+fn update_lives_text(
+    mode: Res<GameMode>,
+    run: Res<RunState>,
+    mut q_root: Query<&mut Visibility, With<LivesText>>,
+    mut q_text: Query<&mut Text, With<LivesNumberText>>,
+) {
+    let lives_visible = mode.is_run();
+    for mut v in &mut q_root {
+        *v = if lives_visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if lives_visible {
+        for mut text in &mut q_text {
+            text.0 = format!("{}", run.lives);
+        }
+    }
+}
+
+fn update_tutorial_overlay_toggle_text(
+    settings: Res<WindowSettings>,
+    mut q: Query<&mut Text, With<TutorialOverlayToggleText>>,
+) {
+    for mut text in &mut q {
+        if settings.tutorial_enabled {
+            text.0 = "Tutorial: ON [X]".to_string();
+        } else {
+            text.0 = "Tutorial: OFF [ ]".to_string();
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct BoonTooltipContainer;
+
+#[derive(Component)]
+pub(crate) struct BoonTooltipText;
+
+#[derive(Component, Clone)]
+pub(crate) struct TooltipTrigger {
+    pub(crate) title: String,
+    pub(crate) description: String,
+}
+
+pub(crate) fn get_item_tooltip(item: ShopItem) -> TooltipTrigger {
+    match item {
+        ShopItem::Swap => TooltipTrigger {
+            title: "Habilidad: Cambiar".to_string(),
+            description: "Intercambia la posición de 2 núcleos cualesquiera en el tablero.".to_string(),
+        },
+        ShopItem::Eliminate => TooltipTrigger {
+            title: "Habilidad: Eliminar".to_string(),
+            description: "Destruye un núcleo seleccionado, activando nuevas cascadas.".to_string(),
+        },
+        ShopItem::Upgrade => TooltipTrigger {
+            title: "Habilidad: Subir tier".to_string(),
+            description: "Sube el tier del núcleo seleccionado (ej. normal a Rayo).".to_string(),
+        },
+        ShopItem::Life => TooltipTrigger {
+            title: "Artículo: +1 Vida".to_string(),
+            description: "Otorga una vida de reserva para poder reintentar si fallas un nivel.".to_string(),
+        },
+        ShopItem::Boon(boon) => match boon {
+            BoonKind::RedValue => TooltipTrigger {
+                title: "Boon: Rojos+".to_string(),
+                description: "Los núcleos rojos recolectados otorgan +25% de puntuación.".to_string(),
+            },
+            BoonKind::GreenReserve => TooltipTrigger {
+                title: "Boon: Verdes+".to_string(),
+                description: "Los núcleos verdes recolectados te dan reserva de cores para la tienda.".to_string(),
+            },
+            BoonKind::BlueMoves => TooltipTrigger {
+                title: "Boon: Azul+".to_string(),
+                description: "Cada 7 cores azules recolectados te devuelven +1 movimiento extra.".to_string(),
+            },
+            BoonKind::SparkBounty => TooltipTrigger {
+                title: "Boon: Chispa+".to_string(),
+                description: "Las chispas rescatadas otorgan +25 puntos adicionales.".to_string(),
+            },
+            BoonKind::PowerBounty => TooltipTrigger {
+                title: "Boon: Power+".to_string(),
+                description: "Crear núcleos especiales otorga +12 puntos.".to_string(),
+            },
+            BoonKind::HollowWard => TooltipTrigger {
+                title: "Boon: Hollow-".to_string(),
+                description: "Disminuye la probabilidad de aparición de Hollows en el tablero.".to_string(),
+            },
+        }
+    }
+}
+
+fn update_tooltip_system(
+    triggers: Query<(&Interaction, &TooltipTrigger)>,
+    mut q_container: Query<(&mut Visibility, &mut BorderColor), With<BoonTooltipContainer>>,
+    mut q_text: Single<&mut Text, With<BoonTooltipText>>,
+) {
+    let mut hovered_trigger = None;
+    for (interaction, trigger) in &triggers {
+        if *interaction == Interaction::Hovered {
+            hovered_trigger = Some(trigger);
+            break;
+        }
+    }
+
+    if let Ok((mut vis, mut border)) = q_container.single_mut() {
+        if let Some(trigger) = hovered_trigger {
+            *vis = Visibility::Visible;
+            q_text.0 = format!("{}\n{}", trigger.title, trigger.description);
+            *border = BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75));
+        } else {
+            *vis = Visibility::Hidden;
+        }
     }
 }

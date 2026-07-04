@@ -41,6 +41,7 @@ impl Plugin for OptionsPlugin {
                     fullscreen_button_system,
                     resolution_button_system,
                     device_button_system,
+                    tutorial_button_system,
                     update_settings_labels,
                     scroll_drag_system,
                 )
@@ -66,6 +67,10 @@ struct GridWaterButton;
 
 #[derive(Component)]
 struct GridWaterLabel;
+#[derive(Component)]
+struct TutorialButton;
+#[derive(Component)]
+struct TutorialLabel;
 
 #[derive(Component)]
 struct FullscreenButton;
@@ -118,6 +123,7 @@ impl DeviceMode {
 pub(crate) struct WindowSettings {
     pub(crate) res_index: usize,
     pub(crate) device_mode: DeviceMode,
+    pub(crate) tutorial_enabled: bool,
 }
 
 impl Default for WindowSettings {
@@ -130,6 +136,7 @@ impl Default for WindowSettings {
         Self {
             res_index: 2,
             device_mode: mode,
+            tutorial_enabled: true,
         }
     }
 }
@@ -164,6 +171,7 @@ enum SliderTarget {
 
 fn spawn_options(
     mut commands: Commands,
+    settings: Res<WindowSettings>,
     glow: Res<GlowSettings>,
     shake: Res<ShakeSettings>,
     particles: Res<ParticleSettings>,
@@ -250,6 +258,17 @@ fn spawn_options(
             }
             spawn_text_button(root, FpsButton, FpsLabel, 4, fps_target.label());
             spawn_text_button(root, GridWaterButton, GridWaterLabel, 5, "Grid agua: ON");
+            spawn_text_button(
+                root,
+                TutorialButton,
+                TutorialLabel,
+                6,
+                if settings.tutorial_enabled {
+                    "Tutorial: ON"
+                } else {
+                    "Tutorial: OFF"
+                },
+            );
 
             spawn_slider(
                 root,
@@ -666,6 +685,26 @@ fn grid_water_button_system(
         .any(|(e, i)| activated(&i, e, &menu_activated))
     {
         settings.enabled = !settings.enabled;
+    }
+}
+
+fn tutorial_button_system(
+    interactions: Query<(Entity, Ref<Interaction>), With<TutorialButton>>,
+    menu_activated: Res<MenuActivated>,
+    mut settings: ResMut<WindowSettings>,
+    mut label: Query<&mut Text, With<TutorialLabel>>,
+) {
+    if interactions
+        .iter()
+        .any(|(e, i)| activated(&i, e, &menu_activated))
+    {
+        settings.tutorial_enabled = !settings.tutorial_enabled;
+        for mut t in &mut label {
+            t.0 = format!(
+                "Tutorial: {}",
+                if settings.tutorial_enabled { "ON" } else { "OFF" }
+            );
+        }
     }
 }
 

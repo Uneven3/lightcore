@@ -23,10 +23,15 @@ pub(crate) struct VisualCache {
     /// material is constant per color (selection scales the `Transform`, it never recolors).
     ring_mesh: [Handle<Mesh>; 5],
     ring_mat: [Handle<ColorMaterial>; 5],
+    hollow_mesh: Handle<Mesh>,
+    pub(crate) hollow_mat: Handle<ColorMaterial>,
     pub(crate) spark_mesh: Handle<Mesh>,
     pub(crate) spark_mat: Handle<ColorMaterial>,
     pub(crate) shadow_mesh: Handle<Mesh>,
     pub(crate) shadow_mat: Handle<ColorMaterial>,
+    /// "Jalea ultra dura" tint — a deeper violet than the plain `shadow_mat` blue, so hard shadows
+    /// read apart from normal ones at a glance.
+    pub(crate) hard_shadow_mat: Handle<ColorMaterial>,
     pub(crate) blocker_mesh: Handle<Mesh>,
     pub(crate) blocker_mat: Handle<ColorMaterial>,
     pub(crate) burst_mesh: Handle<Mesh>,
@@ -40,6 +45,10 @@ pub(crate) struct VisualCache {
     /// Horizontal beam texture: alpha = (1-dy²)² along the full length, gentle tip fade at ends.
     /// Used by LaserBolt — scale to (length, glow_width); rotate 90° for vertical bolts.
     pub(crate) beam_image: Handle<Image>,
+    /// Flat opaque square, tintable to any color/alpha — used by the HUD goal icon for
+    /// square-shaped goals (e.g. `LevelGoal::ClearShadow`) so it doesn't depend on font glyph
+    /// coverage the way a text icon would.
+    pub(crate) square_image: Handle<Image>,
     /// Kind-shaped membrane meshes for the three top powers, so their *body* (not just their cores)
     /// distinguishes them at a glance: Cross = a 4-bladed shuriken, Starburst = a 5-pointed star,
     /// Blackhole = a clean circle. Color is still carried by the per-color `ring_mat` material, so a
@@ -62,10 +71,18 @@ impl VisualCache {
     pub(crate) fn ring_mat(&self, c: LightColor) -> Handle<ColorMaterial> {
         self.ring_mat[c.index()].clone()
     }
+    pub(crate) fn light_mat(&self, kind: LightKind, color: LightColor) -> Handle<ColorMaterial> {
+        if kind.is_hollow() {
+            self.hollow_mat.clone()
+        } else {
+            self.ring_mat(color)
+        }
+    }
     /// The membrane mesh for a light: the kind-shape for the three top powers (so they read apart by
     /// silhouette), else the per-color shape. Pairs with `ring_mat(color)` for the tint.
     pub(crate) fn light_mesh(&self, kind: LightKind, color: LightColor) -> Handle<Mesh> {
         match kind {
+            LightKind::Hollow => self.hollow_mesh.clone(),
             LightKind::Cross => self.cross_mesh.clone(),
             LightKind::Starburst => self.starburst_mesh.clone(),
             LightKind::Blackhole => self.blackhole_mesh.clone(),
@@ -82,7 +99,9 @@ impl VisualCache {
             // Cross is drawn as a RayH+RayV pair, and Blackhole has its own dedicated
             // void/rim meshes (`blackhole_void_mesh`/`blackhole_rim_mesh`) — neither uses this
             // single-mesh slot.
-            LightKind::Cross | LightKind::Normal | LightKind::Blackhole => return None,
+            LightKind::Cross | LightKind::Normal | LightKind::Hollow | LightKind::Blackhole => {
+                return None;
+            }
         })
     }
 }
@@ -201,8 +220,14 @@ pub(crate) fn build_cache(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut fonts: ResMut<Assets<Font>>,
     particles: Res<ParticleSettings>,
 ) {
+    // Overwrite the default font handle with Roboto-Regular to prevent empty boxes/squares on accented Spanish characters.
+    let font_bytes = include_bytes!("../../../assets/fonts/Roboto-Regular.ttf");
+    let font = Font::from_bytes(font_bytes.to_vec());
+    let _ = fonts.insert(AssetId::<Font>::default(), font);
+
     let ring_mesh = std::array::from_fn(|i| LightColor::from_index(i).mesh(&mut meshes));
     let ring_mat = std::array::from_fn(|i| {
         materials.add(ColorMaterial::from_color(
@@ -223,6 +248,10 @@ pub(crate) fn build_cache(
     commands.insert_resource(VisualCache {
         ring_mesh,
         ring_mat,
+        hollow_mesh: meshes.add(x_mark_mesh(TILE * 0.36, TILE * 0.14)),
+        hollow_mat: materials.add(ColorMaterial::from_color(
+            LightKind::Hollow.visual_ring_color(LightColor::Red),
+        )),
         cross_mesh,
         starburst_mesh,
         blackhole_mesh,
@@ -231,6 +260,9 @@ pub(crate) fn build_cache(
         spark_mat: materials.add(ColorMaterial::from_color(Color::srgb(1.25, 0.48, 0.08))),
         shadow_mesh: meshes.add(Rectangle::new(TILE * 0.95, TILE * 0.95)),
         shadow_mat: materials.add(ColorMaterial::from_color(Color::srgba(0.2, 0.5, 0.9, 0.45))),
+        hard_shadow_mat: materials.add(ColorMaterial::from_color(Color::srgba(
+            0.62, 0.16, 0.68, 0.62,
+        ))),
         blocker_mesh: meshes.add(Rectangle::new(TILE * 0.96, TILE * 0.96)),
         blocker_mat: materials.add(ColorMaterial::from_color(Color::srgba(
             0.015, 0.018, 0.030, 0.92,
@@ -243,6 +275,17 @@ pub(crate) fn build_cache(
         glow_image: radial_image(&mut images, 128, |d| (1.0 - d) * (1.0 - d)),
         // Horizontal beam: uniform brightness along length, soft perpendicular falloff.
         beam_image: make_beam_image(&mut images, 256),
+        square_image: images.add(Image::new(
+            Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            vec![255u8; 8 * 8 * 4],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        )),
         effect,
         blackhole_void_mesh: meshes.add(Circle::new(TILE * 0.5)),
         blackhole_rim_mesh: meshes.add(Annulus::new(TILE * 0.5, TILE * 0.62)),

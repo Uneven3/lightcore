@@ -5,6 +5,7 @@ use super::{DragState, PendingSwap, SwapData, SwapHappened};
 use crate::core::prelude::*;
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
+use crate::ui::TutorialState;
 use crate::state::GameState;
 
 pub(crate) fn handle_input(
@@ -14,10 +15,14 @@ pub(crate) fn handle_input(
     mut next_state: ResMut<NextState<GameState>>,
     pointer: Res<PointerInput>,
     shop: Res<Shop>,
+    tutorial: Res<TutorialState>,
     mut lights: Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
     shadow_q: Query<&GridPos, (With<Shadow>, Without<Light>, Without<Spark>)>,
     mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
 ) {
+    if tutorial.open {
+        return;
+    }
     // While a shop booster is armed, clicks target lights for the ability (`shop::shop_targeting`),
     // not the drag-swap — bail so the two don't both consume the same press.
     if shop.is_armed() {
@@ -229,10 +234,14 @@ pub(crate) fn board_cursor_input(
     mut commands: Commands,
     mut pending: ResMut<PendingSwap>,
     mut next_state: ResMut<NextState<GameState>>,
+    tutorial: Res<TutorialState>,
     mut lights: Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
     mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
     shadow_q: Query<&GridPos, (With<Shadow>, Without<Light>, Without<Spark>)>,
 ) {
+    if tutorial.open {
+        return;
+    }
     // Never interfere mid-swap.
     if pending.0.is_some() {
         return;

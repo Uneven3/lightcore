@@ -21,6 +21,12 @@ pub(crate) enum LevelGoal {
         color: LightColor,
         target: u32,
     },
+    /// Recolectar color antes de que el reloj de arriba llegue a cero.
+    TimedCollectColor {
+        color: LightColor,
+        target: u32,
+        secs: f32,
+    },
 }
 
 #[derive(Resource, Clone)]
@@ -30,6 +36,9 @@ pub(crate) struct LevelConfig {
     pub(crate) goal: LevelGoal,
     pub(crate) sparks_total: u32,
     pub(crate) shadow_positions: Vec<GridPos>,
+    /// "Jalea ultra dura" cells — a subset disjoint from `shadow_positions`, needing 3 hits
+    /// (direct or orthogonally adjacent) to clear instead of 1. See `core::components::HardShadow`.
+    pub(crate) hard_shadow_positions: Vec<GridPos>,
     pub(crate) blocker_positions: Vec<GridPos>,
     pub(crate) grade_baseline: u32,
 }
@@ -42,6 +51,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             goal: LevelGoal::Score(150),
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
         },
@@ -51,6 +61,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             goal: LevelGoal::Sparks,
             sparks_total: 3,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 360,
         },
@@ -59,9 +70,12 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             total_moves: 28,
             goal: LevelGoal::ClearShadow,
             sparks_total: 0,
+            // El par central es jalea ultra dura (3 hits) para introducir la mecánica.
             shadow_positions: (2i32..=6)
                 .flat_map(|x| [2i32, 3i32].map(move |y| GridPos { x, y }))
+                .filter(|p| p.x != 4)
                 .collect(),
+            hard_shadow_positions: vec![GridPos { x: 4, y: 2 }, GridPos { x: 4, y: 3 }],
             blocker_positions: vec![],
             grade_baseline: 420,
         },
@@ -75,6 +89,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             },
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 520,
         },
@@ -87,6 +102,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             },
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
         },
@@ -99,6 +115,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             },
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
         },
@@ -108,6 +125,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             goal: LevelGoal::Score(430),
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 520,
         },
@@ -117,6 +135,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             goal: LevelGoal::Sparks,
             sparks_total: 4,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![
                 GridPos { x: 0, y: 3 },
                 GridPos { x: 0, y: 4 },
@@ -136,6 +155,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             },
             sparks_total: 0,
             shadow_positions: vec![],
+            hard_shadow_positions: vec![],
             blocker_positions: vec![
                 GridPos { x: 1, y: 1 },
                 GridPos { x: 6, y: 1 },
@@ -145,6 +165,85 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
                 GridPos { x: 4, y: 4 },
             ],
             grade_baseline: 560,
+        },
+        10 => LevelConfig {
+            level: 10,
+            total_moves: u32::MAX,
+            goal: LevelGoal::TimedCollectColor {
+                color: LightColor::Blue,
+                target: 10,
+                secs: 60.0,
+            },
+            sparks_total: 0,
+            shadow_positions: vec![],
+            hard_shadow_positions: vec![],
+            blocker_positions: vec![],
+            grade_baseline: 200,
+        },
+        11 => LevelConfig {
+            level: 11,
+            total_moves: 22,
+            goal: LevelGoal::Score(650),
+            sparks_total: 0,
+            shadow_positions: vec![],
+            hard_shadow_positions: vec![],
+            blocker_positions: vec![
+                GridPos { x: 2, y: 1 },
+                GridPos { x: 2, y: 3 },
+                GridPos { x: 2, y: 5 },
+                GridPos { x: 5, y: 1 },
+                GridPos { x: 5, y: 3 },
+                GridPos { x: 5, y: 5 },
+            ],
+            grade_baseline: 800,
+        },
+        12 => LevelConfig {
+            level: 12,
+            total_moves: 30,
+            goal: LevelGoal::ClearShadow,
+            sparks_total: 0,
+            shadow_positions: vec![
+                GridPos { x: 0, y: 0 },
+                GridPos { x: 2, y: 0 },
+                GridPos { x: 4, y: 0 },
+                GridPos { x: 6, y: 0 },
+                GridPos { x: 1, y: 2 },
+                GridPos { x: 3, y: 2 },
+                GridPos { x: 5, y: 2 },
+                GridPos { x: 7, y: 2 },
+                GridPos { x: 0, y: 4 },
+                GridPos { x: 2, y: 4 },
+                GridPos { x: 4, y: 4 },
+                GridPos { x: 6, y: 4 },
+                GridPos { x: 1, y: 6 },
+                GridPos { x: 3, y: 6 },
+                GridPos { x: 5, y: 6 },
+                GridPos { x: 7, y: 6 },
+            ],
+            hard_shadow_positions: vec![
+                GridPos { x: 3, y: 3 },
+                GridPos { x: 4, y: 3 },
+                GridPos { x: 3, y: 4 },
+                GridPos { x: 4, y: 4 },
+            ],
+            blocker_positions: vec![],
+            grade_baseline: 900,
+        },
+        13 => LevelConfig {
+            level: 13,
+            total_moves: u32::MAX,
+            goal: LevelGoal::TimedScore {
+                secs: 180.0,
+                target: 800,
+            },
+            sparks_total: 2,
+            shadow_positions: vec![],
+            hard_shadow_positions: vec![],
+            blocker_positions: vec![
+                GridPos { x: 1, y: 3 },
+                GridPos { x: 6, y: 3 },
+            ],
+            grade_baseline: 1000,
         },
         _ => make_level(1),
     }
@@ -197,6 +296,7 @@ pub(crate) fn make_generated_level(depth: u32, seed: u64) -> LevelConfig {
         goal,
         sparks_total: 2 + (depth / 3).min(3),
         shadow_positions,
+        hard_shadow_positions: vec![],
         blocker_positions,
         grade_baseline: 260 + depth * 58,
     }

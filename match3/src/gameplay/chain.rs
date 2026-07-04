@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet};
 use super::popping::apply_pop_delay;
 use super::vfx;
 use super::{
-    CascadeDepth, ChainPop, CollectedCores, CoreReserve, MovesLeft, PowerActivationQueue,
-    PowerCreated, Score, ShadowCount, SparksCollected, StatsBook, SuperComboPending,
+    CascadeDepth, ChainPop, CollectedCores, CoreReserve, DisplayedScore, GameMode, MovesLeft,
+    PowerActivationQueue, PowerCreated, Score, ScoreDrained, ShadowCount, SparksCollected,
+    StatsBook, SuperComboPending,
 };
-use crate::board::{clear_shadow_at, shuffle_board};
+use crate::board::{HOLLOW_BASE_CHANCE, clear_shadow_at, shuffle_board};
 use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
 use crate::core::run::RunState;
@@ -18,6 +19,7 @@ use crate::visuals::assets::VisualCache;
 #[derive(SystemParam)]
 pub(crate) struct ChainParams<'w> {
     pub(crate) score: ResMut<'w, Score>,
+    pub(crate) displayed: ResMut<'w, DisplayedScore>,
     pub(crate) reserve: ResMut<'w, CoreReserve>,
     pub(crate) moves: ResMut<'w, MovesLeft>,
     pub(crate) cascade: ResMut<'w, CascadeDepth>,
@@ -29,6 +31,7 @@ pub(crate) struct ChainParams<'w> {
     pub(crate) collected_cores: ResMut<'w, CollectedCores>,
     pub(crate) stats: ResMut<'w, StatsBook>,
     pub(crate) run: ResMut<'w, RunState>,
+    pub(crate) mode: Res<'w, GameMode>,
 }
 
 pub(crate) fn check_chain_matches(
@@ -36,8 +39,8 @@ pub(crate) fn check_chain_matches(
     mut res: ChainParams,
     mut next_state: ResMut<NextState<GameState>>,
     cache: Res<VisualCache>,
-    shadow_q: Query<
-        (Entity, &GridPos),
+    mut shadow_q: Query<
+        (Entity, &GridPos, Option<&mut HardShadow>),
         (
             With<Shadow>,
             Without<Blocker>,
@@ -95,7 +98,7 @@ pub(crate) fn check_chain_matches(
             .iter()
             .filter(|e| !activating_entities.contains(e))
             .filter_map(|e| entity_info.get(e))
-            .filter(|(_, _, k)| *k != LightKind::Normal)
+            .filter(|(_, _, k)| k.is_power())
             .map(|(pos, _, kind)| PowerActivation {
                 pos: *pos,
                 kind: *kind,
@@ -122,17 +125,28 @@ pub(crate) fn check_chain_matches(
         clear_shadow_at(
             &removed_positions,
             &mut commands,
-            &shadow_q,
+            &mut shadow_q,
             &mut res.shadow_count.0,
         );
 
-        let points = final_remove.len() as u32 * res.cascade.0;
+        let points = final_remove
+            .iter()
+            .filter(|e| {
+                entity_info
+                    .get(e)
+                    .is_some_and(|(_, _, kind)| !kind.is_hollow())
+            })
+            .count() as u32
+            * res.cascade.0;
 
         let mut score_bonus = 0;
         let mut reserve_bonus = 0;
         let mut blue_count = 0;
         for e in &final_remove {
             if let Some((_, color, kind)) = entity_info.get(e) {
+                if kind.is_hollow() {
+                    continue;
+                }
                 res.collected_cores.0[color.index()] += res.cascade.0;
                 let add = res.cascade.0;
                 score_bonus += res.run.score_bonus_for_color(*color, add);
@@ -147,7 +161,7 @@ pub(crate) fn check_chain_matches(
                     LightColor::Yellow => res.stats.yellows += add,
                     LightColor::Purple => res.stats.purples += add,
                 }
-                if *kind != LightKind::Normal {
+                if kind.is_power() {
                     res.stats.lightkinds += add;
                 }
             }
@@ -169,7 +183,9 @@ pub(crate) fn check_chain_matches(
                 TimerMode::Once,
             )));
             apply_pop_delay(&mut commands, *e, &pop_delays);
-            if let Some((pos, color, _)) = entity_info.get(e) {
+            if let Some((pos, color, kind)) = entity_info.get(e)
+                && !kind.is_hollow()
+            {
                 let w = to_world(*pos);
                 let delay = pop_delays.get(e).copied().unwrap_or(0.0);
                 pops.push((w, *color, delay));
@@ -197,6 +213,9 @@ pub(crate) fn check_chain_matches(
                 res.collected_cores.0[color.index()] >= *target
             }
             LevelGoal::TimedScore { target, .. } => res.score.0 >= *target,
+            LevelGoal::TimedCollectColor { color, target, .. } => {
+                res.collected_cores.0[color.index()] >= *target
+            }
         };
         if level_complete {
             next_state.set(GameState::LevelComplete);
@@ -206,11 +225,16 @@ pub(crate) fn check_chain_matches(
             next_state.set(GameState::GameOver);
             return;
         }
-        let shadow_set: HashSet<GridPos> = shadow_q.iter().map(|(_, p)| *p).collect();
+        let shadow_set: HashSet<GridPos> = shadow_q.iter().map(|(_, p, _)| *p).collect();
         if find_valid_swap(&grid, &shadow_set).is_none() {
             let light_pairs: Vec<(Entity, GridPos)> =
                 lights.iter().map(|(e, p, _, _)| (e, *p)).collect();
-            shuffle_board(&mut commands, &cache, &light_pairs);
+            let hollow_chance = if res.mode.is_run() {
+                res.run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
+            } else {
+                HOLLOW_BASE_CHANCE
+            };
+            shuffle_board(&mut commands, &cache, &light_pairs, hollow_chance);
         }
         next_state.set(GameState::Playing);
         return;
@@ -261,7 +285,7 @@ pub(crate) fn check_chain_matches(
     let cascade_powers: Vec<PowerActivation> = to_remove
         .iter()
         .filter_map(|e| entity_info.get(e))
-        .filter(|(_, _, k)| *k != LightKind::Normal)
+        .filter(|(_, _, k)| k.is_power())
         .map(|(pos, _, kind)| PowerActivation {
             pos: *pos,
             kind: *kind,
@@ -301,7 +325,7 @@ pub(crate) fn check_chain_matches(
                 continue;
             }
             if let Some((pos, _, kind)) = entity_info.get(&e)
-                && *kind != LightKind::Normal
+                && kind.is_power()
                 && !activator_positions.contains(pos)
             {
                 res.queue.0.push_back(PowerActivation {
@@ -321,21 +345,42 @@ pub(crate) fn check_chain_matches(
     clear_shadow_at(
         &removed_positions,
         &mut commands,
-        &shadow_q,
+        &mut shadow_q,
         &mut res.shadow_count.0,
     );
 
-    let points = to_remove.len() as u32 * res.cascade.0;
+    let points = if result.score_reset {
+        0
+    } else {
+        to_remove
+            .iter()
+            .filter(|e| {
+                entity_info
+                    .get(e)
+                    .is_some_and(|(_, _, kind)| !kind.is_hollow())
+            })
+            .count() as u32
+            * res.cascade.0
+    };
 
-    let mut score_bonus = res.run.power_bonus(upgrades.len() as u32);
+    let mut score_bonus = if result.score_reset {
+        0
+    } else {
+        res.run.power_bonus(upgrades.len() as u32)
+    };
     let mut reserve_bonus = 0;
     let mut blue_count = 0;
     for e in &to_remove {
         if let Some((_, color, kind)) = entity_info.get(e) {
+            if kind.is_hollow() {
+                continue;
+            }
             res.collected_cores.0[color.index()] += res.cascade.0;
             let add = res.cascade.0;
-            score_bonus += res.run.score_bonus_for_color(*color, add);
-            reserve_bonus += res.run.reserve_bonus_for_color(*color, add);
+            if !result.score_reset {
+                score_bonus += res.run.score_bonus_for_color(*color, add);
+                reserve_bonus += res.run.reserve_bonus_for_color(*color, add);
+            }
             if *color == LightColor::Blue {
                 blue_count += add;
             }
@@ -346,13 +391,28 @@ pub(crate) fn check_chain_matches(
                 LightColor::Yellow => res.stats.yellows += add,
                 LightColor::Purple => res.stats.purples += add,
             }
-            if *kind != LightKind::Normal {
+            if kind.is_power() {
                 res.stats.lightkinds += add;
             }
         }
     }
-    res.score.0 += points + score_bonus;
-    res.reserve.0 += points + reserve_bonus;
+    if result.score_reset {
+        res.score.0 = 0;
+        res.displayed.0 = 0;
+        commands.trigger(ScoreDrained {
+            origins: to_remove
+                .iter()
+                .filter_map(|e| {
+                    entity_info.get(e).and_then(|(pos, _, kind)| {
+                        kind.is_hollow().then(|| to_world(*pos).with_z(6.0))
+                    })
+                })
+                .collect(),
+        });
+    } else {
+        res.score.0 += points + score_bonus;
+        res.reserve.0 += points + reserve_bonus;
+    }
     let move_bonus = res.run.blue_move_bonus(blue_count);
     if move_bonus > 0 && res.moves.0 != u32::MAX {
         res.moves.0 += move_bonus;
@@ -372,7 +432,9 @@ pub(crate) fn check_chain_matches(
             TimerMode::Once,
         )));
         apply_pop_delay(&mut commands, *e, &pop_delays);
-        if let Some((pos, color, _)) = entity_info.get(e) {
+        if let Some((pos, color, kind)) = entity_info.get(e)
+            && !kind.is_hollow()
+        {
             let w = to_world(*pos);
             let delay = pop_delays.get(e).copied().unwrap_or(0.0);
             pops.push((w, *color, delay));
@@ -380,7 +442,11 @@ pub(crate) fn check_chain_matches(
     }
     commands.trigger(ChainPop {
         removed: to_remove.len() as u32,
-        points: points + score_bonus,
+        points: if result.score_reset {
+            0
+        } else {
+            points + score_bonus
+        },
         pops,
     });
     next_state.set(GameState::Popping);

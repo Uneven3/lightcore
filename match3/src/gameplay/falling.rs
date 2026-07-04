@@ -90,6 +90,60 @@ fn diagonal_fall_target(
     None
 }
 
+#[allow(dead_code)]
+fn ingredient_diagonal_fall_target(
+    pos: GridPos,
+    occupied: &HashSet<(i32, i32)>,
+    shadow_set: &HashSet<(i32, i32)>,
+) -> Option<GridPos> {
+    if shadow_set.contains(&(pos.x, pos.y)) || pos.y <= 0 {
+        return None;
+    }
+
+    let below = (pos.x, pos.y - 1);
+    if !shadow_set.contains(&below) && !occupied.contains(&below) {
+        return None;
+    }
+
+    for dx in [-1, 1] {
+        let diag = (pos.x + dx, pos.y - 1);
+        if !in_bounds(diag.0, diag.1) {
+            continue;
+        }
+        if shadow_set.contains(&diag) || occupied.contains(&diag) {
+            continue;
+        }
+        if target_has_vertical_feed(diag, occupied, shadow_set) {
+            continue;
+        }
+        return Some(GridPos {
+            x: diag.0,
+            y: diag.1,
+        });
+    }
+
+    None
+}
+
+#[allow(dead_code)]
+fn target_has_vertical_feed(
+    target: (i32, i32),
+    occupied: &HashSet<(i32, i32)>,
+    shadow_set: &HashSet<(i32, i32)>,
+) -> bool {
+    let (x, y) = target;
+    for scan_y in y + 1..GRID_H {
+        let cell = (x, scan_y);
+        if shadow_set.contains(&cell) {
+            return false;
+        }
+        if occupied.contains(&cell) {
+            return true;
+        }
+    }
+    false
+}
+
 fn vertical_feed_blocked_for_target(
     target: (i32, i32),
     occupied: &HashSet<(i32, i32)>,
@@ -122,22 +176,27 @@ pub(crate) fn update_shadow_set(
 pub(crate) fn apply_gravity(
     mut commands: Commands,
     mut settled: ResMut<GravitySettled>,
-    mut entities: Query<(Entity, &mut GridPos, &VisualPos), (With<FallPhysics>, Without<PopAnim>)>,
+    mut entities: Query<
+        (Entity, &mut GridPos, &VisualPos, Has<Spark>),
+        (With<FallPhysics>, Without<PopAnim>),
+    >,
     shadow_set: Res<ShadowSet>,
 ) {
     let shadow_set = &shadow_set.0;
 
-    let mut sorted: Vec<(Entity, GridPos, Vec3)> =
-        entities.iter().map(|(e, p, v)| (e, *p, v.0)).collect();
-    sorted.sort_by_key(|(_, p, _)| p.y);
-    let mut occupied: HashSet<(i32, i32)> = sorted.iter().map(|(_, p, _)| (p.x, p.y)).collect();
+    let mut sorted: Vec<(Entity, GridPos, Vec3, bool)> = entities
+        .iter()
+        .map(|(e, p, v, is_spark)| (e, *p, v.0, is_spark))
+        .collect();
+    sorted.sort_by_key(|(_, p, _, _)| p.y);
+    let mut occupied: HashSet<(i32, i32)> = sorted.iter().map(|(_, p, _, _)| (p.x, p.y)).collect();
     let mut any_moved = false;
     let mut any_unsettled = false;
 
     // Each piece advances based on its own VisualPos catching up to its GridPos,
     // not the whole board's — so a deep column doesn't hold back a shallow one.
     let mut blocked_for_diagonal = Vec::new();
-    for (e, pos, vis) in &sorted {
+    for (e, pos, vis, is_spark) in &sorted {
         let unsettled = vis.distance(to_world(*pos)) >= TILE * 0.02;
         if unsettled {
             any_unsettled = true;
@@ -158,18 +217,22 @@ pub(crate) fn apply_gravity(
             commands.entity(*e).insert(Dropping);
             any_moved = true;
         } else {
-            blocked_for_diagonal.push((*e, *pos));
+            blocked_for_diagonal.push((*e, *pos, *is_spark));
         }
     }
 
-    for (e, pos) in blocked_for_diagonal {
+    for (e, pos, is_spark) in blocked_for_diagonal {
         if let Some(target) = straight_fall_target(pos, &occupied, &shadow_set) {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
             entities.get_mut(e).unwrap().1.set_if_neq(target);
             commands.entity(e).insert(Dropping);
             any_moved = true;
-        } else if let Some(target) = diagonal_fall_target(pos, &occupied, &shadow_set) {
+        } else if let Some(target) = if is_spark {
+            None
+        } else {
+            diagonal_fall_target(pos, &occupied, &shadow_set)
+        } {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
             entities.get_mut(e).unwrap().1.set_if_neq(target);
@@ -326,6 +389,57 @@ mod tests {
         board.remove(&(5, 5));
         board.insert((4, 4), GridPos { x: 4, y: 4 });
         assert!(board.contains_key(&(4, 4)));
+    }
+
+    #[test]
+    fn ingredient_prefers_vertical_before_diagonal() {
+        let next =
+            straight_fall_target(GridPos { x: 7, y: 4 }, &occupied(&[(7, 4)]), &shadows(&[]))
+                .or_else(|| {
+                    ingredient_diagonal_fall_target(
+                        GridPos { x: 7, y: 4 },
+                        &occupied(&[(7, 4)]),
+                        &shadows(&[]),
+                    )
+                });
+
+        assert_eq!(next, Some(GridPos { x: 7, y: 3 }));
+    }
+
+    #[test]
+    fn ingredient_can_slide_diagonally_around_blocked_exit_column() {
+        let next = straight_fall_target(
+            GridPos { x: 7, y: 4 },
+            &occupied(&[(7, 4)]),
+            &shadows(&[(7, 3)]),
+        )
+        .or_else(|| {
+            ingredient_diagonal_fall_target(
+                GridPos { x: 7, y: 4 },
+                &occupied(&[(7, 4)]),
+                &shadows(&[(7, 3)]),
+            )
+        });
+
+        assert_eq!(next, Some(GridPos { x: 6, y: 3 }));
+    }
+
+    #[test]
+    fn ingredient_does_not_slide_before_vertical_feed() {
+        let next = straight_fall_target(
+            GridPos { x: 7, y: 4 },
+            &occupied(&[(7, 4), (6, 5)]),
+            &shadows(&[(7, 3)]),
+        )
+        .or_else(|| {
+            ingredient_diagonal_fall_target(
+                GridPos { x: 7, y: 4 },
+                &occupied(&[(7, 4), (6, 5)]),
+                &shadows(&[(7, 3)]),
+            )
+        });
+
+        assert_eq!(next, None);
     }
 
     #[test]

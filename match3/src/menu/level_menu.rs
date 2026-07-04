@@ -5,7 +5,8 @@ use rand::{Rng, SeedableRng};
 
 use super::{BTN_HOVER, MenuFocus};
 use crate::core::campaign::CampaignProgress;
-use crate::gameplay::GameMode;
+use crate::core::run::{RUN_LEVELS, RunState};
+use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
 use crate::menu::options::{DeviceMode, WindowSettings};
@@ -34,9 +35,12 @@ impl Plugin for LevelMenuPlugin {
                     update_node_sprite_system,
                     update_node_label_system,
                     update_info_panel_system,
+                    update_play_button_text_system,
                     update_play_button_visuals_system,
                     update_back_button_visuals_system,
+                    update_restart_button_visuals_system,
                     play_button_system,
+                    restart_button_system,
                     keyboard_launch_selected_system,
                     back_button_system,
                 )
@@ -56,6 +60,15 @@ struct BackButton;
 
 #[derive(Component)]
 struct PlayButton;
+
+#[derive(Component)]
+struct PlayButtonLabel;
+
+#[derive(Component)]
+struct RestartRunButton;
+
+#[derive(Component)]
+struct RestartRunButtonLabel;
 
 #[derive(Component, Clone, Copy)]
 enum InfoTextKind {
@@ -152,10 +165,14 @@ const ENTRY_CONNECTIONS: &[(usize, usize)] = &[
     (5, 6),
     (6, 7),
     (7, 8),
-    (0, 10),
-    (2, 9),
+    (8, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),
+    (0, 14),
+    (2, 13),
 ];
-const MENU_ENTRIES: [MenuEntry; 11] = [
+const MENU_ENTRIES: [MenuEntry; 15] = [
     MenuEntry {
         title: "Puntaje Basico",
         blurb: "Consigue el puntaje objetivo.",
@@ -220,6 +237,34 @@ const MENU_ENTRIES: [MenuEntry; 11] = [
         kind: MenuEntryKind::Campaign(9),
     },
     MenuEntry {
+        title: "Tempestad Azul",
+        blurb: "Recolecta 10 cores azules en 1 minuto.",
+        pos: Vec2::new(108.0, 1532.0),
+        accent: [0.35, 0.72, 1.25],
+        kind: MenuEntryKind::Campaign(10),
+    },
+    MenuEntry {
+        title: "Campo Minado",
+        blurb: "Consigue 650 puntos esquivando bloqueadores.",
+        pos: Vec2::new(-98.0, 1760.0),
+        accent: [0.95, 0.38, 1.10],
+        kind: MenuEntryKind::Campaign(11),
+    },
+    MenuEntry {
+        title: "Invasion de Sombras",
+        blurb: "Limpia las sombras y la jalea ultra dura central.",
+        pos: Vec2::new(88.0, 1988.0),
+        accent: [1.15, 0.45, 0.95],
+        kind: MenuEntryKind::Campaign(12),
+    },
+    MenuEntry {
+        title: "Tormenta Solar",
+        blurb: "Consigue 800 puntos en 3 minutos con chispas activas.",
+        pos: Vec2::new(0.0, 2216.0),
+        accent: [1.25, 0.88, 0.25],
+        kind: MenuEntryKind::Campaign(13),
+    },
+    MenuEntry {
         title: "ConsumeAll",
         blurb: "Modo especial. Vacia el tablero completo para ganar, sin campaign gating.",
         pos: Vec2::new(378.0, -36.0),
@@ -238,16 +283,22 @@ const MENU_ENTRIES: [MenuEntry; 11] = [
 fn spawn_level_menu(
     mut commands: Commands,
     progress: Res<CampaignProgress>,
+    run: Res<RunState>,
     settings: Res<WindowSettings>,
     cache: Res<VisualCache>,
     mut focus: ResMut<MenuFocus>,
     mut map_state: ResMut<LevelMapState>,
 ) {
-    let highest_index = highest_unlocked_index(&progress);
-    focus.0 = highest_index;
-    map_state.selected = highest_index;
+    let start_index = run
+        .active
+        .then(|| entry_index_for_level(run.depth.min(RUN_LEVELS)))
+        .flatten()
+        .filter(|&index| entry_is_unlocked(index, &progress))
+        .unwrap_or_else(|| highest_unlocked_index(&progress));
+    focus.0 = start_index;
+    map_state.selected = start_index;
     map_state.zoom = 1.0;
-    map_state.offset = centered_offset(highest_index, map_state.zoom);
+    map_state.offset = centered_offset(start_index, map_state.zoom);
     map_state.drag_anchor_window = None;
     map_state.drag_last_world = None;
     map_state.dragged = false;
@@ -445,7 +496,37 @@ fn spawn_level_menu(
                     ))
                     .with_children(|button| {
                         button.spawn((
+                            PlayButtonLabel,
                             Text::new("Jugar"),
+                            TextFont {
+                                font_size: FontSize::Px(22.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
+
+                panel
+                    .spawn((
+                        Button,
+                        RestartRunButton,
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(46.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.0)),
+                            margin: UiRect::top(Val::Px(8.0)),
+                            display: Display::None,
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.28, 0.11, 0.11, 0.96)),
+                        BorderColor::all(Color::srgb(0.88, 0.42, 0.42)),
+                    ))
+                    .with_children(|button| {
+                        button.spawn((
+                            RestartRunButtonLabel,
+                            Text::new("Reiniciar Run"),
                             TextFont {
                                 font_size: FontSize::Px(22.0),
                                 ..default()
@@ -832,6 +913,7 @@ fn update_node_label_system(
 
 fn update_info_panel_system(
     progress: Res<CampaignProgress>,
+    run: Res<RunState>,
     settings: Res<WindowSettings>,
     map_state: Res<LevelMapState>,
     mut texts: Query<(&InfoTextKind, &mut Text)>,
@@ -839,7 +921,7 @@ fn update_info_panel_system(
     let entry = &MENU_ENTRIES[map_state.selected];
     let best = entry_best_score(map_state.selected, &progress);
     let unlocked = entry_is_unlocked(map_state.selected, &progress);
-    let progress_line = if unlocked {
+    let mut progress_line = if unlocked {
         if let Some(level) = entry_level(map_state.selected) {
             if best > 0 {
                 format!("Mejor score: {}  ·  {}", best, grade_summary(level, best))
@@ -853,6 +935,17 @@ fn update_info_panel_system(
         let prev = entry_level(map_state.selected.saturating_sub(1)).unwrap_or(1);
         format!("Bloqueado · completa Nivel {:02} para desbloquear", prev)
     };
+    if run.active
+        && matches!(
+            MENU_ENTRIES[map_state.selected].kind,
+            MenuEntryKind::Campaign(_)
+        )
+    {
+        progress_line = format!(
+            "{progress_line}\nRun activo: Nivel {:02}",
+            run.depth.min(RUN_LEVELS)
+        );
+    }
     let hint = match settings.device_mode {
         DeviceMode::Mobile => "Desliza el mapa · pellizca zoom".to_string(),
         DeviceMode::Desktop => "Arrastra el mapa · rueda zoom".to_string(),
@@ -894,6 +987,25 @@ fn update_play_button_visuals_system(
     }
 }
 
+fn update_play_button_text_system(
+    run: Res<RunState>,
+    map_state: Res<LevelMapState>,
+    mut label: Query<&mut Text, With<PlayButtonLabel>>,
+) {
+    let Ok(mut text) = label.single_mut() else {
+        return;
+    };
+    text.0 = if run.active
+        && matches!(
+            MENU_ENTRIES[map_state.selected].kind,
+            MenuEntryKind::Campaign(_)
+        ) {
+        "Continuar run".to_string()
+    } else {
+        "Jugar".to_string()
+    };
+}
+
 fn update_back_button_visuals_system(
     mut back_button: Query<
         (&Interaction, &mut BackgroundColor, &mut BorderColor),
@@ -918,6 +1030,7 @@ fn update_back_button_visuals_system(
 fn play_button_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<PlayButton>)>,
     progress: Res<CampaignProgress>,
+    run: Res<RunState>,
     map_state: Res<LevelMapState>,
     mut mode: ResMut<GameMode>,
     mut next: ResMut<NextState<GameState>>,
@@ -927,7 +1040,7 @@ fn play_button_system(
     }
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
-            *mode = entry_mode(map_state.selected);
+            *mode = entry_mode(map_state.selected, &run);
             next.set(GameState::Loading);
         }
     }
@@ -936,6 +1049,7 @@ fn play_button_system(
 fn keyboard_launch_selected_system(
     actions: Res<InputActions>,
     progress: Res<CampaignProgress>,
+    run: Res<RunState>,
     map_state: Res<LevelMapState>,
     mut mode: ResMut<GameMode>,
     mut next: ResMut<NextState<GameState>>,
@@ -944,7 +1058,7 @@ fn keyboard_launch_selected_system(
         return;
     }
     if entry_is_unlocked(map_state.selected, &progress) {
-        *mode = entry_mode(map_state.selected);
+        *mode = entry_mode(map_state.selected, &run);
         next.set(GameState::Loading);
     }
 }
@@ -959,6 +1073,63 @@ fn back_button_system(
         .any(|interaction| *interaction == Interaction::Pressed);
     if clicked || actions.menu_back() {
         next.set(GameState::MainMenu);
+    }
+}
+
+fn update_restart_button_visuals_system(
+    run: Res<RunState>,
+    map_state: Res<LevelMapState>,
+    mut restart_button: Query<
+        (&Interaction, &mut BackgroundColor, &mut BorderColor, &mut Node),
+        With<RestartRunButton>,
+    >,
+) {
+    let Ok((interaction, mut bg, mut border, mut node)) = restart_button.single_mut() else {
+        return;
+    };
+
+    if !run.active {
+        node.display = Display::None;
+        return;
+    }
+
+    let entry = &MENU_ENTRIES[map_state.selected];
+    if matches!(entry.kind, MenuEntryKind::Campaign(_)) {
+        node.display = Display::Flex;
+        let hovered = matches!(*interaction, Interaction::Hovered | Interaction::Pressed);
+        bg.0 = if hovered {
+            Color::srgba(0.42, 0.16, 0.16, 0.96)
+        } else {
+            Color::srgba(0.28, 0.11, 0.11, 0.96)
+        };
+        *border = BorderColor::all(if hovered {
+            Color::srgb(1.0, 0.62, 0.62)
+        } else {
+            Color::srgb(0.88, 0.42, 0.42)
+        });
+    } else {
+        node.display = Display::None;
+    }
+}
+
+fn restart_button_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<RestartRunButton>)>,
+    mut run: ResMut<RunState>,
+    mut reserve: ResMut<CoreReserve>,
+    mut spent: ResMut<CoresSpent>,
+    mut progress: ResMut<CampaignProgress>,
+    mut mode: ResMut<GameMode>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            run.abandon();
+            reserve.0 = 0;
+            spent.0 = 0;
+            *progress = CampaignProgress::default();
+            *mode = GameMode::Run(1);
+            next.set(GameState::Loading);
+        }
     }
 }
 
@@ -1064,12 +1235,24 @@ fn entry_level(index: usize) -> Option<u32> {
     }
 }
 
-fn entry_mode(index: usize) -> GameMode {
+fn entry_mode(index: usize, run: &RunState) -> GameMode {
     match MENU_ENTRIES[index].kind {
-        MenuEntryKind::Campaign(level) => GameMode::Run(level),
+        MenuEntryKind::Campaign(level) => {
+            if run.active {
+                GameMode::Run(run.depth.clamp(1, RUN_LEVELS))
+            } else {
+                GameMode::Run(level)
+            }
+        }
         MenuEntryKind::ConsumeAll => GameMode::ConsumeAll,
         MenuEntryKind::Sandbox => GameMode::Sandbox,
     }
+}
+
+fn entry_index_for_level(level: u32) -> Option<usize> {
+    MENU_ENTRIES.iter().position(
+        |entry| matches!(entry.kind, MenuEntryKind::Campaign(entry_level) if entry_level == level),
+    )
 }
 
 fn entry_best_score(index: usize, progress: &CampaignProgress) -> u32 {

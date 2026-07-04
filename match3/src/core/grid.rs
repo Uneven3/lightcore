@@ -73,3 +73,14 @@ pub(crate) fn to_grid(world: Vec2) -> Option<GridPos> {
     let y = (world.y / TILE + oy).round() as i32;
     ((0..GRID_W).contains(&x) && (0..GRID_H).contains(&y)).then_some(GridPos { x, y })
 }
+
+/// The 4 orthogonal neighbors of `p` (may fall outside the board — callers only use these to test
+/// membership in an existing position set, so out-of-bounds entries are harmless).
+pub(crate) fn orthogonal_neighbors(p: GridPos) -> [GridPos; 4] {
+    [
+        GridPos { x: p.x - 1, y: p.y },
+        GridPos { x: p.x + 1, y: p.y },
+        GridPos { x: p.x, y: p.y - 1 },
+        GridPos { x: p.x, y: p.y + 1 },
+    ]
+}

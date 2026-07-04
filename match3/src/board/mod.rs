@@ -6,7 +6,20 @@ use crate::core::prelude::*;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::breathing::{BreathPhase, SparkNucleusPulse};
 
-fn generate_board_layout(rng: &mut impl Rng) -> Vec<(GridPos, LightColor)> {
+pub(crate) const HOLLOW_BASE_CHANCE: f32 = 0.025;
+
+pub(crate) fn random_basic_kind(rng: &mut impl Rng, hollow_chance: f32) -> LightKind {
+    if rng.random::<f32>() < hollow_chance {
+        LightKind::Hollow
+    } else {
+        LightKind::Normal
+    }
+}
+
+fn generate_board_layout(
+    rng: &mut impl Rng,
+    hollow_chance: f32,
+) -> Vec<(GridPos, LightColor, LightKind)> {
     const ALL: [LightColor; 5] = [
         LightColor::Red,
         LightColor::Green,
@@ -14,37 +27,47 @@ fn generate_board_layout(rng: &mut impl Rng) -> Vec<(GridPos, LightColor)> {
         LightColor::Yellow,
         LightColor::Purple,
     ];
-    let mut board = [[LightColor::Red; GRID_H as usize]; GRID_W as usize];
+    let mut board = [[(LightColor::Red, LightKind::Normal); GRID_H as usize]; GRID_W as usize];
     for x in 0..GRID_W as usize {
         for y in 0..GRID_H as usize {
-            let mut forbidden = Vec::new();
-            if x >= 2 && board[x - 1][y] == board[x - 2][y] {
-                forbidden.push(board[x - 1][y]);
+            loop {
+                let color = ALL[rng.random_range(0..ALL.len())];
+                let kind = random_basic_kind(rng, hollow_chance);
+                let key = match_key(color, kind);
+                let h_match = x >= 2
+                    && match_key(board[x - 1][y].0, board[x - 1][y].1) == key
+                    && match_key(board[x - 2][y].0, board[x - 2][y].1) == key;
+                let v_match = y >= 2
+                    && match_key(board[x][y - 1].0, board[x][y - 1].1) == key
+                    && match_key(board[x][y - 2].0, board[x][y - 2].1) == key;
+                if !h_match && !v_match {
+                    board[x][y] = (color, kind);
+                    break;
+                }
             }
-            if y >= 2 && board[x][y - 1] == board[x][y - 2] {
-                forbidden.push(board[x][y - 1]);
-            }
-            let allowed: Vec<LightColor> = ALL
-                .iter()
-                .filter(|c| !forbidden.contains(c))
-                .copied()
-                .collect();
-            board[x][y] = allowed[rng.random_range(0..allowed.len())];
         }
     }
     (0..GRID_W)
-        .flat_map(|x| (0..GRID_H).map(move |y| (GridPos { x, y }, board[x as usize][y as usize])))
+        .flat_map(|x| {
+            (0..GRID_H).map(move |y| {
+                let (color, kind) = board[x as usize][y as usize];
+                (GridPos { x, y }, color, kind)
+            })
+        })
         .collect()
 }
 
-fn board_has_valid_swap(board: &[(GridPos, LightColor)], blocked: &HashSet<GridPos>) -> bool {
+fn board_has_valid_swap(
+    board: &[(GridPos, LightColor, LightKind)],
+    blocked: &HashSet<GridPos>,
+) -> bool {
     let mut grid: Grid = HashMap::new();
-    for (idx, (pos, color)) in board.iter().enumerate() {
+    for (idx, (pos, color, kind)) in board.iter().enumerate() {
         if blocked.contains(pos) {
             continue;
         }
         let entity = Entity::from_raw_u32(idx as u32 + 1).unwrap();
-        grid.insert(*pos, (entity, *color, LightKind::Normal));
+        grid.insert(*pos, (entity, *color, *kind));
     }
     find_valid_swap(&grid, &HashSet::new()).is_some()
 }
@@ -52,9 +75,10 @@ fn board_has_valid_swap(board: &[(GridPos, LightColor)], blocked: &HashSet<GridP
 pub(crate) fn generate_board(
     rng: &mut impl Rng,
     blocked: &HashSet<GridPos>,
-) -> Vec<(GridPos, LightColor)> {
+    hollow_chance: f32,
+) -> Vec<(GridPos, LightColor, LightKind)> {
     loop {
-        let board = generate_board_layout(rng);
+        let board = generate_board_layout(rng, hollow_chance);
         if board_has_valid_swap(&board, blocked) {
             return board;
         }
@@ -85,7 +109,7 @@ pub(crate) fn spawn_light(
             VisualPos(visual_start),
             BreathPhase(phase), // shared by the cores and the glow halo so they breathe in lockstep
             Mesh2d(cache.light_mesh(kind, color)),
-            MeshMaterial2d(cache.ring_mat(color)),
+            MeshMaterial2d(cache.light_mat(kind, color)),
             Transform::from_translation(visual_start),
         ))
         .id()
@@ -100,6 +124,39 @@ pub(crate) fn spawn_shadow(commands: &mut Commands, cache: &VisualCache, pos: Gr
         MeshMaterial2d(cache.shadow_mat.clone()),
         Transform::from_translation(world.with_z(-0.5)),
     ));
+}
+
+/// "Jalea ultra dura": same tile as `spawn_shadow` but needing `hits` (direct or orthogonally
+/// adjacent) matches to clear — see `HardShadow` and `clear_shadow_at`. Rendered with its own
+/// material/label so it reads apart from a normal 1-hit `Shadow`.
+pub(crate) fn spawn_hard_shadow(
+    commands: &mut Commands,
+    cache: &VisualCache,
+    pos: GridPos,
+    hits: u8,
+) {
+    let world = to_world(pos);
+    commands
+        .spawn((
+            Shadow,
+            HardShadow(hits),
+            pos,
+            Mesh2d(cache.shadow_mesh.clone()),
+            MeshMaterial2d(cache.hard_shadow_mat.clone()),
+            Transform::from_translation(world.with_z(-0.5)),
+        ))
+        .with_children(|shadow| {
+            shadow.spawn((
+                HardShadowLabel,
+                Text2d::new(hits.to_string()),
+                TextFont {
+                    font_size: FontSize::Px(22.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.85, 1.0)),
+                Transform::from_xyz(0.0, 0.0, 0.4),
+            ));
+        });
 }
 
 pub(crate) fn spawn_blocker(commands: &mut Commands, cache: &VisualCache, pos: GridPos) {
@@ -189,32 +246,29 @@ pub(crate) fn shuffle_board(
     commands: &mut Commands,
     cache: &VisualCache,
     light_entities: &[(Entity, GridPos)],
+    hollow_chance: f32,
 ) {
     let positions: HashSet<GridPos> = light_entities.iter().map(|(_, p)| *p).collect();
     for (e, _) in light_entities {
         commands.entity(*e).try_despawn();
     }
     let mut rng = rand::rng();
-    let new_board = generate_board(&mut rng, &HashSet::new());
-    for (pos, color) in new_board {
+    let new_board = generate_board(&mut rng, &HashSet::new(), hollow_chance);
+    for (pos, color, kind) in new_board {
         if positions.contains(&pos) {
-            spawn_light(
-                commands,
-                cache,
-                pos,
-                color,
-                LightKind::Normal,
-                to_world(pos),
-            );
+            spawn_light(commands, cache, pos, color, kind, to_world(pos));
         }
     }
 }
 
+/// Clears `Shadow` tiles hit by this pop wave. A plain `Shadow` clears on a direct hit (a match on
+/// its own cell). A `HardShadow` also counts a hit from an orthogonally adjacent match, and chips
+/// one hit off instead of despawning until it reaches 0 — see `core::components::HardShadow`.
 pub(crate) fn clear_shadow_at(
     removed_positions: &HashSet<GridPos>,
     commands: &mut Commands,
-    shadow_q: &Query<
-        (Entity, &GridPos),
+    shadow_q: &mut Query<
+        (Entity, &GridPos, Option<&mut HardShadow>),
         (
             With<Shadow>,
             Without<Blocker>,
@@ -224,10 +278,23 @@ pub(crate) fn clear_shadow_at(
     >,
     shadow_count: &mut u32,
 ) {
-    for (e, gp) in shadow_q.iter() {
-        if removed_positions.contains(gp) {
-            commands.entity(e).try_despawn();
-            *shadow_count = shadow_count.saturating_sub(1);
+    for (e, gp, hard) in shadow_q.iter_mut() {
+        let hit = removed_positions.contains(gp)
+            || hard.as_ref().is_some_and(|_| {
+                orthogonal_neighbors(*gp)
+                    .iter()
+                    .any(|n| removed_positions.contains(n))
+            });
+        if !hit {
+            continue;
         }
+        if let Some(mut hard) = hard
+            && hard.0 > 1
+        {
+            hard.0 -= 1;
+            continue;
+        }
+        commands.entity(e).try_despawn();
+        *shadow_count = shadow_count.saturating_sub(1);
     }
 }

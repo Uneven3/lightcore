@@ -10,6 +10,7 @@ pub(crate) mod core_motion;
 pub(crate) mod effects;
 pub(crate) mod glow;
 pub(crate) mod grid_water;
+pub(crate) mod hard_shadow;
 pub(crate) mod light_trail;
 pub(crate) mod motion;
 pub(crate) mod particles;
@@ -37,6 +38,7 @@ impl Plugin for VisualsPlugin {
             .add_observer(light_trail::on_power_blast_trail)
             .add_observer(camera::on_chain_pop)
             .add_observer(score_light::on_chain_pop_score_light)
+            .add_observer(score_light::on_score_drained)
             .add_observer(score_light::on_light_popped)
             .add_plugins(space_background::SpaceBackgroundPlugin)
             .add_plugins(grid_water::GridWaterPlugin)
@@ -49,10 +51,14 @@ impl Plugin for VisualsPlugin {
                 Update,
                 (
                     score_light::tick_score_light,
+                    score_light::tick_score_shard_scatter,
+                    score_light::tick_score_shard_absorb,
                     glow::attach_glow_pools,
                     glow::flicker,
                     core_motion::rebuild_cores,
                     core_motion::animate_cores,
+                    core_motion::animate_hollow_flow,
+                    core_motion::animate_hollow_material,
                 ),
             )
             .add_systems(
@@ -77,6 +83,7 @@ impl Plugin for VisualsPlugin {
                     breathing::breathe,
                     breathing::pulse_spark_nucleus,
                     core_motion::despawn_cores_on_pop,
+                    hard_shadow::update_hard_shadow_label,
                 )
                     .run_if(not(in_state(crate::state::GameState::GameOver))),
             )

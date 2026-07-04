@@ -24,7 +24,7 @@ pub(crate) fn accumulate_pop_delays(
         }
     };
     match activation.kind {
-        LightKind::Normal => {}
+        LightKind::Normal | LightKind::Hollow => {}
         LightKind::Starburst => {
             // blast_path = [star, targets sorted by distance]; beam i arrives at stagger + travel.
             for (i, pos) in blast_path(activation, entity_info).iter().enumerate() {
@@ -97,11 +97,12 @@ pub(crate) fn tick_pop_anim(
         Option<&mut PopDelay>,
         Option<&MeshMaterial2d<ColorMaterial>>,
         Option<&LightColor>,
+        Option<&LightKind>,
     )>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     time: Res<Time>,
 ) {
-    for (e, mut t, mut anim, delay, mat_handle, color) in &mut q {
+    for (e, mut t, mut anim, delay, mat_handle, color, kind) in &mut q {
         if let Some(mut d) = delay {
             if !d.0.tick(time.delta()).is_finished() {
                 continue;
@@ -119,9 +120,11 @@ pub(crate) fn tick_pop_anim(
         }
         if frac >= 1.0 {
             let color = color.copied().unwrap_or(LightColor::Red);
+            let kind = kind.copied().unwrap_or(LightKind::Normal);
             commands.trigger(LightPopped {
                 pos: t.translation,
                 color,
+                kind,
             });
             commands.entity(e).try_despawn();
         }

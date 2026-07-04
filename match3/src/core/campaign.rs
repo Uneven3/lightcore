@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-pub(crate) const CAMPAIGN_LEVELS: usize = 9;
-const SAVE_VERSION: &str = "lightcore-progress-v1";
+pub(crate) const CAMPAIGN_LEVELS: usize = 13;
+const SAVE_VERSION: &str = "lightcore-progress-v2";
 
 pub(crate) struct CampaignPlugin;
 
@@ -90,6 +90,34 @@ pub(crate) const CAMPAIGN_NODES: [CampaignNode; CAMPAIGN_LEVELS] = [
         pos: [45.0, 72.0],
         accent: [0.42, 1.05, 0.48],
     },
+    CampaignNode {
+        level: 10,
+        title: "Tempestad Azul",
+        blurb: "Recolecta 10 cores azules en 1 minuto.",
+        pos: [108.0, 1532.0],
+        accent: [0.35, 0.72, 1.25],
+    },
+    CampaignNode {
+        level: 11,
+        title: "Campo Minado",
+        blurb: "Consigue 650 puntos esquivando bloqueadores.",
+        pos: [-98.0, 1760.0],
+        accent: [0.95, 0.38, 1.10],
+    },
+    CampaignNode {
+        level: 12,
+        title: "Invasion de Sombras",
+        blurb: "Limpia las sombras y la jalea ultra dura central.",
+        pos: [88.0, 1988.0],
+        accent: [1.15, 0.45, 0.95],
+    },
+    CampaignNode {
+        level: 13,
+        title: "Tormenta Solar",
+        blurb: "Consigue 800 puntos en 3 minutos con chispas activas.",
+        pos: [0.0, 2216.0],
+        accent: [1.25, 0.88, 0.25],
+    },
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -118,6 +146,15 @@ pub(crate) struct CampaignUnlockResult {
 }
 
 impl CampaignProgress {
+    pub(crate) fn unlock_all(&mut self) {
+        for record in &mut self.best_scores {
+            record.completed = true;
+            if record.best_score == 0 {
+                record.best_score = 1;
+            }
+        }
+    }
+
     pub(crate) fn best_score(&self, level: u32) -> u32 {
         level_index(level)
             .map(|idx| self.best_scores[idx].best_score)
@@ -169,11 +206,16 @@ impl CampaignProgress {
 
     fn decode(raw: &str) -> Option<Self> {
         let mut lines = raw.lines();
-        if lines.next()? != SAVE_VERSION {
+        let ver = lines.next()?;
+        if ver != "lightcore-progress-v1" && ver != "lightcore-progress-v2" {
             return None;
         }
         let mut progress = Self::default();
-        for (idx, line) in lines.take(CAMPAIGN_LEVELS).enumerate() {
+        let max_lines = if ver == "lightcore-progress-v2" { 13 } else { 9 };
+        for (idx, line) in lines.take(max_lines).enumerate() {
+            if idx >= CAMPAIGN_LEVELS {
+                break;
+            }
             let (score, completed) = line.split_once(',')?;
             progress.best_scores[idx] = CampaignRecord {
                 best_score: score.parse().ok()?,

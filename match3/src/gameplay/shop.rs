@@ -9,19 +9,19 @@
 //!   rebuild_cores` reacts to the kind change and rebuilds its body + cores.
 //!
 //! Capturing lights always feeds the main lightcore counter (`Score`) and the spendable reserve
-//! (`CoreReserve`). Buying a booster spends only the reserve, so the campaign goal still measures
-//! how many lightcores the player captured during the run.
+//! (`CoreReserve`). Buying a booster spends only the reserve — `Score` (the level's goal progress)
+//! is untouched — and in `GameMode::Run`, `CoreReserve` is the run's persistent currency: it
+//! carries over between levels instead of resetting, so boons bought early still cost the wallet
+//! that funds later levels' shopping (see `gameplay::lifecycle::setup_match`).
 
 use bevy::prelude::*;
 
-use super::{
-    CascadeDepth, ChainPop, CoreReserve, CoresSpent, DisplayedScore, PendingSwap, PowerCreated,
-    Score, SwapData,
-};
+use super::{CascadeDepth, ChainPop, CoreReserve, CoresSpent, PendingSwap, PowerCreated, SwapData};
 use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::input::pointer::PointerInput;
 use crate::state::GameState;
+use crate::ui::TutorialState;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::particles::{ParticleSettings, spawn_burst};
 
@@ -32,20 +32,23 @@ pub(crate) enum ShopItem {
     Swap,
     Eliminate,
     Upgrade,
+    Life,
     Boon(BoonKind),
 }
 
 impl ShopItem {
     /// Bar order (left→right), also used to spawn the buttons.
-    pub(crate) const ALL: [ShopItem; 8] = [
+    pub(crate) const ALL: [ShopItem; 10] = [
         ShopItem::Swap,
         ShopItem::Eliminate,
         ShopItem::Upgrade,
+        ShopItem::Life,
         ShopItem::Boon(BoonKind::RedValue),
         ShopItem::Boon(BoonKind::GreenReserve),
         ShopItem::Boon(BoonKind::BlueMoves),
         ShopItem::Boon(BoonKind::SparkBounty),
         ShopItem::Boon(BoonKind::PowerBounty),
+        ShopItem::Boon(BoonKind::HollowWard),
     ];
 
     pub(crate) fn cost(self, run: &RunState) -> Option<u32> {
@@ -53,6 +56,7 @@ impl ShopItem {
             ShopItem::Swap => Some(20),
             ShopItem::Eliminate => Some(45),
             ShopItem::Upgrade => Some(90),
+            ShopItem::Life => Some(80),
             ShopItem::Boon(boon) => run.boon_cost(boon),
         }
     }
@@ -62,6 +66,7 @@ impl ShopItem {
             ShopItem::Swap => "Cambiar",
             ShopItem::Eliminate => "Eliminar",
             ShopItem::Upgrade => "Subir tier",
+            ShopItem::Life => "+1 Vida",
             ShopItem::Boon(boon) => boon.label(),
         }
     }
@@ -71,6 +76,7 @@ impl ShopItem {
             ShopItem::Swap => "Reposiciona 2 luces",
             ShopItem::Eliminate => "Rompe 1 luz",
             ShopItem::Upgrade => "Eleva 1 tier",
+            ShopItem::Life => "Compra 1 vida extra",
             ShopItem::Boon(boon) => boon.status_label(),
         }
     }
@@ -111,6 +117,7 @@ impl Shop {
             ShopItem::Swap => "Cambiar activo".to_string(),
             ShopItem::Eliminate => "Eliminar activo".to_string(),
             ShopItem::Upgrade => "Subir tier activo".to_string(),
+            ShopItem::Life => return None,
             ShopItem::Boon(_) => return None,
         })
     }
@@ -135,16 +142,10 @@ pub(crate) const BTN_BORDER_IDLE: Color = Color::srgba(0.50, 0.74, 1.0, 0.20);
 pub(crate) const BTN_BORDER_BROKE: Color = Color::srgba(0.35, 0.40, 0.48, 0.18);
 pub(crate) const BTN_BORDER_ARMED: Color = Color::srgba(1.0, 0.86, 0.46, 0.88);
 
-/// Spend only from the booster reserve; captured lightcores stay captured.
-fn spend(
-    score: &mut Score,
-    displayed_score: &mut DisplayedScore,
-    reserve: &mut CoreReserve,
-    spent: &mut CoresSpent,
-    cost: u32,
-) {
-    score.0 = score.0.saturating_sub(cost);
-    displayed_score.0 = displayed_score.0.saturating_sub(cost);
+/// Spend only from the booster reserve — `Score` is the level's goal progress (and, for a Run,
+/// what gets recorded to `CampaignProgress`), so buying a booster never claws that back. `reserve`
+/// is the run's persistent wallet (see `RunState`'s doc comment on `lifecycle::setup_match`).
+fn spend(reserve: &mut CoreReserve, spent: &mut CoresSpent, cost: u32) {
     reserve.0 = reserve.0.saturating_sub(cost);
     spent.0 += cost;
 }
@@ -169,8 +170,6 @@ pub(crate) fn shop_button_system(
     mut commands: Commands,
     mut shop: ResMut<Shop>,
     mut reserve: ResMut<CoreReserve>,
-    mut score: ResMut<Score>,
-    mut displayed_score: ResMut<DisplayedScore>,
     mut spent: ResMut<CoresSpent>,
     mut run: ResMut<RunState>,
     interactions: Query<(&Interaction, &ShopButton), Changed<Interaction>>,
@@ -184,18 +183,20 @@ pub(crate) fn shop_button_system(
         let Some(cost) = item.cost(&run) else {
             continue;
         };
+        if item == ShopItem::Life {
+            if reserve.0 >= cost {
+                run.lives += 1;
+                spend(&mut reserve, &mut spent, cost);
+                shop.open = false;
+            }
+            continue;
+        }
         if item.is_boon() {
             if reserve.0 >= cost
                 && let ShopItem::Boon(boon) = item
                 && run.buy(boon)
             {
-                spend(
-                    &mut score,
-                    &mut displayed_score,
-                    &mut reserve,
-                    &mut spent,
-                    cost,
-                );
+                spend(&mut reserve, &mut spent, cost);
                 shop.open = false;
             }
             continue;
@@ -219,8 +220,6 @@ pub(crate) fn shop_button_system(
 pub(crate) fn shop_targeting(
     mut commands: Commands,
     mut shop: ResMut<Shop>,
-    mut score: ResMut<Score>,
-    mut displayed_score: ResMut<DisplayedScore>,
     mut reserve: ResMut<CoreReserve>,
     mut spent: ResMut<CoresSpent>,
     mut cascade: ResMut<CascadeDepth>,
@@ -232,7 +231,11 @@ pub(crate) fn shop_targeting(
     mut lights: Query<(Entity, &mut GridPos, &LightColor, &mut LightKind), With<Light>>,
     selected: Query<Entity, With<Selected>>,
     run: Res<RunState>,
+    tutorial: Res<TutorialState>,
 ) {
+    if tutorial.open {
+        return;
+    }
     let Some(item) = shop.armed else {
         return;
     };
@@ -256,7 +259,7 @@ pub(crate) fn shop_targeting(
     };
 
     match item {
-        ShopItem::Boon(_) => {
+        ShopItem::Boon(_) | ShopItem::Life => {
             disarm(&mut commands, &mut shop, &selected);
         }
         ShopItem::Eliminate => {
@@ -282,13 +285,7 @@ pub(crate) fn shop_targeting(
                 points: 0,
                 pops: vec![(w, color, 0.0)],
             });
-            spend(
-                &mut score,
-                &mut displayed_score,
-                &mut reserve,
-                &mut spent,
-                item.cost(&run).unwrap_or(0),
-            );
+            spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
             disarm(&mut commands, &mut shop, &selected);
             next_state.set(GameState::Popping);
         }
@@ -298,13 +295,7 @@ pub(crate) fn shop_targeting(
                 // `rebuild_cores` reacts to the `LightKind` change (body shape + cores).
                 *lights.get_mut(target).unwrap().3 = next;
                 commands.trigger(PowerCreated);
-                spend(
-                    &mut score,
-                    &mut displayed_score,
-                    &mut reserve,
-                    &mut spent,
-                    item.cost(&run).unwrap_or(0),
-                );
+                spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
                 disarm(&mut commands, &mut shop, &selected);
             }
             // Already a Blackhole (max tier) → no charge, stays armed for another pick.
@@ -336,13 +327,7 @@ pub(crate) fn shop_targeting(
                     b_pos,
                     free: true,
                 });
-                spend(
-                    &mut score,
-                    &mut displayed_score,
-                    &mut reserve,
-                    &mut spent,
-                    item.cost(&run).unwrap_or(0),
-                );
+                spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
                 clear_pick(&mut commands, &mut shop, &selected);
                 shop.armed = None;
                 next_state.set(GameState::SwapAnimating);

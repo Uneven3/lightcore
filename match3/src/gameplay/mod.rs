@@ -42,6 +42,7 @@ impl Plugin for GameplayPlugin {
             .init_resource::<SparksCollected>()
             .init_resource::<ShadowCount>()
             .init_resource::<ShadowSet>()
+            .init_resource::<lifecycle::LevelRewardOffer>()
             .add_systems(Update, falling::update_shadow_set)
             .init_resource::<LevelTimer>()
             .init_resource::<PowerActivationQueue>()
@@ -121,7 +122,12 @@ impl Plugin for GameplayPlugin {
             )
             .add_systems(
                 Update,
-                lifecycle::handle_level_advance.run_if(in_state(GameState::LevelComplete)),
+                (
+                    lifecycle::level_reward_button_system,
+                    lifecycle::handle_level_advance,
+                )
+                    .chain()
+                    .run_if(in_state(GameState::LevelComplete)),
             )
             .add_systems(
                 Update,
@@ -183,6 +189,11 @@ impl GameMode {
 
 #[derive(Resource, Default)]
 pub(crate) struct Score(pub(crate) u32);
+
+#[derive(Event)]
+pub(crate) struct ScoreDrained {
+    pub(crate) origins: Vec<Vec3>,
+}
 
 /// What the HUD actually shows — lags behind `Score` on purpose. Only
 /// `visuals::score_light::tick_score_light` increments it, when a traveling light reaches the
@@ -395,6 +406,7 @@ pub(crate) struct SwapFailed;
 pub(crate) struct LightPopped {
     pub(crate) pos: Vec3,
     pub(crate) color: LightColor,
+    pub(crate) kind: LightKind,
 }
 
 /// A normal light was upgraded to a power light this frame (via match-3, cascade, or shop booster).

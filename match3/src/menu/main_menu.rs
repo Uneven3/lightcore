@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
+use crate::core::campaign::CampaignProgress;
+use crate::core::run::RunState;
+use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
+use crate::menu::options::WindowSettings;
 use crate::state::GameState;
 
 /// Title screen — the app boots here. "Jugar" → `LevelMenu`, "Opciones" → `Options`.
@@ -12,7 +16,14 @@ impl Plugin for MainMenuPlugin {
             .add_systems(OnExit(GameState::MainMenu), despawn_main_menu)
             .add_systems(
                 Update,
-                (button_hover_system, nav_button_system, quit_button_system)
+                (
+                    button_hover_system,
+                    run_button_system,
+                    nav_button_system,
+                    quit_button_system,
+                    main_menu_tutorial_button_system,
+                    update_main_menu_tutorial_text,
+                )
                     .run_if(in_state(GameState::MainMenu)),
             );
     }
@@ -24,10 +35,17 @@ struct MainMenuRoot;
 #[derive(Component, Clone)]
 struct NavButton(GameState);
 
+#[derive(Component, Clone, Copy)]
+enum RunMenuButton {
+    Continue,
+    New,
+    Debug,
+}
+
 #[derive(Component)]
 struct QuitButton;
 
-fn spawn_main_menu(mut commands: Commands) {
+fn spawn_main_menu(mut commands: Commands, run: Res<RunState>) {
     commands
         .spawn((
             MainMenuRoot,
@@ -50,13 +68,21 @@ fn spawn_main_menu(mut commands: Commands) {
                 },
                 TextColor(Color::srgb(1.6, 1.8, 2.6)), // HDR → blooms
             ));
-            for (index, (label, target)) in [
-                ("Jugar", GameState::LevelMenu),
+            let mut index = 0;
+            if run.active {
+                spawn_run_button(root, index, "Continuar", RunMenuButton::Continue);
+                index += 1;
+            }
+            spawn_run_button(root, index, "Nuevo run", RunMenuButton::New);
+            index += 1;
+
+            spawn_run_button(root, index, "Modo Debug", RunMenuButton::Debug);
+            index += 1;
+
+            for (label, target) in [
+                ("Niveles", GameState::LevelMenu),
                 ("Opciones", GameState::Options),
-            ]
-            .into_iter()
-            .enumerate()
-            {
+            ] {
                 root.spawn((
                     Button,
                     NavButton(target),
@@ -80,11 +106,39 @@ fn spawn_main_menu(mut commands: Commands) {
                         TextColor(Color::WHITE),
                     ));
                 });
+                index += 1;
             }
+            // Botón de Tutorial en el Main Menu (Checkbox / Toggle)
+            root.spawn((
+                Button,
+                MainMenuTutorialButton,
+                MenuButton { index },
+                Node {
+                    width: Val::Px(280.0),
+                    height: Val::Px(66.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(BTN_IDLE),
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    MainMenuTutorialText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(28.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+            index += 1;
+
             root.spawn((
                 Button,
                 QuitButton,
-                MenuButton { index: 2 },
+                MenuButton { index },
                 Node {
                     width: Val::Px(280.0),
                     height: Val::Px(66.0),
@@ -107,6 +161,37 @@ fn spawn_main_menu(mut commands: Commands) {
         });
 }
 
+fn spawn_run_button(
+    root: &mut ChildSpawnerCommands,
+    index: usize,
+    label: &'static str,
+    action: RunMenuButton,
+) {
+    root.spawn((
+        Button,
+        action,
+        MenuButton { index },
+        Node {
+            width: Val::Px(280.0),
+            height: Val::Px(66.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(BTN_IDLE),
+    ))
+    .with_children(|b| {
+        b.spawn((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(30.0),
+                ..default()
+            },
+            TextColor(Color::WHITE),
+        ));
+    });
+}
+
 fn nav_button_system(
     interactions: Query<(Entity, Ref<Interaction>, &NavButton)>,
     menu_activated: Res<MenuActivated>,
@@ -120,6 +205,45 @@ fn nav_button_system(
                 options_return.0 = GameState::MainMenu;
             }
             next.set(btn.0.clone());
+        }
+    }
+}
+
+fn run_button_system(
+    interactions: Query<(Entity, Ref<Interaction>, &RunMenuButton)>,
+    menu_activated: Res<MenuActivated>,
+    mut run: ResMut<RunState>,
+    mut reserve: ResMut<CoreReserve>,
+    mut spent: ResMut<CoresSpent>,
+    mut mode: ResMut<GameMode>,
+    mut progress: ResMut<CampaignProgress>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    for (entity, interaction, action) in &interactions {
+        if !activated(&interaction, entity, &menu_activated) {
+            continue;
+        }
+        match action {
+            RunMenuButton::Continue if run.active => {
+                *mode = GameMode::Run(run.depth);
+                next.set(GameState::Loading);
+            }
+            RunMenuButton::New => {
+                run.abandon();
+                reserve.0 = 0;
+                spent.0 = 0;
+                *progress = CampaignProgress::default();
+                *mode = GameMode::Run(1);
+                next.set(GameState::Loading);
+            }
+            RunMenuButton::Debug => {
+                run.abandon();
+                reserve.0 = 0;
+                spent.0 = 0;
+                progress.unlock_all();
+                next.set(GameState::LevelMenu);
+            }
+            RunMenuButton::Continue => {}
         }
     }
 }
@@ -145,5 +269,35 @@ fn quit_button_system(
 fn despawn_main_menu(mut commands: Commands, q: Query<Entity, With<MainMenuRoot>>) {
     for e in &q {
         commands.entity(e).try_despawn();
+    }
+}
+
+#[derive(Component)]
+struct MainMenuTutorialButton;
+
+#[derive(Component)]
+struct MainMenuTutorialText;
+
+fn main_menu_tutorial_button_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<MainMenuTutorialButton>)>,
+    mut settings: ResMut<WindowSettings>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            settings.tutorial_enabled = !settings.tutorial_enabled;
+        }
+    }
+}
+
+fn update_main_menu_tutorial_text(
+    settings: Res<WindowSettings>,
+    mut q: Query<&mut Text, With<MainMenuTutorialText>>,
+) {
+    if let Ok(mut text) = q.single_mut() {
+        if settings.tutorial_enabled {
+            text.0 = "Tutorial: ON".to_string();
+        } else {
+            text.0 = "Tutorial: OFF".to_string();
+        }
     }
 }
