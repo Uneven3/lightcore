@@ -94,7 +94,5 @@ pub(crate) fn gather_pointer_input(
         }
     }
 
-
-
     *pointer = next;
 }

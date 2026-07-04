@@ -24,6 +24,15 @@ pub(crate) struct Spark;
 #[derive(Component)]
 pub(crate) struct Shadow;
 
+/// A permanent missing/blocked cell used to sculpt non-rectangular boards. It also carries
+/// `Shadow` so existing movement/gravity blockers see it, but clear-shadow logic ignores it.
+#[derive(Component)]
+pub(crate) struct Blocker;
+
+/// Non-interactive hint drawn on the board to show where ingredients are rescued.
+#[derive(Component)]
+pub(crate) struct IngredientExit;
+
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct ShadowSet(pub(crate) std::collections::HashSet<(i32, i32)>);
 

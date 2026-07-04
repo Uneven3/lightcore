@@ -66,7 +66,13 @@ impl LightColor {
         let r = TILE * 0.40;
         let outer = match self {
             Self::Red => ring_polygon_points(32, r, FRAC_PI_2),
-            Self::Green => ring_polygon_points(3, r, FRAC_PI_2),
+            Self::Green => transformed_polygon_points(
+                3,
+                r,
+                FRAC_PI_2,
+                Vec2::new(1.08, 1.06),
+                Vec2::new(0.0, -TILE * 0.02),
+            ),
             // A square is just a regular 4-gon rotated 45° from the diamond (`Yellow`) — using
             // the same circumradius `r` (not `r`-as-half-extent, which used to make this shape
             // stick out ~41% farther than the other 4) keeps every shape's reach identical.
@@ -142,6 +148,19 @@ fn ring_polygon_points(n: u32, r: f32, start_angle: f32) -> Vec<Vec2> {
             let theta = start_angle + i as f32 * step;
             Vec2::new(r * theta.cos(), r * theta.sin())
         })
+        .collect()
+}
+
+fn transformed_polygon_points(
+    n: u32,
+    r: f32,
+    start_angle: f32,
+    scale: Vec2,
+    offset: Vec2,
+) -> Vec<Vec2> {
+    ring_polygon_points(n, r, start_angle)
+        .into_iter()
+        .map(|p| p * scale + offset)
         .collect()
 }
 

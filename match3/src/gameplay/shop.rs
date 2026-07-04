@@ -19,6 +19,7 @@ use super::{
     Score, SwapData,
 };
 use crate::core::prelude::*;
+use crate::core::run::{BoonKind, RunState};
 use crate::input::pointer::PointerInput;
 use crate::state::GameState;
 use crate::visuals::assets::VisualCache;
@@ -31,17 +32,28 @@ pub(crate) enum ShopItem {
     Swap,
     Eliminate,
     Upgrade,
+    Boon(BoonKind),
 }
 
 impl ShopItem {
     /// Bar order (left→right), also used to spawn the buttons.
-    pub(crate) const ALL: [ShopItem; 3] = [ShopItem::Swap, ShopItem::Eliminate, ShopItem::Upgrade];
+    pub(crate) const ALL: [ShopItem; 8] = [
+        ShopItem::Swap,
+        ShopItem::Eliminate,
+        ShopItem::Upgrade,
+        ShopItem::Boon(BoonKind::RedValue),
+        ShopItem::Boon(BoonKind::GreenReserve),
+        ShopItem::Boon(BoonKind::BlueMoves),
+        ShopItem::Boon(BoonKind::SparkBounty),
+        ShopItem::Boon(BoonKind::PowerBounty),
+    ];
 
-    pub(crate) fn cost(self) -> u32 {
+    pub(crate) fn cost(self, run: &RunState) -> Option<u32> {
         match self {
-            ShopItem::Swap => 20,
-            ShopItem::Eliminate => 45,
-            ShopItem::Upgrade => 90,
+            ShopItem::Swap => Some(20),
+            ShopItem::Eliminate => Some(45),
+            ShopItem::Upgrade => Some(90),
+            ShopItem::Boon(boon) => run.boon_cost(boon),
         }
     }
 
@@ -50,6 +62,7 @@ impl ShopItem {
             ShopItem::Swap => "Cambiar",
             ShopItem::Eliminate => "Eliminar",
             ShopItem::Upgrade => "Subir tier",
+            ShopItem::Boon(boon) => boon.label(),
         }
     }
 
@@ -58,7 +71,12 @@ impl ShopItem {
             ShopItem::Swap => "Reposiciona 2 luces",
             ShopItem::Eliminate => "Rompe 1 luz",
             ShopItem::Upgrade => "Eleva 1 tier",
+            ShopItem::Boon(boon) => boon.status_label(),
         }
+    }
+
+    pub(crate) fn is_boon(self) -> bool {
+        matches!(self, ShopItem::Boon(_))
     }
 }
 
@@ -93,6 +111,7 @@ impl Shop {
             ShopItem::Swap => "Cambiar activo".to_string(),
             ShopItem::Eliminate => "Eliminar activo".to_string(),
             ShopItem::Upgrade => "Subir tier activo".to_string(),
+            ShopItem::Boon(_) => return None,
         })
     }
 }
@@ -149,7 +168,11 @@ fn disarm(commands: &mut Commands, shop: &mut Shop, selected: &Query<Entity, Wit
 pub(crate) fn shop_button_system(
     mut commands: Commands,
     mut shop: ResMut<Shop>,
-    reserve: Res<CoreReserve>,
+    mut reserve: ResMut<CoreReserve>,
+    mut score: ResMut<Score>,
+    mut displayed_score: ResMut<DisplayedScore>,
+    mut spent: ResMut<CoresSpent>,
+    mut run: ResMut<RunState>,
     interactions: Query<(&Interaction, &ShopButton), Changed<Interaction>>,
     selected: Query<Entity, With<Selected>>,
 ) {
@@ -158,10 +181,29 @@ pub(crate) fn shop_button_system(
             continue;
         }
         let item = btn.0;
+        let Some(cost) = item.cost(&run) else {
+            continue;
+        };
+        if item.is_boon() {
+            if reserve.0 >= cost
+                && let ShopItem::Boon(boon) = item
+                && run.buy(boon)
+            {
+                spend(
+                    &mut score,
+                    &mut displayed_score,
+                    &mut reserve,
+                    &mut spent,
+                    cost,
+                );
+                shop.open = false;
+            }
+            continue;
+        }
         if shop.armed == Some(item) {
             // Click the armed booster again to put it away.
             disarm(&mut commands, &mut shop, &selected);
-        } else if reserve.0 >= item.cost() {
+        } else if reserve.0 >= cost {
             // Arm / switch boosters — drop any leftover Swap pick first.
             clear_pick(&mut commands, &mut shop, &selected);
             shop.armed = Some(item);
@@ -189,6 +231,7 @@ pub(crate) fn shop_targeting(
     particles: Res<ParticleSettings>,
     mut lights: Query<(Entity, &mut GridPos, &LightColor, &mut LightKind), With<Light>>,
     selected: Query<Entity, With<Selected>>,
+    run: Res<RunState>,
 ) {
     let Some(item) = shop.armed else {
         return;
@@ -213,6 +256,9 @@ pub(crate) fn shop_targeting(
     };
 
     match item {
+        ShopItem::Boon(_) => {
+            disarm(&mut commands, &mut shop, &selected);
+        }
         ShopItem::Eliminate => {
             // Pop one light into the normal pipeline. `points: 0` so it grants no score and spawns
             // no score-shards (`on_chain_pop_score_light` early-returns on 0); the burst below is
@@ -241,7 +287,7 @@ pub(crate) fn shop_targeting(
                 &mut displayed_score,
                 &mut reserve,
                 &mut spent,
-                item.cost(),
+                item.cost(&run).unwrap_or(0),
             );
             disarm(&mut commands, &mut shop, &selected);
             next_state.set(GameState::Popping);
@@ -257,7 +303,7 @@ pub(crate) fn shop_targeting(
                     &mut displayed_score,
                     &mut reserve,
                     &mut spent,
-                    item.cost(),
+                    item.cost(&run).unwrap_or(0),
                 );
                 disarm(&mut commands, &mut shop, &selected);
             }
@@ -295,7 +341,7 @@ pub(crate) fn shop_targeting(
                     &mut displayed_score,
                     &mut reserve,
                     &mut spent,
-                    item.cost(),
+                    item.cost(&run).unwrap_or(0),
                 );
                 clear_pick(&mut commands, &mut shop, &selected);
                 shop.armed = None;
@@ -308,14 +354,16 @@ pub(crate) fn shop_targeting(
 /// Repaints the bar each frame: armed = gold, affordable = neutral, too dear = dim grey.
 pub(crate) fn update_shop_buttons(
     reserve: Res<CoreReserve>,
+    run: Res<RunState>,
     shop: Res<Shop>,
     mut buttons: Query<(&ShopButton, &mut BackgroundColor, &mut BorderColor), With<ShopCard>>,
 ) {
     for (btn, mut bg, mut border) in &mut buttons {
         let item = btn.0;
+        let cost = item.cost(&run);
         let (bg_color, border_color) = if shop.armed == Some(item) {
             (BTN_ARMED, BTN_BORDER_ARMED)
-        } else if reserve.0 >= item.cost() {
+        } else if cost.is_some_and(|cost| reserve.0 >= cost) {
             (BTN_IDLE, BTN_BORDER_IDLE)
         } else {
             (BTN_BROKE, BTN_BORDER_BROKE)

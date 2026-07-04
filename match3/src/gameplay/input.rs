@@ -106,7 +106,8 @@ pub(crate) fn handle_input(
                 false
             } else {
                 let proj = if dir.x != 0 { delta.x } else { delta.y };
-                proj.abs() > TILE * 0.35
+                let dir_sign = (if dir.x != 0 { dir.x } else { dir.y }) as f32;
+                proj * dir_sign > TILE * 0.35
             }
         } else {
             false

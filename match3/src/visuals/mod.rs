@@ -75,6 +75,7 @@ impl Plugin for VisualsPlugin {
                     light_trail::tick_laser_bolt,
                     light_trail::tick_traveling_light,
                     breathing::breathe,
+                    breathing::pulse_spark_nucleus,
                     core_motion::despawn_cores_on_pop,
                 )
                     .run_if(not(in_state(crate::state::GameState::GameOver))),

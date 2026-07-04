@@ -123,12 +123,7 @@ pub(crate) fn spawn_burst(
 
 pub(crate) fn tick_particles(
     mut commands: Commands,
-    mut q: Query<(
-        Entity,
-        &mut Transform,
-        &mut Sprite,
-        &mut Particle,
-    )>,
+    mut q: Query<(Entity, &mut Transform, &mut Sprite, &mut Particle)>,
     time: Res<Time>,
 ) {
     let dt = time.delta_secs();

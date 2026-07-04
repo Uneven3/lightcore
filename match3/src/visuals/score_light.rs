@@ -3,7 +3,7 @@ use rand::Rng;
 use std::f32::consts::TAU;
 
 use super::assets::VisualCache;
-use super::particles::{spawn_membrane_pop, ParticleSettings};
+use super::particles::{ParticleSettings, spawn_membrane_pop};
 use crate::core::grid::TILE;
 use crate::core::prelude::LightColor;
 use crate::gameplay::{
@@ -133,43 +133,55 @@ pub(crate) fn on_chain_pop_score_light(
             Vec2::from_angle(rng.random_range(0.0..TAU)) * rng.random_range(0.0..TILE * 0.6);
         let ctrl = from + (line * along + perp * side + radial).extend(0.0);
         let core_lin = c.glow_color().to_linear();
-        let core_color = Color::linear_rgb(core_lin.red * 1.5, core_lin.green * 1.5, core_lin.blue * 1.5);
+        let core_color = Color::linear_rgb(
+            core_lin.red * 1.5,
+            core_lin.green * 1.5,
+            core_lin.blue * 1.5,
+        );
 
         let glow_lin = c.ring_color().to_linear();
-        let glow_color = Color::linear_rgb(glow_lin.red * 1.5, glow_lin.green * 1.5, glow_lin.blue * 1.5);
+        let glow_color = Color::linear_rgb(
+            glow_lin.red * 1.5,
+            glow_lin.green * 1.5,
+            glow_lin.blue * 1.5,
+        );
 
-        let parent = commands.spawn((
-            ScoreShard {
-                from,
-                ctrl,
-                to,
-                points: base + if (i as u32) < rem { 1 } else { 0 },
-                tint: tint_of(c),
-                timer: Timer::from_seconds(
-                    rng.random_range(shards.min_secs..shards.max_secs),
-                    TimerMode::Once,
-                ),
-                pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
-                color: c,
-            },
-            Sprite {
-                image: cache.core_image.clone(),
-                color: core_color,
-                custom_size: Some(Vec2::splat(size)),
-                ..default()
-            },
-            Transform::from_translation(from),
-        )).id();
+        let parent = commands
+            .spawn((
+                ScoreShard {
+                    from,
+                    ctrl,
+                    to,
+                    points: base + if (i as u32) < rem { 1 } else { 0 },
+                    tint: tint_of(c),
+                    timer: Timer::from_seconds(
+                        rng.random_range(shards.min_secs..shards.max_secs),
+                        TimerMode::Once,
+                    ),
+                    pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
+                    color: c,
+                },
+                Sprite {
+                    image: cache.core_image.clone(),
+                    color: core_color,
+                    custom_size: Some(Vec2::splat(size)),
+                    ..default()
+                },
+                Transform::from_translation(from),
+            ))
+            .id();
 
-        let glow_child = commands.spawn((
-            Sprite {
-                image: cache.glow_image.clone(),
-                color: glow_color,
-                custom_size: Some(Vec2::splat(size * 2.5)),
-                ..default()
-            },
-            Transform::from_xyz(0.0, 0.0, -0.1),
-        )).id();
+        let glow_child = commands
+            .spawn((
+                Sprite {
+                    image: cache.glow_image.clone(),
+                    color: glow_color,
+                    custom_size: Some(Vec2::splat(size * 2.5)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, -0.1),
+            ))
+            .id();
 
         commands.entity(parent).add_child(glow_child);
     }

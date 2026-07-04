@@ -27,8 +27,9 @@ impl Plugin for GamePlugin {
         app.set_error_handler(bevy::ecs::error::warn);
         embedded_asset!(app, "", "../assets/bevy_bird_dark.png");
         app.init_state::<state::GameState>()
-            .init_resource::<core::campaign::CampaignProgress>()
+            .init_resource::<core::run::RunState>()
             .add_plugins((
+                core::campaign::CampaignPlugin,
                 platform::PlatformPlugin,
                 input::InputPlugin,
                 audio::AudioPlugin,

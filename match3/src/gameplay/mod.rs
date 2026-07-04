@@ -152,6 +152,7 @@ impl Plugin for GameplayPlugin {
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GameMode {
     Classic(u32),
+    Run(u32),
     ConsumeAll,
     /// VFX test bench: the board spawns with *random* `LightKind`s (powers everywhere) so adjacent
     /// powers can be swapped to exercise every combo animation. Same unbounded, no-win/lose loop as
@@ -173,6 +174,10 @@ impl GameMode {
     /// `lifecycle::check_board_consumed`).
     pub(crate) fn is_sandbox(self) -> bool {
         matches!(self, GameMode::ConsumeAll | GameMode::Sandbox)
+    }
+
+    pub(crate) fn is_run(self) -> bool {
+        matches!(self, GameMode::Run(_))
     }
 }
 

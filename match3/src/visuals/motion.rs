@@ -98,7 +98,10 @@ pub(crate) fn update_drag_constrained(
     } else {
         (world - drag.start_world).y
     };
-    let offset = proj.clamp(-TILE, TILE);
+    let dir_sign = (if dir.x != 0 { dir.x } else { dir.y }) as f32;
+    let blocked = drag.neighbor_entity.is_none() && !drag.neighbor_is_empty;
+    let max_offset = if blocked { TILE * 0.18 } else { TILE };
+    let offset = (proj * dir_sign).clamp(0.0, max_offset) * dir_sign;
     let (dx, dy) = if dir.x != 0 {
         (offset, 0.0)
     } else {

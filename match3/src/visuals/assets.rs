@@ -27,6 +27,8 @@ pub(crate) struct VisualCache {
     pub(crate) spark_mat: Handle<ColorMaterial>,
     pub(crate) shadow_mesh: Handle<Mesh>,
     pub(crate) shadow_mat: Handle<ColorMaterial>,
+    pub(crate) blocker_mesh: Handle<Mesh>,
+    pub(crate) blocker_mat: Handle<ColorMaterial>,
     pub(crate) burst_mesh: Handle<Mesh>,
     pub(crate) membrane_mesh: Handle<Mesh>,
     /// Shared textures for the per-instance-tinted SPRITES (cores + glow pools). Sprites batch by
@@ -224,11 +226,15 @@ pub(crate) fn build_cache(
         cross_mesh,
         starburst_mesh,
         blackhole_mesh,
-        // Spark: orange hexagon. Shadow: translucent blue tile. Both constant.
-        spark_mesh: meshes.add(RegularPolygon::new(TILE * 0.35, 6)),
-        spark_mat: materials.add(ColorMaterial::from_color(Color::srgb(1.0, 0.6, 0.1))),
+        // Spark ingredient: amber hex shell; the dark pulsing nucleus is spawned as children.
+        spark_mesh: meshes.add(RegularPolygon::new(TILE * 0.40, 6)),
+        spark_mat: materials.add(ColorMaterial::from_color(Color::srgb(1.25, 0.48, 0.08))),
         shadow_mesh: meshes.add(Rectangle::new(TILE * 0.95, TILE * 0.95)),
         shadow_mat: materials.add(ColorMaterial::from_color(Color::srgba(0.2, 0.5, 0.9, 0.45))),
+        blocker_mesh: meshes.add(Rectangle::new(TILE * 0.96, TILE * 0.96)),
+        blocker_mat: materials.add(ColorMaterial::from_color(Color::srgba(
+            0.015, 0.018, 0.030, 0.92,
+        ))),
         burst_mesh: meshes.add(Circle::new(particles.burst_radius)),
         membrane_mesh: meshes.add(Circle::new(particles.membrane_radius)),
         // Solid disc with a soft anti-aliased rim (last 20% fades out, optimized for 32x32 size).

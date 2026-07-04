@@ -6,9 +6,12 @@ use super::{
     CollectedCores, CoreReserve, CoresSpent, DragState, GameMode, LevelTimer, MovesLeft,
     ResetParams, Score, ShadowCount, StatsBook,
 };
-use crate::board::{generate_board, spawn_light, spawn_shadow, spawn_sparks};
+use crate::board::{
+    generate_board, spawn_blocker, spawn_ingredient_exits, spawn_light, spawn_shadow, spawn_sparks,
+};
 use crate::core::campaign::CampaignProgress;
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::input::InputActions;
 use crate::state::GameState;
 use crate::visuals::EffectAnim;
@@ -89,7 +92,7 @@ fn populate_board(
     shadow_count: &mut u32,
 ) {
     let spark_positions: HashSet<GridPos> = if level.goal == LevelGoal::Sparks {
-        [2i32, 4, 6]
+        spark_columns(level.sparks_total)
             .iter()
             .map(|&x| GridPos { x, y: GRID_H - 1 })
             .collect()
@@ -97,9 +100,13 @@ fn populate_board(
         HashSet::new()
     };
 
+    let blocker_positions: HashSet<GridPos> = level.blocker_positions.iter().copied().collect();
+    let mut blocked_positions = spark_positions.clone();
+    blocked_positions.extend(blocker_positions.iter().copied());
+
     let mut rng = rand::rng();
-    for (pos, color) in generate_board(&mut rng, &spark_positions) {
-        if !spark_positions.contains(&pos) {
+    for (pos, color) in generate_board(&mut rng, &blocked_positions) {
+        if !spark_positions.contains(&pos) && !blocker_positions.contains(&pos) {
             spawn_light(
                 commands,
                 cache,
@@ -111,8 +118,14 @@ fn populate_board(
         }
     }
 
+    for &pos in &level.blocker_positions {
+        spawn_blocker(commands, cache, pos);
+    }
+
     if level.goal == LevelGoal::Sparks {
-        spawn_sparks(commands, cache, &[2, 4, 6]);
+        let columns = spark_columns(level.sparks_total);
+        spawn_ingredient_exits(commands, cache);
+        spawn_sparks(commands, cache, &columns);
     }
 
     if level.goal == LevelGoal::ClearShadow {
@@ -120,6 +133,17 @@ fn populate_board(
         for &pos in &level.shadow_positions {
             spawn_shadow(commands, cache, pos);
         }
+    }
+}
+
+fn spark_columns(count: u32) -> Vec<i32> {
+    match count {
+        0 => vec![],
+        1 => vec![4],
+        2 => vec![3, 5],
+        3 => vec![2, 4, 6],
+        4 => vec![1, 3, 5, 7],
+        _ => vec![0, 2, 4, 6, GRID_W - 1],
     }
 }
 
@@ -182,6 +206,7 @@ pub(crate) fn setup_match(
     mut commands: Commands,
     cache: Res<VisualCache>,
     mode: Res<GameMode>,
+    mut run: ResMut<RunState>,
     mut level: ResMut<LevelConfig>,
     mut moves: ResMut<MovesLeft>,
     mut shadow_count: ResMut<ShadowCount>,
@@ -200,6 +225,16 @@ pub(crate) fn setup_match(
             *level_timer = level_timer_for(&level.goal);
             populate_board(&mut commands, &cache, &level, &mut shadow_count.0);
         }
+        GameMode::Run(depth) => {
+            run.enter_depth(depth);
+            *level = make_generated_level(depth, run.seed);
+            moves.0 = level.total_moves;
+            shadow_count.0 = 0;
+            reserve.0 = 0;
+            spent.0 = 0;
+            *level_timer = level_timer_for(&level.goal);
+            populate_board(&mut commands, &cache, &level, &mut shadow_count.0);
+        }
         GameMode::ConsumeAll | GameMode::Sandbox => {
             // Sandbox modes: run the Classic detonation pipeline with no win/lose yet. An
             // unreachable goal + infinite moves means `check_chain_matches` FASE 3 never completes
@@ -211,6 +246,7 @@ pub(crate) fn setup_match(
                 goal: LevelGoal::Score(u32::MAX),
                 sparks_total: 0,
                 shadow_positions: vec![],
+                blocker_positions: vec![],
                 grade_baseline: 0,
             };
             moves.0 = u32::MAX;
@@ -246,6 +282,7 @@ pub(crate) fn teardown_match(
             With<ScoreShard>,
             With<GameOverOverlay>,
             With<LevelCompleteOverlay>,
+            With<IngredientExit>,
         )>,
     >,
 ) {
@@ -283,6 +320,7 @@ pub(crate) fn teardown_match(
 pub(crate) fn show_level_complete(
     mut commands: Commands,
     mode: Res<GameMode>,
+    mut run: ResMut<RunState>,
     score: Res<Score>,
     reserve: Res<CoreReserve>,
     spent: Res<CoresSpent>,
@@ -293,8 +331,6 @@ pub(crate) fn show_level_complete(
 ) {
     let title = if *mode == GameMode::ConsumeAll {
         "Tablero Consumido!"
-    } else if matches!(level.goal, LevelGoal::TimedScore { .. }) {
-        "Tiempo Terminado!"
     } else {
         "Nivel Completado!"
     };
@@ -303,6 +339,9 @@ pub(crate) fn show_level_complete(
         format!("Lightcores capturados: {}", score.0)
     } else {
         let unlock = progress.record_score(level.level, score.0);
+        if mode.is_run() {
+            run.complete_depth(level.level);
+        }
         format!(
             "Lightcores capturados: {}\n{}",
             score.0,
@@ -482,8 +521,8 @@ pub(crate) fn show_level_complete(
 
 /// Resetea todos los recursos de partida para el nivel dado. Compartido por
 /// `handle_level_advance` y `handle_restart` — evita que los dos bloques diverjan.
-fn reset_for_replay(level_num: u32, level: &mut LevelConfig, res: &mut ResetParams) {
-    *level = make_level(level_num);
+fn reset_for_replay(replay_level: LevelConfig, level: &mut LevelConfig, res: &mut ResetParams) {
+    *level = replay_level;
     *res.level_timer = level_timer_for(&level.goal);
     res.score.0 = 0;
     res.displayed.0 = 0;
@@ -530,7 +569,7 @@ pub(crate) fn handle_level_advance(
         return;
     }
 
-    if mode.is_sandbox() || matches!(*mode, GameMode::Classic(_)) {
+    if mode.is_sandbox() || matches!(*mode, GameMode::Classic(_) | GameMode::Run(_)) {
         next_state.set(GameState::LevelMenu);
     }
 }
@@ -624,12 +663,14 @@ pub(crate) fn handle_restart(
     mut commands: Commands,
     actions: Res<InputActions>,
     mode: Res<GameMode>,
+    run: Res<RunState>,
     mut level: ResMut<LevelConfig>,
     mut res: ResetParams,
     mut next_state: ResMut<NextState<GameState>>,
     cache: Res<VisualCache>,
     physics_entities: Query<Entity, With<FallPhysics>>,
     shadow_entities: Query<Entity, With<Shadow>>,
+    exit_entities: Query<Entity, With<IngredientExit>>,
     overlay: Query<Entity, With<GameOverOverlay>>,
     vfx_entities: Query<
         Entity,
@@ -657,6 +698,9 @@ pub(crate) fn handle_restart(
     for e in &shadow_entities {
         commands.entity(e).try_despawn();
     }
+    for e in &exit_entities {
+        commands.entity(e).try_despawn();
+    }
     for e in &overlay {
         commands.entity(e).try_despawn();
     }
@@ -664,8 +708,12 @@ pub(crate) fn handle_restart(
         commands.entity(e).try_despawn();
     }
 
-    let level_num = level.level;
-    reset_for_replay(level_num, &mut level, &mut res);
+    let replay_level = match *mode {
+        GameMode::Classic(level_num) => make_level(level_num),
+        GameMode::Run(depth) => make_generated_level(depth, run.seed),
+        GameMode::ConsumeAll | GameMode::Sandbox => make_level(level.level),
+    };
+    reset_for_replay(replay_level, &mut level, &mut res);
     populate_board(&mut commands, &cache, &level, &mut res.shadow.0);
     next_state.set(GameState::Playing);
 }

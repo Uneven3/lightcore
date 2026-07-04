@@ -4,6 +4,7 @@ pub(crate) mod grid;
 pub(crate) mod level;
 pub(crate) mod light;
 pub(crate) mod matching;
+pub(crate) mod run;
 
 pub(crate) mod prelude {
     pub(crate) use super::components::*;

@@ -23,7 +23,15 @@ pub(crate) fn on_swap_happened(
     mut next_state: ResMut<NextState<GameState>>,
     mut cascade: ResMut<CascadeDepth>,
     mut shadow_count: ResMut<ShadowCount>,
-    shadow_q: Query<(Entity, &GridPos), (With<Shadow>, Without<Light>, Without<Spark>)>,
+    shadow_q: Query<
+        (Entity, &GridPos),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
     mut lights: Query<
         (Entity, &mut GridPos, &LightColor, &mut LightKind),
         (With<Light>, Without<Shadow>),

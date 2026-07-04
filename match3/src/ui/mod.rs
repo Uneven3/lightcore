@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::embedded;
 use crate::gameplay::shop::{
     BTN_BORDER_ARMED, BTN_BORDER_BROKE, BTN_BORDER_IDLE, BTN_IDLE, Shop, ShopBar, ShopButton,
@@ -23,7 +24,8 @@ pub(crate) struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_ui, setup_watermark))
+        app.init_resource::<GoalHintTouchTimer>()
+            .add_systems(Startup, (setup_ui, setup_watermark))
             // The HUD is only meaningful during a match — hide it on every menu screen (the app
             // boots straight into `MainMenu`, so this also covers first launch) and bring it back
             // the moment a mode starts loading, rather than tying it to one specific state's
@@ -47,7 +49,9 @@ impl Plugin for UiPlugin {
                             .or_else(resource_changed::<SparksCollected>)
                             .or_else(resource_changed::<ShadowCount>)
                             .or_else(resource_changed::<LevelTimer>)
-                            .or_else(resource_changed::<DisplayedCollectedCores>),
+                            .or_else(resource_changed::<DisplayedCollectedCores>)
+                            .or_else(resource_changed::<LevelConfig>)
+                            .or_else(resource_changed::<GameMode>),
                     ),
                     pause_button_system,
                     shop_toggle_system,
@@ -56,6 +60,7 @@ impl Plugin for UiPlugin {
                     update_shop_bar_visibility,
                     update_shop_button_texts,
                     update_shop_active_badge,
+                    update_goal_hint,
                     stats_button_system,
                     update_stats_popup,
                 ),
@@ -71,6 +76,18 @@ pub(crate) struct MovesText;
 pub(crate) struct MovesNumberText;
 #[derive(Component)]
 pub(crate) struct GoalText;
+#[derive(Component)]
+pub(crate) struct GoalIcon;
+#[derive(Component)]
+pub(crate) struct GoalIconText;
+#[derive(Component)]
+pub(crate) struct GoalPrimaryText;
+#[derive(Component)]
+pub(crate) struct GoalTargetText;
+#[derive(Component)]
+pub(crate) struct GoalHintContainer;
+#[derive(Component)]
+pub(crate) struct GoalHintText;
 #[derive(Component)]
 pub(crate) struct PauseButton;
 #[derive(Component)]
@@ -89,6 +106,11 @@ pub(crate) struct ShopActiveBadge;
 pub(crate) struct ShopActiveBadgeText;
 #[derive(Component)]
 pub(crate) struct ShopButtonStatusText(pub(crate) ShopItem);
+#[derive(Component)]
+pub(crate) struct ShopButtonCostText(pub(crate) ShopItem);
+
+#[derive(Resource, Default)]
+struct GoalHintTouchTimer(Option<Timer>);
 
 fn setup_ui(mut commands: Commands) {
     commands.spawn((
@@ -224,29 +246,99 @@ fn setup_ui(mut commands: Commands) {
             ));
         });
 
-    // Meta como capsule/badge en la esquina inferior izquierda
-    commands.spawn((
-        GoalText,
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(15.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.8, 1.0, 0.8)),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(16.0),
-            left: Val::Px(12.0),
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-            border: UiRect::all(Val::Px(1.5)),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
-        BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
-        Visibility::Hidden,
-    ));
+    // Meta compacta: icono visual + progreso, sin etiquetas verbales durante el nivel.
+    commands
+        .spawn((
+            Button,
+            GoalText,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(16.0),
+                left: Val::Px(12.0),
+                min_width: Val::Px(96.0),
+                min_height: Val::Px(40.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.5)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
+            BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
+            Visibility::Hidden,
+        ))
+        .with_children(|goal| {
+            goal.spawn((
+                GoalIcon,
+                Node {
+                    width: Val::Px(24.0),
+                    height: Val::Px(24.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ))
+            .with_children(|icon| {
+                icon.spawn((
+                    GoalIconText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(21.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.8, 1.0, 0.8)),
+                ));
+            });
+            goal.spawn((
+                GoalPrimaryText,
+                Text::new("0"),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.90, 1.0, 0.90)),
+            ));
+            goal.spawn((
+                GoalTargetText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
+            ));
+        });
+
+    commands
+        .spawn((
+            GoalHintContainer,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(64.0),
+                left: Val::Px(12.0),
+                max_width: Val::Px(180.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                border: UiRect::all(Val::Px(1.5)),
+                display: Display::None,
+                ..default()
+            },
+            BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
+            BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
+            Visibility::Hidden,
+        ))
+        .with_children(|hint| {
+            hint.spawn((
+                GoalHintText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.92, 0.98, 1.0)),
+            ));
+        });
 
     // Botón de tienda minimalista en la esquina inferior derecha
     commands
@@ -418,7 +510,8 @@ fn spawn_shop_bar(commands: &mut Commands) {
                                         TextColor(Color::WHITE),
                                     ));
                                     row.spawn((
-                                        Text::new(format!("{}c", item.cost())),
+                                        ShopButtonCostText(item),
+                                        Text::new(""),
                                         TextFont {
                                             font_size: FontSize::Px(15.0),
                                             ..default()
@@ -483,6 +576,7 @@ type HudFilter = Or<(
     With<PauseButton>,
     With<ShopToggleButton>,
     With<ShopActiveBadge>,
+    With<GoalHintContainer>,
     With<StatsButton>,
     With<StatsPopupContainer>,
 )>;
@@ -591,39 +685,155 @@ fn update_goal_text(
     shadow_count: Res<ShadowCount>,
     level_timer: Res<LevelTimer>,
     displayed_cores: Res<DisplayedCollectedCores>,
-    mut text: Single<&mut Text, With<GoalText>>,
+    panel: Single<(&mut BackgroundColor, &mut BorderColor), With<GoalText>>,
+    icon: Single<
+        (&mut Text, &mut TextColor),
+        (
+            With<GoalIconText>,
+            Without<GoalPrimaryText>,
+            Without<GoalTargetText>,
+        ),
+    >,
+    primary: Single<
+        (&mut Text, &mut TextColor),
+        (
+            With<GoalPrimaryText>,
+            Without<GoalIconText>,
+            Without<GoalTargetText>,
+        ),
+    >,
+    target_text: Single<
+        (&mut Text, &mut TextColor),
+        (
+            With<GoalTargetText>,
+            Without<GoalIconText>,
+            Without<GoalPrimaryText>,
+        ),
+    >,
 ) {
-    if mode.is_sandbox() {
-        // Sandbox: no goal yet, just show the running capture count.
-        **text = Text::new(format!("{}", score.0));
+    let (icon_symbol, icon_color, primary_value, target_value) = if mode.is_sandbox() {
+        (
+            "∞",
+            Color::srgb(0.65, 0.85, 1.0),
+            format!("{}", score.0),
+            String::new(),
+        )
+    } else {
+        match &level.goal {
+            LevelGoal::Score(target) => (
+                "◆",
+                Color::srgb(0.65, 0.85, 1.0),
+                format!("{}", score.0),
+                format!("/ {}", target),
+            ),
+            LevelGoal::Sparks => (
+                "✦",
+                Color::srgb(1.0, 0.58, 0.12),
+                format!("{}", collected.0),
+                format!("/ {}", level.sparks_total),
+            ),
+            LevelGoal::ClearShadow => (
+                "▧",
+                Color::srgba(0.22, 0.55, 1.0, 0.82),
+                format!("{}", shadow_count.0),
+                String::new(),
+            ),
+            LevelGoal::TimedScore { target, .. } => {
+                let remaining = level_timer
+                    .0
+                    .as_ref()
+                    .map(Timer::remaining_secs)
+                    .unwrap_or(0.0)
+                    .max(0.0);
+                let (mins, secs) = (remaining as u32 / 60, remaining as u32 % 60);
+                (
+                    "⏱",
+                    Color::srgb(1.0, 0.86, 0.34),
+                    format!("{mins:02}:{secs:02}"),
+                    format!("{} / {}", score.0, target),
+                )
+            }
+            LevelGoal::CollectColor { color, target } => {
+                let current = displayed_cores.0[color.index()];
+                (
+                    "●",
+                    color.bevy_color(),
+                    format!("{}", current),
+                    format!("/ {}", target),
+                )
+            }
+        }
+    };
+
+    let (mut bg, mut border) = panel.into_inner();
+    bg.0 = Color::srgba(0.05, 0.08, 0.10, 0.78);
+    *border = BorderColor::all(icon_color.with_alpha(0.38));
+    let (mut icon_text, mut icon_text_color) = icon.into_inner();
+    icon_text.0 = icon_symbol.to_string();
+    icon_text_color.0 = icon_color;
+
+    let (mut primary_text, mut primary_color) = primary.into_inner();
+    primary_text.0 = primary_value;
+    primary_color.0 = Color::WHITE;
+
+    let (mut target, mut target_color) = target_text.into_inner();
+    target.0 = target_value;
+    target_color.0 = icon_color.with_alpha(0.78);
+}
+
+fn update_goal_hint(
+    time: Res<Time>,
+    mode: Res<GameMode>,
+    level: Res<LevelConfig>,
+    state: Res<State<GameState>>,
+    mut touch_timer: ResMut<GoalHintTouchTimer>,
+    interaction: Single<&Interaction, With<GoalText>>,
+    hint: Single<(&mut Visibility, &mut Node), With<GoalHintContainer>>,
+    mut hint_text: Single<&mut Text, With<GoalHintText>>,
+) {
+    let (mut visibility, mut node) = hint.into_inner();
+    if *state.get() != GameState::Playing {
+        *visibility = Visibility::Hidden;
+        node.display = Display::None;
+        touch_timer.0 = None;
         return;
     }
-    **text = Text::new(match &level.goal {
-        LevelGoal::Score(target) => format!("Score: {} / {}", score.0, target),
-        LevelGoal::Sparks => format!("Chispas: {} / {}", collected.0, level.sparks_total),
-        LevelGoal::ClearShadow => format!("Shadows: {}", shadow_count.0),
-        LevelGoal::TimedScore { target, .. } => {
-            let remaining = level_timer
-                .0
-                .as_ref()
-                .map(Timer::remaining_secs)
-                .unwrap_or(0.0)
-                .max(0.0);
-            let (mins, secs) = (remaining as u32 / 60, remaining as u32 % 60);
-            format!("{mins:02}:{secs:02}  |  {} / {}", score.0, target)
+
+    if **interaction == Interaction::Pressed {
+        touch_timer.0 = Some(Timer::from_seconds(2.0, TimerMode::Once));
+    }
+    if let Some(timer) = touch_timer.0.as_mut() {
+        timer.tick(time.delta());
+        if timer.is_finished() {
+            touch_timer.0 = None;
         }
-        LevelGoal::CollectColor { color, target } => {
-            let col_name = match color {
-                LightColor::Red => "Rojo",
-                LightColor::Green => "Verde",
-                LightColor::Blue => "Azul",
-                LightColor::Yellow => "Amarillo",
-                LightColor::Purple => "Morado",
-            };
-            let current = displayed_cores.0[color.index()];
-            format!("{}: {} / {}", col_name, current, target)
-        }
-    });
+    }
+
+    let show = matches!(**interaction, Interaction::Hovered | Interaction::Pressed)
+        || touch_timer.0.is_some();
+    *visibility = if show {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    node.display = if show { Display::Flex } else { Display::None };
+
+    if show {
+        hint_text.0 = goal_hint_text(&mode, &level);
+    }
+}
+
+fn goal_hint_text(mode: &GameMode, level: &LevelConfig) -> String {
+    if mode.is_sandbox() {
+        return "Captura libre".to_string();
+    }
+    match &level.goal {
+        LevelGoal::Score(_) => "Alcanza meta".to_string(),
+        LevelGoal::Sparks => "Rescata chispas".to_string(),
+        LevelGoal::ClearShadow => "Limpia sombras".to_string(),
+        LevelGoal::TimedScore { .. } => "Score antes del reloj".to_string(),
+        LevelGoal::CollectColor { .. } => "Junta este color".to_string(),
+    }
 }
 
 fn stats_button_system(
@@ -728,8 +938,13 @@ fn update_shop_reserve_text(
 
 fn update_shop_button_texts(
     reserve: Res<CoreReserve>,
+    run: Res<RunState>,
     shop: Res<Shop>,
     mut texts: Query<(&ShopButtonStatusText, &mut Text, &mut TextColor)>,
+    mut costs: Query<
+        (&ShopButtonCostText, &mut Text, &mut TextColor),
+        Without<ShopButtonStatusText>,
+    >,
 ) {
     for (status, mut text, mut color) in &mut texts {
         let item = status.0;
@@ -740,12 +955,31 @@ fn update_shop_button_texts(
                 "Activo: listo".to_string()
             };
             color.0 = Color::srgb(1.0, 0.95, 0.78);
-        } else if reserve.0 >= item.cost() {
-            text.0 = item.status_label().to_string();
-            color.0 = Color::srgb(0.64, 0.81, 0.98);
+        } else if let Some(cost) = item.cost(&run) {
+            if reserve.0 >= cost {
+                text.0 = item.status_label().to_string();
+                color.0 = Color::srgb(0.64, 0.81, 0.98);
+            } else {
+                text.0 = "Sin cores suficientes".to_string();
+                color.0 = BTN_BORDER_BROKE.with_alpha(0.92);
+            }
         } else {
-            text.0 = "Sin cores suficientes".to_string();
-            color.0 = BTN_BORDER_BROKE.with_alpha(0.92);
+            text.0 = "MAX".to_string();
+            color.0 = Color::srgb(1.0, 0.95, 0.78);
+        }
+    }
+
+    for (cost_item, mut text, mut color) in &mut costs {
+        if let Some(cost) = cost_item.0.cost(&run) {
+            text.0 = format!("{}c", cost);
+            color.0 = if reserve.0 >= cost {
+                Color::srgb(1.0, 0.86, 0.48)
+            } else {
+                BTN_BORDER_BROKE.with_alpha(0.92)
+            };
+        } else {
+            text.0 = "MAX".to_string();
+            color.0 = Color::srgb(1.0, 0.95, 0.78);
         }
     }
 }

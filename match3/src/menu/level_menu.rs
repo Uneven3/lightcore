@@ -143,61 +143,93 @@ const MAP_GLOW_SIZE: f32 = 122.0;
 const MAP_PICK_RADIUS: f32 = 56.0;
 const MAP_ZOOM_MIN: f32 = 0.75;
 const MAP_ZOOM_MAX: f32 = 1.80;
-const ENTRY_CONNECTIONS: &[(usize, usize)] = &[(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)];
-const MENU_ENTRIES: [MenuEntry; 8] = [
+const ENTRY_CONNECTIONS: &[(usize, usize)] = &[
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),
+    (4, 5),
+    (5, 6),
+    (6, 7),
+    (7, 8),
+    (0, 10),
+    (2, 9),
+];
+const MENU_ENTRIES: [MenuEntry; 11] = [
     MenuEntry {
-        title: "Orbita Base",
-        blurb: "Entrada limpia. Aprende el ritmo y alcanza el score objetivo.",
-        pos: Vec2::new(-624.0, -60.0),
+        title: "Puntaje Basico",
+        blurb: "Consigue el puntaje objetivo.",
+        pos: Vec2::new(0.0, -520.0),
         accent: [0.40, 0.80, 1.25],
         kind: MenuEntryKind::Campaign(1),
     },
     MenuEntry {
-        title: "Ruta de Chispas",
-        blurb: "Abre caminos y baja ingredientes sin romper la cadencia del tablero.",
-        pos: Vec2::new(-248.0, 220.0),
+        title: "Ingredientes",
+        blurb: "Baja ingredientes hasta la salida.",
+        pos: Vec2::new(-138.0, -292.0),
         accent: [0.55, 1.00, 0.72],
         kind: MenuEntryKind::Campaign(2),
     },
     MenuEntry {
-        title: "Nucleo Velado",
-        blurb: "La presion pasa a ser espacial: importa donde cae cada explosion.",
-        pos: Vec2::new(136.0, -130.0),
+        title: "Sombras",
+        blurb: "Limpia todas las sombras.",
+        pos: Vec2::new(118.0, -64.0),
         accent: [1.05, 0.72, 1.20],
         kind: MenuEntryKind::Campaign(3),
     },
     MenuEntry {
-        title: "Cinturon Rojo",
-        blurb: "Contrarreloj. El throughput manda y el reloj no perdona.",
-        pos: Vec2::new(520.0, 160.0),
+        title: "Contrarreloj",
+        blurb: "Consigue el puntaje antes del tiempo.",
+        pos: Vec2::new(-96.0, 164.0),
         accent: [1.28, 0.54, 0.54],
         kind: MenuEntryKind::Campaign(4),
     },
     MenuEntry {
-        title: "Cosecha Roja",
-        blurb: "Cosecha lightcores rojos para alimentar el reactor central.",
-        pos: Vec2::new(760.0, -40.0),
+        title: "Cores Rojos",
+        blurb: "Recolecta cores rojos.",
+        pos: Vec2::new(128.0, 392.0),
         accent: [0.92, 0.25, 0.30],
         kind: MenuEntryKind::Campaign(5),
     },
     MenuEntry {
-        title: "Cosecha Azul",
-        blurb: "Cosecha lightcores azules para estabilizar la órbita.",
-        pos: Vec2::new(960.0, 180.0),
+        title: "Cores Azules",
+        blurb: "Recolecta cores azules.",
+        pos: Vec2::new(0.0, 620.0),
         accent: [0.25, 0.50, 0.95],
         kind: MenuEntryKind::Campaign(6),
     },
     MenuEntry {
+        title: "Pocos Movimientos",
+        blurb: "Consigue puntaje con movimientos limitados.",
+        pos: Vec2::new(-124.0, 848.0),
+        accent: [1.08, 0.86, 0.35],
+        kind: MenuEntryKind::Campaign(7),
+    },
+    MenuEntry {
+        title: "Ingredientes Bloqueados",
+        blurb: "Baja ingredientes en un grid con bloqueos.",
+        pos: Vec2::new(112.0, 1076.0),
+        accent: [0.42, 1.05, 0.80],
+        kind: MenuEntryKind::Campaign(8),
+    },
+    MenuEntry {
+        title: "Grid Irregular",
+        blurb: "Recolecta verdes en un grid distinto.",
+        pos: Vec2::new(-18.0, 1304.0),
+        accent: [0.42, 1.05, 0.48],
+        kind: MenuEntryKind::Campaign(9),
+    },
+    MenuEntry {
         title: "ConsumeAll",
         blurb: "Modo especial. Vacia el tablero completo para ganar, sin campaign gating.",
-        pos: Vec2::new(358.0, -10.0),
+        pos: Vec2::new(378.0, -36.0),
         accent: [1.24, 0.92, 0.42],
         kind: MenuEntryKind::ConsumeAll,
     },
     MenuEntry {
         title: "Sandbox",
         blurb: "Modo libre siempre disponible. Board cargado de powers para probar interacciones y VFX.",
-        pos: Vec2::new(598.0, -122.0),
+        pos: Vec2::new(328.0, -452.0),
         accent: [0.48, 1.12, 1.16],
         kind: MenuEntryKind::Sandbox,
     },
@@ -480,8 +512,8 @@ fn spawn_level_menu(
 fn spawn_menu_stars(root: &mut ChildSpawnerCommands, cache: &VisualCache) {
     let mut rng = StdRng::seed_from_u64(0x71EC_19A0);
     for _ in 0..110 {
-        let x = rng.random_range(-760.0..760.0);
-        let y = rng.random_range(-440.0..440.0);
+        let x = rng.random_range(-620.0..620.0);
+        let y = rng.random_range(-760.0..1500.0);
         let bright = rng.random::<f32>() > 0.92;
         let size = if bright {
             rng.random_range(5.0..7.0)
@@ -822,8 +854,8 @@ fn update_info_panel_system(
         format!("Bloqueado · completa Nivel {:02} para desbloquear", prev)
     };
     let hint = match settings.device_mode {
-        DeviceMode::Mobile => "Desliza para mover · pellizca para zoom".to_string(),
-        DeviceMode::Desktop => "Arrastra para mover · rueda para zoom".to_string(),
+        DeviceMode::Mobile => "Desliza el mapa · pellizca zoom".to_string(),
+        DeviceMode::Desktop => "Arrastra el mapa · rueda zoom".to_string(),
     };
 
     for (kind, mut text) in &mut texts {
@@ -1001,6 +1033,11 @@ fn node_icon_text(index: usize) -> &'static str {
         MenuEntryKind::Campaign(2) => "SP",
         MenuEntryKind::Campaign(3) => "JL",
         MenuEntryKind::Campaign(4) => "TT",
+        MenuEntryKind::Campaign(5) => "RD",
+        MenuEntryKind::Campaign(6) => "BL",
+        MenuEntryKind::Campaign(7) => "PT",
+        MenuEntryKind::Campaign(8) => "IN",
+        MenuEntryKind::Campaign(9) => "GR",
         MenuEntryKind::ConsumeAll => "CA",
         MenuEntryKind::Sandbox => "SB",
         _ => "LV",
@@ -1029,7 +1066,7 @@ fn entry_level(index: usize) -> Option<u32> {
 
 fn entry_mode(index: usize) -> GameMode {
     match MENU_ENTRIES[index].kind {
-        MenuEntryKind::Campaign(level) => GameMode::Classic(level),
+        MenuEntryKind::Campaign(level) => GameMode::Run(level),
         MenuEntryKind::ConsumeAll => GameMode::ConsumeAll,
         MenuEntryKind::Sandbox => GameMode::Sandbox,
     }

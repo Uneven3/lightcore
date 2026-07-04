@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 use super::{SpawnComplete, SuperComboPending};
 use crate::board::spawn_light;
@@ -23,18 +24,16 @@ pub(crate) fn spawn_new_lights(
     mut super_combo: ResMut<SuperComboPending>,
     lights: Query<&GridPos, With<Light>>,
     sparks: Query<&GridPos, With<Spark>>,
+    blockers: Query<&GridPos, With<Blocker>>,
 ) {
-    let mut top = vec![-1i32; GRID_W as usize];
+    let mut occupied = HashSet::new();
     for p in &lights {
-        if p.y > top[p.x as usize] {
-            top[p.x as usize] = p.y;
-        }
+        occupied.insert(*p);
     }
     for p in &sparks {
-        if p.y > top[p.x as usize] {
-            top[p.x as usize] = p.y;
-        }
+        occupied.insert(*p);
     }
+    let blocked: HashSet<GridPos> = blockers.iter().copied().collect();
 
     // Super combo: place power lights at the top of newly spawned columns (visible entering from above)
     let power_row = std::mem::take(&mut super_combo.0);
@@ -42,18 +41,18 @@ pub(crate) fn spawn_new_lights(
 
     let mut rng = rand::rng();
     for x in 0..GRID_W {
-        let empty = GRID_H - 1 - top[x as usize];
-        for i in 1..=empty {
-            let pos = GridPos {
-                x,
-                y: top[x as usize] + i,
-            };
+        let empty_positions: Vec<GridPos> = (0..GRID_H)
+            .map(|y| GridPos { x, y })
+            .filter(|pos| !occupied.contains(pos) && !blocked.contains(pos))
+            .collect();
+        let topmost_index = empty_positions.len().saturating_sub(1);
+        for (index, pos) in empty_positions.into_iter().enumerate() {
             let top_of_grid = to_world(GridPos { x, y: GRID_H - 1 });
             let above = top_of_grid + Vec3::Y * TILE * SPAWN_GAP;
             let fall_speed = (above - to_world(pos)).length() / SPAWN_FALL_DURATION;
             let color = LightColor::random(&mut rng);
             // Place a power light at the topmost newly spawned slot for each column
-            let kind = if i == empty && power_placed < power_row.len() {
+            let kind = if index == topmost_index && power_placed < power_row.len() {
                 let k = power_row[power_placed];
                 power_placed += 1;
                 k

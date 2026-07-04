@@ -1,6 +1,20 @@
 use bevy::prelude::*;
 
-pub(crate) const CAMPAIGN_LEVELS: usize = 6;
+pub(crate) const CAMPAIGN_LEVELS: usize = 9;
+const SAVE_VERSION: &str = "lightcore-progress-v1";
+
+pub(crate) struct CampaignPlugin;
+
+impl Plugin for CampaignPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CampaignProgress>()
+            .add_systems(Startup, load_campaign_progress)
+            .add_systems(
+                Update,
+                save_campaign_progress.run_if(resource_changed::<CampaignProgress>),
+            );
+    }
+}
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -15,45 +29,66 @@ pub(crate) struct CampaignNode {
 pub(crate) const CAMPAIGN_NODES: [CampaignNode; CAMPAIGN_LEVELS] = [
     CampaignNode {
         level: 1,
-        title: "Orbita Base",
-        blurb: "Entrada limpia. Aprende el ritmo y alcanza el score objetivo.",
+        title: "Puntaje Basico",
+        blurb: "Consigue el puntaje objetivo.",
         pos: [11.0, 56.0],
         accent: [0.40, 0.80, 1.25],
     },
     CampaignNode {
         level: 2,
-        title: "Ruta de Chispas",
-        blurb: "Abre caminos y baja ingredientes sin romper la cadencia del tablero.",
+        title: "Ingredientes",
+        blurb: "Baja ingredientes hasta la salida.",
         pos: [34.0, 28.0],
         accent: [0.55, 1.00, 0.72],
     },
     CampaignNode {
         level: 3,
-        title: "Nucleo Velado",
-        blurb: "La presion pasa a ser espacial: importa donde cae cada explosion.",
+        title: "Sombras",
+        blurb: "Limpia todas las sombras.",
         pos: [58.0, 63.0],
         accent: [1.05, 0.72, 1.20],
     },
     CampaignNode {
         level: 4,
-        title: "Cinturon Rojo",
-        blurb: "Contrarreloj. El throughput manda y el reloj no perdona.",
+        title: "Contrarreloj",
+        blurb: "Consigue el puntaje antes del tiempo.",
         pos: [82.0, 36.0],
         accent: [1.28, 0.54, 0.54],
     },
     CampaignNode {
         level: 5,
-        title: "Cosecha Roja",
-        blurb: "Cosecha lightcores rojos para alimentar el reactor central.",
+        title: "Cores Rojos",
+        blurb: "Recolecta cores rojos.",
         pos: [90.0, 50.0],
         accent: [0.92, 0.25, 0.30],
     },
     CampaignNode {
         level: 6,
-        title: "Cosecha Azul",
-        blurb: "Cosecha lightcores azules para estabilizar la orbita.",
+        title: "Cores Azules",
+        blurb: "Recolecta cores azules.",
         pos: [95.0, 20.0],
         accent: [0.25, 0.50, 0.95],
+    },
+    CampaignNode {
+        level: 7,
+        title: "Pocos Movimientos",
+        blurb: "Consigue puntaje con movimientos limitados.",
+        pos: [86.0, 70.0],
+        accent: [1.08, 0.86, 0.35],
+    },
+    CampaignNode {
+        level: 8,
+        title: "Ingredientes Bloqueados",
+        blurb: "Baja ingredientes en un grid con bloqueos.",
+        pos: [68.0, 30.0],
+        accent: [0.42, 1.05, 0.80],
+    },
+    CampaignNode {
+        level: 9,
+        title: "Grid Irregular",
+        blurb: "Recolecta verdes en un grid distinto.",
+        pos: [45.0, 72.0],
+        accent: [0.42, 1.05, 0.48],
     },
 ];
 
@@ -118,8 +153,138 @@ impl CampaignProgress {
             unlocked_next,
         }
     }
+
+    fn encode(&self) -> String {
+        let mut out = String::from(SAVE_VERSION);
+        for record in self.best_scores {
+            out.push('\n');
+            out.push_str(&format!(
+                "{},{}",
+                record.best_score,
+                if record.completed { 1 } else { 0 }
+            ));
+        }
+        out
+    }
+
+    fn decode(raw: &str) -> Option<Self> {
+        let mut lines = raw.lines();
+        if lines.next()? != SAVE_VERSION {
+            return None;
+        }
+        let mut progress = Self::default();
+        for (idx, line) in lines.take(CAMPAIGN_LEVELS).enumerate() {
+            let (score, completed) = line.split_once(',')?;
+            progress.best_scores[idx] = CampaignRecord {
+                best_score: score.parse().ok()?,
+                completed: completed == "1",
+            };
+        }
+        Some(progress)
+    }
 }
 
 pub(crate) fn level_index(level: u32) -> Option<usize> {
     CAMPAIGN_NODES.iter().position(|node| node.level == level)
+}
+
+fn load_campaign_progress(mut progress: ResMut<CampaignProgress>) {
+    let Some(saved) = load_progress_text().and_then(|raw| CampaignProgress::decode(&raw)) else {
+        return;
+    };
+    *progress = saved;
+}
+
+fn save_campaign_progress(progress: Res<CampaignProgress>) {
+    if let Err(err) = save_progress_text(&progress.encode()) {
+        bevy::log::warn!("No se pudo guardar el progreso de campaña: {err}");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_progress_text() -> Option<String> {
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_progress_text(_raw: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_progress_text() -> Option<String> {
+    std::fs::read_to_string(progress_save_path()).ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_progress_text(raw: &str) -> Result<(), String> {
+    let path = progress_save_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    std::fs::write(path, raw).map_err(|err| err.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn progress_save_path() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return std::path::PathBuf::from(appdata)
+                .join("Lightcore")
+                .join("campaign.txt");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Lightcore")
+                .join("campaign.txt");
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+            return std::path::PathBuf::from(data_home)
+                .join("lightcore")
+                .join("campaign.txt");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("lightcore")
+                .join("campaign.txt");
+        }
+    }
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("lightcore_campaign.txt")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn campaign_progress_round_trips_through_save_text() {
+        let mut progress = CampaignProgress::default();
+        progress.record_score(1, 240);
+        progress.record_score(2, 180);
+
+        let decoded = CampaignProgress::decode(&progress.encode()).unwrap();
+
+        assert_eq!(decoded.best_score(1), 240);
+        assert_eq!(decoded.best_score(2), 180);
+        assert!(decoded.is_unlocked(3));
+        assert!(!decoded.is_unlocked(4));
+    }
+
+    #[test]
+    fn campaign_progress_rejects_unknown_save_version() {
+        assert!(CampaignProgress::decode("other-version\n10,1").is_none());
+    }
 }

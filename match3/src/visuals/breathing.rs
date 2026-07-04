@@ -33,6 +33,12 @@ pub(crate) struct Breathing {
     pub(crate) phase: f32, // randomized per-light so cores don't all pulse in lockstep
 }
 
+#[derive(Component)]
+pub(crate) struct SparkNucleusPulse {
+    pub(crate) base_scale: Vec3,
+    pub(crate) phase: f32,
+}
+
 pub(crate) fn breathe(time: Res<Time>, mut q: Query<(&mut Sprite, &Breathing)>) {
     let t = time.elapsed_secs();
     for (mut sprite, breathing) in &mut q {
@@ -44,5 +50,16 @@ pub(crate) fn breathe(time: Res<Time>, mut q: Query<(&mut Sprite, &Breathing)>) 
             alpha,
         } = breathing.base.to_srgba();
         sprite.color = Color::srgb(red * factor, green * factor, blue * factor).with_alpha(alpha);
+    }
+}
+
+pub(crate) fn pulse_spark_nucleus(
+    time: Res<Time>,
+    mut q: Query<(&mut Transform, &SparkNucleusPulse)>,
+) {
+    let t = time.elapsed_secs();
+    for (mut transform, pulse) in &mut q {
+        let wave = 0.5 + 0.5 * (t * 12.0 + pulse.phase).sin();
+        transform.scale = pulse.base_scale * (0.86 + wave * 0.22);
     }
 }

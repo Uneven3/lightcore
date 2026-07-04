@@ -789,8 +789,14 @@ pub(crate) fn find_valid_swap(
 
                 if matches {
                     return Some((
-                        GridPos { x: x as i32, y: y as i32 },
-                        GridPos { x: nx as i32, y: ny as i32 },
+                        GridPos {
+                            x: x as i32,
+                            y: y as i32,
+                        },
+                        GridPos {
+                            x: nx as i32,
+                            y: ny as i32,
+                        },
                     ));
                 }
             }

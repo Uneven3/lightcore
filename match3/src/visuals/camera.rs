@@ -1,9 +1,9 @@
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use rand::Rng;
-use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+use web_time::Instant;
 
 use crate::core::grid::TILE;
 use crate::gameplay::ChainPop;

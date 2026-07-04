@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::core::prelude::*;
 use crate::visuals::assets::VisualCache;
-use crate::visuals::breathing::BreathPhase;
+use crate::visuals::breathing::{BreathPhase, SparkNucleusPulse};
 
 fn generate_board_layout(rng: &mut impl Rng) -> Vec<(GridPos, LightColor)> {
     const ALL: [LightColor; 5] = [
@@ -102,19 +102,86 @@ pub(crate) fn spawn_shadow(commands: &mut Commands, cache: &VisualCache, pos: Gr
     ));
 }
 
+pub(crate) fn spawn_blocker(commands: &mut Commands, cache: &VisualCache, pos: GridPos) {
+    let world = to_world(pos);
+    commands.spawn((
+        Shadow,
+        Blocker,
+        pos,
+        Mesh2d(cache.blocker_mesh.clone()),
+        MeshMaterial2d(cache.blocker_mat.clone()),
+        Transform::from_translation(world.with_z(-0.45)),
+    ));
+}
+
+pub(crate) fn spawn_ingredient_exits(commands: &mut Commands, cache: &VisualCache) {
+    for x in 0..GRID_W {
+        let pos = GridPos { x, y: 0 };
+        let world = to_world(pos);
+        commands.spawn((
+            IngredientExit,
+            Sprite {
+                image: cache.glow_image.clone(),
+                color: Color::srgba(0.34, 1.0, 0.68, 0.24),
+                custom_size: Some(Vec2::new(TILE * 0.70, TILE * 0.28)),
+                ..default()
+            },
+            Transform::from_translation(
+                (world + Vec3::new(0.0, -TILE * 0.38, -0.30)).with_z(-0.30),
+            ),
+        ));
+        commands.spawn((
+            IngredientExit,
+            Text2d::new("v"),
+            TextFont {
+                font_size: FontSize::Px(24.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.58, 1.0, 0.74)),
+            Transform::from_translation(world + Vec3::new(0.0, -TILE * 0.34, 1.10)),
+        ));
+    }
+}
+
 pub(crate) fn spawn_sparks(commands: &mut Commands, cache: &VisualCache, columns: &[i32]) {
     for &x in columns {
         let pos = GridPos { x, y: GRID_H - 1 };
         let world = to_world(pos);
-        commands.spawn((
-            Spark,
-            FallPhysics,
-            pos,
-            VisualPos(world),
-            Mesh2d(cache.spark_mesh.clone()),
-            MeshMaterial2d(cache.spark_mat.clone()),
-            Transform::from_translation(world.with_z(0.3)),
-        ));
+        let spark = commands
+            .spawn((
+                Spark,
+                FallPhysics,
+                pos,
+                VisualPos(world),
+                Mesh2d(cache.spark_mesh.clone()),
+                MeshMaterial2d(cache.spark_mat.clone()),
+                Transform::from_translation(world.with_z(0.3)),
+            ))
+            .id();
+        commands.entity(spark).with_children(|spark| {
+            spark.spawn((
+                Sprite {
+                    image: cache.glow_image.clone(),
+                    color: Color::srgba(1.0, 0.42, 0.08, 0.42),
+                    custom_size: Some(Vec2::splat(TILE * 0.72)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, -0.1),
+            ));
+            spark.spawn((
+                SparkNucleusPulse {
+                    base_scale: Vec3::ONE,
+                    phase: x as f32 * 0.7,
+                },
+                Sprite {
+                    image: cache.core_image.clone(),
+                    color: Color::srgba(0.02, 0.01, 0.005, 0.96),
+                    custom_size: Some(Vec2::splat(TILE * 0.42)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, 0.3),
+            ));
+        });
     }
 }
 
@@ -146,7 +213,15 @@ pub(crate) fn shuffle_board(
 pub(crate) fn clear_shadow_at(
     removed_positions: &HashSet<GridPos>,
     commands: &mut Commands,
-    shadow_q: &Query<(Entity, &GridPos), (With<Shadow>, Without<Light>, Without<Spark>)>,
+    shadow_q: &Query<
+        (Entity, &GridPos),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
     shadow_count: &mut u32,
 ) {
     for (e, gp) in shadow_q.iter() {

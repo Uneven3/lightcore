@@ -11,6 +11,7 @@ use super::{
 use crate::board::{clear_shadow_at, shuffle_board};
 use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::state::GameState;
 use crate::visuals::assets::VisualCache;
 
@@ -18,7 +19,7 @@ use crate::visuals::assets::VisualCache;
 pub(crate) struct ChainParams<'w> {
     pub(crate) score: ResMut<'w, Score>,
     pub(crate) reserve: ResMut<'w, CoreReserve>,
-    pub(crate) moves: Res<'w, MovesLeft>,
+    pub(crate) moves: ResMut<'w, MovesLeft>,
     pub(crate) cascade: ResMut<'w, CascadeDepth>,
     pub(crate) level: Res<'w, LevelConfig>,
     pub(crate) collected: Res<'w, SparksCollected>,
@@ -27,6 +28,7 @@ pub(crate) struct ChainParams<'w> {
     pub(crate) super_combo: ResMut<'w, SuperComboPending>,
     pub(crate) collected_cores: ResMut<'w, CollectedCores>,
     pub(crate) stats: ResMut<'w, StatsBook>,
+    pub(crate) run: ResMut<'w, RunState>,
 }
 
 pub(crate) fn check_chain_matches(
@@ -34,7 +36,15 @@ pub(crate) fn check_chain_matches(
     mut res: ChainParams,
     mut next_state: ResMut<NextState<GameState>>,
     cache: Res<VisualCache>,
-    shadow_q: Query<(Entity, &GridPos), (With<Shadow>, Without<Light>, Without<Spark>)>,
+    shadow_q: Query<
+        (Entity, &GridPos),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
     mut lights: Query<
         (Entity, &GridPos, &LightColor, &mut LightKind),
         (With<Light>, Without<Shadow>),
@@ -118,12 +128,18 @@ pub(crate) fn check_chain_matches(
 
         let points = final_remove.len() as u32 * res.cascade.0;
 
-        res.score.0 += points;
-        res.reserve.0 += points;
+        let mut score_bonus = 0;
+        let mut reserve_bonus = 0;
+        let mut blue_count = 0;
         for e in &final_remove {
             if let Some((_, color, kind)) = entity_info.get(e) {
                 res.collected_cores.0[color.index()] += res.cascade.0;
                 let add = res.cascade.0;
+                score_bonus += res.run.score_bonus_for_color(*color, add);
+                reserve_bonus += res.run.reserve_bonus_for_color(*color, add);
+                if *color == LightColor::Blue {
+                    blue_count += add;
+                }
                 match color {
                     LightColor::Red => res.stats.reds += add,
                     LightColor::Green => res.stats.greens += add,
@@ -135,6 +151,12 @@ pub(crate) fn check_chain_matches(
                     res.stats.lightkinds += add;
                 }
             }
+        }
+        res.score.0 += points + score_bonus;
+        res.reserve.0 += points + reserve_bonus;
+        let move_bonus = res.run.blue_move_bonus(blue_count);
+        if move_bonus > 0 && res.moves.0 != u32::MAX {
+            res.moves.0 += move_bonus;
         }
         res.stats.max_cascade = res.stats.max_cascade.max(res.cascade.0);
         if res.cascade.0 >= 2 {
@@ -155,7 +177,7 @@ pub(crate) fn check_chain_matches(
         }
         commands.trigger(ChainPop {
             removed: final_remove.len() as u32,
-            points,
+            points: points + score_bonus,
             pops,
         });
         next_state.set(GameState::Popping);
@@ -174,8 +196,7 @@ pub(crate) fn check_chain_matches(
             LevelGoal::CollectColor { color, target } => {
                 res.collected_cores.0[color.index()] >= *target
             }
-            // Termina solo por el reloj — ver `lifecycle::tick_level_timer`.
-            LevelGoal::TimedScore { .. } => false,
+            LevelGoal::TimedScore { target, .. } => res.score.0 >= *target,
         };
         if level_complete {
             next_state.set(GameState::LevelComplete);
@@ -306,12 +327,18 @@ pub(crate) fn check_chain_matches(
 
     let points = to_remove.len() as u32 * res.cascade.0;
 
-    res.score.0 += points;
-    res.reserve.0 += points;
+    let mut score_bonus = res.run.power_bonus(upgrades.len() as u32);
+    let mut reserve_bonus = 0;
+    let mut blue_count = 0;
     for e in &to_remove {
         if let Some((_, color, kind)) = entity_info.get(e) {
             res.collected_cores.0[color.index()] += res.cascade.0;
             let add = res.cascade.0;
+            score_bonus += res.run.score_bonus_for_color(*color, add);
+            reserve_bonus += res.run.reserve_bonus_for_color(*color, add);
+            if *color == LightColor::Blue {
+                blue_count += add;
+            }
             match color {
                 LightColor::Red => res.stats.reds += add,
                 LightColor::Green => res.stats.greens += add,
@@ -323,6 +350,12 @@ pub(crate) fn check_chain_matches(
                 res.stats.lightkinds += add;
             }
         }
+    }
+    res.score.0 += points + score_bonus;
+    res.reserve.0 += points + reserve_bonus;
+    let move_bonus = res.run.blue_move_bonus(blue_count);
+    if move_bonus > 0 && res.moves.0 != u32::MAX {
+        res.moves.0 += move_bonus;
     }
     res.stats.max_cascade = res.stats.max_cascade.max(res.cascade.0);
     if res.cascade.0 >= 2 {
@@ -347,7 +380,7 @@ pub(crate) fn check_chain_matches(
     }
     commands.trigger(ChainPop {
         removed: to_remove.len() as u32,
-        points,
+        points: points + score_bonus,
         pops,
     });
     next_state.set(GameState::Popping);
