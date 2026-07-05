@@ -5,7 +5,7 @@ use crate::core::campaign::CampaignProgress;
 use crate::core::locale::TrKey;
 use crate::core::run::RunState;
 use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
-use crate::menu::options::WindowSettings;
+use crate::menu::options::{DeviceMode, WindowSettings};
 use crate::state::GameState;
 
 /// Title screen — the app boots here. "Jugar" → `LevelMenu`, "Opciones" → `Options`.
@@ -48,6 +48,13 @@ struct QuitButton;
 
 fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<WindowSettings>) {
     let lang = settings.language;
+    let compact = settings.device_mode == DeviceMode::Mobile;
+    let row_gap = if compact { 10.0 } else { 26.0 };
+    let title_font = if compact { 52.0 } else { 64.0 };
+    let button_width = if compact { 260.0 } else { 280.0 };
+    let button_height = if compact { 54.0 } else { 66.0 };
+    let button_font = if compact { 24.0 } else { 30.0 };
+    let tutorial_font = if compact { 22.0 } else { 28.0 };
     commands
         .spawn((
             MainMenuRoot,
@@ -57,7 +64,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(26.0),
+                row_gap: Val::Px(row_gap),
                 ..default()
             },
         ))
@@ -65,7 +72,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
             root.spawn((
                 Text::new("LIGHTCORE"),
                 TextFont {
-                    font_size: FontSize::Px(64.0),
+                    font_size: FontSize::Px(title_font),
                     ..default()
                 },
                 TextColor(Color::srgb(1.6, 1.8, 2.6)), // HDR → blooms
@@ -77,13 +84,32 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                     index,
                     lang.tr(TrKey::Continue),
                     RunMenuButton::Continue,
+                    button_width,
+                    button_height,
+                    button_font,
                 );
                 index += 1;
             }
-            spawn_run_button(root, index, lang.tr(TrKey::NewRun), RunMenuButton::New);
+            spawn_run_button(
+                root,
+                index,
+                lang.tr(TrKey::NewRun),
+                RunMenuButton::New,
+                button_width,
+                button_height,
+                button_font,
+            );
             index += 1;
 
-            spawn_run_button(root, index, lang.tr(TrKey::DebugMode), RunMenuButton::Debug);
+            spawn_run_button(
+                root,
+                index,
+                lang.tr(TrKey::DebugMode),
+                RunMenuButton::Debug,
+                button_width,
+                button_height,
+                button_font,
+            );
             index += 1;
 
             for (label, target) in [
@@ -95,8 +121,8 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                     NavButton(target),
                     MenuButton { index },
                     Node {
-                        width: Val::Px(280.0),
-                        height: Val::Px(66.0),
+                        width: Val::Px(button_width),
+                        height: Val::Px(button_height),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
                         ..default()
@@ -107,7 +133,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                     b.spawn((
                         Text::new(label),
                         TextFont {
-                            font_size: FontSize::Px(30.0),
+                            font_size: FontSize::Px(button_font),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -121,8 +147,8 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 MainMenuTutorialButton,
                 MenuButton { index },
                 Node {
-                    width: Val::Px(280.0),
-                    height: Val::Px(66.0),
+                    width: Val::Px(button_width),
+                    height: Val::Px(button_height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
@@ -134,7 +160,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                     MainMenuTutorialText,
                     Text::new(""),
                     TextFont {
-                        font_size: FontSize::Px(28.0),
+                        font_size: FontSize::Px(tutorial_font),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -147,8 +173,8 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 QuitButton,
                 MenuButton { index },
                 Node {
-                    width: Val::Px(280.0),
-                    height: Val::Px(66.0),
+                    width: Val::Px(button_width),
+                    height: Val::Px(button_height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
@@ -159,7 +185,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 b.spawn((
                     Text::new(lang.tr(TrKey::Quit)),
                     TextFont {
-                        font_size: FontSize::Px(30.0),
+                        font_size: FontSize::Px(button_font),
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -173,14 +199,17 @@ fn spawn_run_button(
     index: usize,
     label: &str,
     action: RunMenuButton,
+    button_width: f32,
+    button_height: f32,
+    button_font: f32,
 ) {
     root.spawn((
         Button,
         action,
         MenuButton { index },
         Node {
-            width: Val::Px(280.0),
-            height: Val::Px(66.0),
+            width: Val::Px(button_width),
+            height: Val::Px(button_height),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             ..default()
@@ -191,7 +220,7 @@ fn spawn_run_button(
         b.spawn((
             Text::new(label),
             TextFont {
-                font_size: FontSize::Px(30.0),
+                font_size: FontSize::Px(button_font),
                 ..default()
             },
             TextColor(Color::WHITE),

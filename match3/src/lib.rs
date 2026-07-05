@@ -5,7 +5,6 @@ use bevy::prelude::bevy_main;
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 
-#[cfg(not(target_os = "android"))]
 pub(crate) mod audio;
 pub(crate) mod board;
 pub(crate) mod core;
@@ -33,10 +32,7 @@ impl Plugin for GamePlugin {
             platform::PlatformPlugin,
             input::InputPlugin,
         ));
-        #[cfg(not(target_os = "android"))]
         app.add_plugins(audio::AudioPlugin);
-        #[cfg(target_os = "android")]
-        warn!("Android audio disabled: Bevy/cpal AAudio aborts on this test device at startup");
         app.add_plugins((
             ui::UiPlugin,
             visuals::VisualsPlugin,
@@ -102,9 +98,7 @@ pub fn run_game() {
         .disable::<bevy::light::LightPlugin>()
         .disable::<bevy::pbr::PbrPlugin>();
     #[cfg(target_os = "android")]
-    let default_plugins = default_plugins
-        .disable::<bevy::audio::AudioPlugin>()
-        .disable::<bevy::gilrs::GilrsPlugin>();
+    let default_plugins = default_plugins.disable::<bevy::gilrs::GilrsPlugin>();
 
     App::new().add_plugins((default_plugins, GamePlugin)).run();
 }
