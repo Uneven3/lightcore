@@ -54,7 +54,11 @@ impl Plugin for UiPlugin {
                     update_score_text.run_if(resource_changed::<DisplayedScore>),
                     update_score_glow,
                     position_score,
-                    update_moves_text.run_if(resource_changed::<MovesLeft>),
+                    update_moves_text.run_if(
+                        resource_changed::<MovesLeft>
+                            .or_else(resource_changed::<LevelConfig>)
+                            .or_else(resource_changed::<GameMode>),
+                    ),
                     update_goal_text.run_if(
                         resource_changed::<DisplayedScore>
                             .or_else(resource_changed::<SparksCollected>)
@@ -66,11 +70,18 @@ impl Plugin for UiPlugin {
                     ),
                     pause_button_system,
                     shop_toggle_system,
-                    update_shop_toggle_button,
+                    update_shop_toggle_button.run_if(resource_changed::<Shop>),
                     update_shop_reserve_text.run_if(resource_changed::<CoreReserve>),
-                    update_shop_bar_visibility,
-                    update_shop_button_texts,
-                    update_shop_active_badge,
+                    update_shop_bar_visibility.run_if(resource_changed::<Shop>),
+                    update_shop_button_texts.run_if(
+                        resource_changed::<CoreReserve>
+                            .or_else(resource_changed::<RunState>)
+                            .or_else(resource_changed::<Shop>)
+                            .or_else(resource_changed::<WindowSettings>),
+                    ),
+                    update_shop_active_badge.run_if(
+                        resource_changed::<Shop>.or_else(resource_changed::<WindowSettings>),
+                    ),
                     update_slow_mo_badge,
                     update_watermark_fps,
                     update_static_hud_labels.run_if(resource_changed::<WindowSettings>),
@@ -81,13 +92,20 @@ impl Plugin for UiPlugin {
                 (
                     update_goal_hint,
                     stats_button_system,
-                    update_stats_popup,
-                    update_boon_indicators.run_if(resource_changed::<RunState>),
+                    update_stats_popup.run_if(
+                        resource_changed::<StatsPopupOpen>
+                            .or_else(resource_changed::<StatsBook>)
+                            .or_else(resource_changed::<WindowSettings>),
+                    ),
+                    update_boon_indicators.run_if(
+                        resource_changed::<RunState>.or_else(resource_changed::<WindowSettings>),
+                    ),
                     tutorial_close_button_system,
                     tutorial_overlay_toggle_system,
-                    update_tutorial_overlay_toggle_text,
-                    update_tutorial_visibility,
-                    update_lives_text,
+                    update_tutorial_overlay_toggle_text.run_if(resource_changed::<WindowSettings>),
+                    update_tutorial_visibility.run_if(resource_changed::<TutorialState>),
+                    update_lives_text
+                        .run_if(resource_changed::<RunState>.or_else(resource_changed::<GameMode>)),
                     update_tooltip_system,
                 ),
             );
@@ -160,6 +178,19 @@ struct FpsWatermarkText;
 
 #[derive(Resource, Default)]
 struct GoalHintTouchTimer(Option<Timer>);
+
+#[derive(Default)]
+struct FpsWatermarkState {
+    visible: bool,
+    last_fps: Option<u32>,
+    elapsed_since_refresh: f32,
+}
+
+#[derive(Default)]
+struct SlowMoBadgeState {
+    active: bool,
+    last_tenths: i32,
+}
 
 fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<WindowSettings>) {
     // ScoreText is in world space (Text2d), so keep it independent of Bevy UI HudRoot.
@@ -934,30 +965,56 @@ fn show_hud(mut q: Query<&mut Visibility, HudFilter>) {
 }
 
 fn update_watermark_fps(
+    time: Res<Time>,
     diagnostics: Res<DiagnosticsStore>,
     settings: Res<WindowSettings>,
     text: Single<(&mut Text, &mut Visibility), With<FpsWatermarkText>>,
+    mut state: Local<FpsWatermarkState>,
 ) {
     let (mut text, mut visibility) = text.into_inner();
     if !settings.show_fps_watermark {
-        *visibility = Visibility::Hidden;
+        if state.visible {
+            *visibility = Visibility::Hidden;
+            state.visible = false;
+        }
         return;
     }
-    *visibility = Visibility::Visible;
+    if !state.visible {
+        *visibility = Visibility::Visible;
+        state.visible = true;
+    }
+    state.elapsed_since_refresh += time.delta_secs();
+    if state.elapsed_since_refresh < 0.25 && state.last_fps.is_some() {
+        return;
+    }
+    state.elapsed_since_refresh = 0.0;
     let fps = diagnostics
         .get(&FrameTimeDiagnosticsPlugin::FPS)
         .and_then(|d| d.smoothed())
-        .unwrap_or(0.0);
-    text.0 = format!("FPS {fps:>4.0}");
+        .unwrap_or(0.0)
+        .round()
+        .max(0.0) as u32;
+    if state.last_fps != Some(fps) {
+        text.0 = format!("FPS {fps:>4}");
+        state.last_fps = Some(fps);
+    }
 }
 
 fn update_slow_mo_badge(
     virtual_time: Res<Time<Virtual>>,
     badge: Single<(&mut Visibility, &mut Node), With<SlowMoBadge>>,
     mut text: Single<&mut Text, With<SlowMoBadgeText>>,
+    mut state: Local<SlowMoBadgeState>,
 ) {
     let speed = virtual_time.relative_speed();
     let active = speed < 0.99;
+    let tenths = (speed * 10.0).round() as i32;
+    if state.active == active && (!active || state.last_tenths == tenths) {
+        return;
+    }
+    state.active = active;
+    state.last_tenths = tenths;
+
     let (mut visibility, mut node) = badge.into_inner();
     *visibility = if active {
         Visibility::Visible

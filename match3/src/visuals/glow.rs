@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use super::assets::VisualCache;
-use super::breathing::{BreathPhase, breath_factor, breath_norm};
+use super::breathing::{BreathPhase, breath_factor_and_norm};
 use crate::core::prelude::*;
 
 /// Live-tunable parameters for a light's halo, edited from the Options screen. The halo is built from
@@ -136,9 +136,9 @@ pub(crate) fn flicker(
     let t = time.elapsed_secs();
     for (mut sprite, pool, mut tf) in &mut q {
         let (radius, alpha) = settings.layer(pool.layer);
-        let f = breath_factor(t, pool.phase);
+        let (f, norm) = breath_factor_and_norm(t, pool.phase);
         sprite.color = tint(pool.raw, settings.brightness * f, alpha);
         sprite.custom_size = Some(Vec2::splat(TILE * radius * 2.0));
-        tf.scale = Vec3::splat(0.9 + 0.15 * breath_norm(t, pool.phase));
+        tf.scale = Vec3::splat(0.9 + 0.15 * norm);
     }
 }

@@ -760,8 +760,8 @@ fn has_match(board: &[[Option<MatchKey>; GRID_H as usize]; GRID_W as usize]) -> 
     for y in 0..GRID_H as usize {
         let mut run_len = 1;
         let mut last_key = None;
-        for x in 0..GRID_W as usize {
-            let key = board[x][y];
+        for column in board.iter().take(GRID_W as usize) {
+            let key = column[y];
             if key.is_some() && key == last_key {
                 run_len += 1;
                 if run_len >= 3 {
@@ -774,11 +774,10 @@ fn has_match(board: &[[Option<MatchKey>; GRID_H as usize]; GRID_W as usize]) -> 
         }
     }
     // Check vertical runs
-    for x in 0..GRID_W as usize {
+    for column in board.iter().take(GRID_W as usize) {
         let mut run_len = 1;
         let mut last_key = None;
-        for y in 0..GRID_H as usize {
-            let key = board[x][y];
+        for &key in column.iter().take(GRID_H as usize) {
             if key.is_some() && key == last_key {
                 run_len += 1;
                 if run_len >= 3 {

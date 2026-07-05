@@ -7,7 +7,6 @@ use bevy::window::{PresentMode, PrimaryWindow};
 
 use crate::state::GameState;
 use crate::visuals::particles::Particle;
-use crate::visuals::render_target::RenderScale;
 
 /// Refresh the readout a few times a second — fast enough to be live, slow enough that the overlay's
 /// own text relayout doesn't muddy the very numbers we're trying to measure.
@@ -109,7 +108,6 @@ fn update_overlay(
     materials: Res<Assets<ColorMaterial>>,
     mesh2d: Query<(), With<Mesh2d>>,
     particles: Query<(), With<Particle>>,
-    render_scale: Res<RenderScale>,
     window: Single<&Window, With<PrimaryWindow>>,
     text: Single<(&mut Text, &Visibility), With<DebugText>>,
 ) {
@@ -142,13 +140,9 @@ fn update_overlay(
         None => "cpu/mem off (MATCH3_SYSINFO=1)".to_string(),
     };
 
-    // Resolución FÍSICA de la VENTANA (lo que pinta la cámara FINAL: solo un blit barato + HUD). El
-    // "x{sf}" es el factor HiDPI. El coste del bloom NO escala con esto, sino con la resolución INTERNA.
+    // Resolución FÍSICA de la VENTANA; el "x{sf}" es el factor HiDPI.
     let (pw, ph) = (window.physical_width(), window.physical_height());
     let sf = window.resolution.scale_factor();
-    // Resolución INTERNA del lienzo (RTT): aquí se calcula el bloom. ESTA es la palanca de FPS.
-    let ih = render_scale.internal_height.max(1);
-    let iw = (ih as f32 * pw.max(1) as f32 / ph.max(1) as f32).round() as u32;
 
     let vsync = match window.present_mode {
         PresentMode::AutoNoVsync | PresentMode::Immediate => "OFF",
@@ -159,7 +153,6 @@ fn update_overlay(
     **text = format!(
         "FPS {fps:5.1}  ({frame_ms:5.2} ms)\n\
          ventana {pw}x{ph}  (x{sf:.2})\n\
-         render interno {iw}x{ih}\n\
          entities {entities:5.0}   mesh2d {mesh2d:4}\n\
          assets: mesh {amesh:4}  material {amat:4}\n\
          particles {parts:4}\n\

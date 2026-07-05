@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::state::GameState;
 use crate::visuals::motion::lerp_visual_pos;
 
@@ -88,7 +89,11 @@ impl Plugin for GameplayPlugin {
                 Update,
                 (
                     shop::shop_button_system.before(shop::shop_targeting),
-                    shop::update_shop_buttons,
+                    shop::update_shop_buttons.run_if(
+                        resource_changed::<CoreReserve>
+                            .or_else(resource_changed::<RunState>)
+                            .or_else(resource_changed::<shop::Shop>),
+                    ),
                 )
                     .run_if(in_state(GameState::Playing)),
             )

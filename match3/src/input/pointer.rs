@@ -22,7 +22,7 @@ pub(crate) struct PointerInput {
     /// Última posición conocida en píxeles de ventana (None si el cursor está fuera de la ventana
     /// y no hay contacto táctil activo).
     pub(crate) position_window: Option<Vec2>,
-    /// Posición ya convertida al espacio-mundo a través del RTT (via `window_point_to_world`).
+    /// Posición ya convertida al espacio-mundo via `window_point_to_world`.
     pub(crate) position_world: Option<Vec2>,
     pub(crate) source: PointerSource,
 }

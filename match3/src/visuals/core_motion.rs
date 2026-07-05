@@ -206,7 +206,7 @@ pub(crate) fn rebuild_cores(
                 .spawn((
                     LightCore,
                     Breathing {
-                        base: base_color,
+                        base: base_color.to_srgba(),
                         phase: phase.0 + i as f32 * 0.25,
                     },
                     CoreMotion {

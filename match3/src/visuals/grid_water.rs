@@ -8,7 +8,6 @@ use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dPlugin, MeshMateria
 use crate::core::prelude::*;
 use crate::state::GameState;
 
-const RIPPLE_SLOTS: usize = 8;
 const GRID_MARGIN: f32 = TILE * 1.15;
 const GRID_WATER_SHADER_HANDLE: Handle<Shader> =
     uuid_handle!("25461935-9fd2-42e5-ac46-1e205523db75");
@@ -25,7 +24,6 @@ impl Plugin for GridWaterPlugin {
         );
 
         app.add_plugins(Material2dPlugin::<GridWaterMaterial>::default())
-            .init_resource::<GridWaterState>()
             .add_systems(Startup, spawn_grid_water)
             .add_systems(
                 Update,
@@ -50,11 +48,6 @@ impl Default for GridWaterSettings {
     }
 }
 
-#[derive(Resource, Default)]
-pub(crate) struct GridWaterState {
-    ripples: [Vec4; RIPPLE_SLOTS],
-}
-
 #[derive(Resource)]
 struct GridWaterMaterialHandle(Handle<GridWaterMaterial>);
 
@@ -66,9 +59,8 @@ struct GridWaterUniform {
     time: f32,
     tile: f32,
     enabled: f32,
-    shard_glow: f32,
+    _pad: f32,
     half_size: Vec4,
-    ripples: [Vec4; RIPPLE_SLOTS],
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
@@ -100,9 +92,8 @@ fn empty_uniform() -> GridWaterUniform {
         time: 0.0,
         tile: TILE,
         enabled: 1.0,
-        shard_glow: 0.0,
+        _pad: 0.0,
         half_size: Vec4::new(size.x * 0.5, size.y * 0.5, 0.0, 0.0),
-        ripples: [Vec4::ZERO; RIPPLE_SLOTS],
     }
 }
 
@@ -127,7 +118,6 @@ fn spawn_grid_water(
 fn update_grid_water_material(
     time: Res<Time>,
     settings: Res<GridWaterSettings>,
-    state: Res<GridWaterState>,
     handle: Res<GridWaterMaterialHandle>,
     mut materials: ResMut<Assets<GridWaterMaterial>>,
 ) {
@@ -136,7 +126,6 @@ fn update_grid_water_material(
     };
     material.params.time = time.elapsed_secs();
     material.params.enabled = if settings.enabled { 1.0 } else { 0.0 };
-    material.params.ripples = state.ripples;
 }
 
 fn apply_grid_water_visibility(

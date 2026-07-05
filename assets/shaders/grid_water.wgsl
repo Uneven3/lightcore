@@ -13,15 +13,12 @@
 #import bevy_render::color_operations::linear_rgb_to_oklab
 #endif
 
-const RIPPLE_SLOTS: u32 = 8u;
-
 struct GridWaterMaterial {
     time: f32,
     tile: f32,
     enabled: f32,
     _pad: f32,
     half_size: vec4<f32>,
-    ripples: array<vec4<f32>, 8>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: GridWaterMaterial;
@@ -42,24 +39,6 @@ fn point_alpha(coord: vec2<f32>) -> f32 {
     return 1.0 - smoothstep(0.025, 0.060, d);
 }
 
-fn ripple_field(world: vec2<f32>) -> vec2<f32> {
-    var offset = vec2<f32>(0.0, 0.0);
-    for (var i = 0u; i < RIPPLE_SLOTS; i = i + 1u) {
-        let r = material.ripples[i];
-        let strength = r.z;
-        let age = material.time - r.w;
-        if (strength > 0.001 && age >= 0.0 && age < 2.4) {
-            let delta = world - r.xy;
-            let dist = max(length(delta), 0.001);
-            let dir = delta / dist;
-            let wave = sin(dist * 0.052 - age * 8.5);
-            let falloff = exp(-dist * 0.010) * exp(-age * 1.35);
-            offset = offset + dir * wave * falloff * strength * 14.0;
-        }
-    }
-    return offset;
-}
-
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     if (material.enabled < 0.5) {
@@ -73,19 +52,16 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let displacement = ripple_field(world);
-    let warped = world + displacement;
+    let warped = world;
     let coord = warped / material.tile + vec2<f32>(0.5, 0.5);
 
     let lines = line_alpha(coord) * 0.16;
     let points = point_alpha(coord) * 0.58;
     let shimmer = 0.88 + 0.12 * sin(material.time * 1.7 + warped.x * 0.018 + warped.y * 0.011);
-    let wake = saturate(length(displacement) / 20.0);
 
     let base = vec3<f32>(0.002, 0.010, 0.032);
     let grid = vec3<f32>(0.025, 0.18, 0.54) * (points + lines) * shimmer;
-    let foam = vec3<f32>(0.07, 0.38, 0.78) * wake * (0.15 + points * 0.35);
-    var color = vec4<f32>(base + grid + foam, board_mask * saturate(0.10 + points * 0.45 + lines + wake * 0.22));
+    var color = vec4<f32>(base + grid, board_mask * saturate(0.10 + points * 0.45 + lines));
 
 #ifdef TONEMAP_IN_SHADER
     color = tonemapping::tone_mapping(color, view.color_grading);

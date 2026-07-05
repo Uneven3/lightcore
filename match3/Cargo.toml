@@ -19,7 +19,8 @@ theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 
 [package.metadata.android.application.activity]
 orientation = "portrait"
-launch_mode = "singleTop"
+launch_mode = "singleTask"
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode"
 exported = true
 
 [dependencies]

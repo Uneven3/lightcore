@@ -13,9 +13,10 @@ pub(crate) fn breath_factor(elapsed: f32, phase: f32) -> f32 {
     BREATH_MIN + (BREATH_MAX - BREATH_MIN) * (0.5 + 0.5 * (elapsed * freq + phase).sin())
 }
 
-/// Normalized breath in `[0, 1]` (trough→crest), for driving size in sync with brightness.
-pub(crate) fn breath_norm(elapsed: f32, phase: f32) -> f32 {
-    (breath_factor(elapsed, phase) - BREATH_MIN) / (BREATH_MAX - BREATH_MIN)
+pub(crate) fn breath_factor_and_norm(elapsed: f32, phase: f32) -> (f32, f32) {
+    let freq = TAU / BREATH_PERIOD_SECS;
+    let norm = 0.5 + 0.5 * (elapsed * freq + phase).sin();
+    (BREATH_MIN + (BREATH_MAX - BREATH_MIN) * norm, norm)
 }
 
 /// The breath phase of a light, stored on the `Light` entity so its `LightCore`(s) and its glow
@@ -29,7 +30,7 @@ pub(crate) struct BreathPhase(pub(crate) f32);
 /// per-entity `ColorMaterial` lets every core batch into one draw call.
 #[derive(Component)]
 pub(crate) struct Breathing {
-    pub(crate) base: Color,
+    pub(crate) base: Srgba,
     pub(crate) phase: f32, // randomized per-light so cores don't all pulse in lockstep
 }
 
@@ -48,7 +49,7 @@ pub(crate) fn breathe(time: Res<Time>, mut q: Query<(&mut Sprite, &Breathing)>) 
             green,
             blue,
             alpha,
-        } = breathing.base.to_srgba();
+        } = breathing.base;
         sprite.color = Color::srgb(red * factor, green * factor, blue * factor).with_alpha(alpha);
     }
 }

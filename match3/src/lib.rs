@@ -5,6 +5,7 @@ use bevy::prelude::bevy_main;
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 
+#[cfg(not(target_os = "android"))]
 pub(crate) mod audio;
 pub(crate) mod board;
 pub(crate) mod core;
@@ -31,7 +32,12 @@ impl Plugin for GamePlugin {
             core::campaign::CampaignPlugin,
             platform::PlatformPlugin,
             input::InputPlugin,
-            audio::AudioPlugin,
+        ));
+        #[cfg(not(target_os = "android"))]
+        app.add_plugins(audio::AudioPlugin);
+        #[cfg(target_os = "android")]
+        warn!("Android audio disabled: Bevy/cpal AAudio aborts on this test device at startup");
+        app.add_plugins((
             ui::UiPlugin,
             visuals::VisualsPlugin,
             gameplay::GameplayPlugin,
@@ -64,8 +70,8 @@ pub fn run_game() {
         _ if std::env::var("MATCH3_NOVSYNC").is_ok() => PresentMode::AutoNoVsync,
         _ => PresentMode::Mailbox,
     };
-    // Diagnóstico: MATCH3_RES=1920x1080 arranca a esa resolución (para medir el coste de fillrate de
-    // HDR+Bloom a resolución alta, como cuando maximizas). En uso normal arranca a 1280x720.
+    // Diagnóstico: MATCH3_RES=1920x1080 arranca a esa resolución para medir coste de fillrate a
+    // resolución alta, como cuando maximizas. En uso normal arranca a 1280x720.
     let (rw, rh) = std::env::var("MATCH3_RES")
         .ok()
         .and_then(|s| {
@@ -74,25 +80,30 @@ pub fn run_game() {
         })
         .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
         .unwrap_or((1280u32, 720u32));
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                // Configure the primary window up front so fullscreen/resolution toggling from the
-                // Options screen has a known starting point (it mutates this same `Window`).
-                primary_window: Some(Window {
-                    title: "Lightcore".into(),
-                    // NOTA: ya NO forzamos scale_factor 1.0. El RTT (visuals/render_target.rs) desacopla
-                    // el coste del bloom del tamaño de ventana —el mundo se rasteriza siempre a la
-                    // resolución interna fija—, así que la ventana puede ir a su densidad NATIVA (Retina
-                    // incluido) y el HUD/texto sale nítido sin penalizar los FPS. Esta resolución es solo
-                    // el tamaño LÓGICO inicial de la ventana; el coste de render lo gobierna RenderScale.
-                    resolution: WindowResolution::new(rw, rh),
-                    present_mode,
-                    ..default()
-                }),
+    let default_plugins = DefaultPlugins
+        .set(WindowPlugin {
+            // Configure the primary window up front so fullscreen/resolution toggling from the
+            // Options screen has a known starting point (it mutates this same `Window`).
+            primary_window: Some(Window {
+                title: "Lightcore".into(),
+                // No forzamos scale_factor 1.0: dejamos que la ventana use la densidad nativa
+                // del sistema para que el HUD/texto salgan nítidos. Esta resolución es solo el
+                // tamaño lógico inicial de la ventana.
+                resolution: WindowResolution::new(rw, rh),
+                present_mode,
                 ..default()
             }),
-            GamePlugin,
-        ))
-        .run();
+            ..default()
+        })
+        .disable::<bevy::animation::AnimationPlugin>()
+        .disable::<bevy::gizmos::GizmoPlugin>()
+        .disable::<bevy::gizmos_render::GizmoRenderPlugin>()
+        .disable::<bevy::gltf::GltfPlugin>()
+        .disable::<bevy::pbr::PbrPlugin>();
+    #[cfg(target_os = "android")]
+    let default_plugins = default_plugins
+        .disable::<bevy::audio::AudioPlugin>()
+        .disable::<bevy::gilrs::GilrsPlugin>();
+
+    App::new().add_plugins((default_plugins, GamePlugin)).run();
 }

@@ -66,8 +66,12 @@ pub(crate) fn lerp_visual_pos(
             }
             TILE * 10.0
         };
-        vpos.0 = vpos.0.move_towards(to_world(*gpos), speed * dt);
-        if fall_speed.is_some() && vpos.0.distance(to_world(*gpos)) < 0.01 {
+        let target = to_world(*gpos);
+        let next = vpos.0.move_towards(target, speed * dt);
+        if next.distance_squared(vpos.0) > 0.000001 {
+            vpos.0 = next;
+        }
+        if fall_speed.is_some() && vpos.0.distance(target) < 0.01 {
             commands.entity(entity).remove::<FallSpeed>();
         }
     }
@@ -127,7 +131,10 @@ pub(crate) fn update_drag_constrained(
 }
 
 pub(crate) fn sync_transforms(
-    mut q: Query<(&VisualPos, &mut Transform), (With<FallPhysics>, Without<PopAnim>)>,
+    mut q: Query<
+        (&VisualPos, &mut Transform),
+        (Changed<VisualPos>, With<FallPhysics>, Without<PopAnim>),
+    >,
 ) {
     for (vpos, mut t) in &mut q {
         t.translation = vpos.0;

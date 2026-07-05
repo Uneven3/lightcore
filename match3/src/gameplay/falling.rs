@@ -210,7 +210,7 @@ pub(crate) fn apply_gravity(
             continue;
         }
 
-        if let Some(target) = straight_fall_target(*pos, &occupied, &shadow_set) {
+        if let Some(target) = straight_fall_target(*pos, &occupied, shadow_set) {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
             entities.get_mut(*e).unwrap().1.set_if_neq(target);
@@ -222,7 +222,7 @@ pub(crate) fn apply_gravity(
     }
 
     for (e, pos, is_spark) in blocked_for_diagonal {
-        if let Some(target) = straight_fall_target(pos, &occupied, &shadow_set) {
+        if let Some(target) = straight_fall_target(pos, &occupied, shadow_set) {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
             entities.get_mut(e).unwrap().1.set_if_neq(target);
@@ -231,7 +231,7 @@ pub(crate) fn apply_gravity(
         } else if let Some(target) = if is_spark {
             None
         } else {
-            diagonal_fall_target(pos, &occupied, &shadow_set)
+            diagonal_fall_target(pos, &occupied, shadow_set)
         } {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));

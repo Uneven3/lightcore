@@ -2,7 +2,6 @@ use bevy::prelude::*;
 
 use crate::visuals::grid_water::GridWaterSettings;
 use crate::visuals::particles::ParticleSettings;
-use crate::visuals::render_target::RenderScale;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,13 +63,11 @@ fn detect_platform(mut commands: Commands, _window: Single<&Window>) {
 
 fn apply_platform_defaults(
     profile: Res<PlatformProfile>,
-    mut render_scale: ResMut<RenderScale>,
     mut particles: ResMut<ParticleSettings>,
     mut grid_water: ResMut<GridWaterSettings>,
 ) {
     match profile.performance_tier {
         PerfTier::Low => {
-            render_scale.internal_height = 720;
             particles.trail_particle_count = 2;
             #[cfg(target_os = "android")]
             {
@@ -82,12 +79,10 @@ fn apply_platform_defaults(
             }
         }
         PerfTier::Medium => {
-            render_scale.internal_height = 900;
             particles.trail_particle_count = 4;
             grid_water.enabled = true;
         }
         PerfTier::High => {
-            render_scale.internal_height = 1080;
             particles.trail_particle_count = 6;
             grid_water.enabled = true;
         }

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::core::grid::RaySettings;
+use crate::state::GameState;
 
 pub(crate) mod assets;
 pub(crate) mod bounce;
@@ -29,7 +30,6 @@ impl Plugin for VisualsPlugin {
             .init_resource::<glow::GlowSettings>()
             .init_resource::<grid_water::GridWaterSettings>()
             .init_resource::<particles::ParticleSettings>()
-            .init_resource::<render_target::RenderScale>()
             .init_resource::<RaySettings>()
             .init_resource::<score_light::ShardSettings>()
             .insert_resource(ClearColor(Color::srgb(0.012, 0.012, 0.022))) // near-black space
@@ -49,54 +49,72 @@ impl Plugin for VisualsPlugin {
             .add_systems(
                 Update,
                 (
-                    score_light::tick_score_light,
-                    score_light::tick_score_shard_scatter,
-                    score_light::tick_score_shard_absorb,
+                    score_light::tick_score_light
+                        .run_if(any_with_component::<score_light::ScoreShard>),
+                    score_light::tick_score_shard_scatter
+                        .run_if(any_with_component::<score_light::ScoreShardScatter>),
+                    score_light::tick_score_shard_absorb
+                        .run_if(any_with_component::<score_light::ScoreShardAbsorb>),
                     glow::attach_glow_pools,
                     glow::flicker,
                     core_motion::rebuild_cores,
                     core_motion::animate_cores,
-                    core_motion::animate_hollow_flow,
-                    core_motion::animate_hollow_material,
+                    core_motion::animate_hollow_flow
+                        .run_if(any_with_component::<core_motion::HollowFlowParticle>),
+                    core_motion::animate_hollow_material
+                        .run_if(any_with_component::<core_motion::HollowFlowParticle>),
                 ),
             )
             .add_systems(
                 Update,
-                (
-                    motion::lerp_visual_pos,
-                    bounce::detect_landing,
-                    motion::update_drag_constrained,
-                    motion::sync_transforms,
-                )
+                (motion::lerp_visual_pos, bounce::detect_landing)
                     .chain()
-                    .run_if(not(in_state(crate::state::GameState::GameOver))),
+                    .run_if(
+                        in_state(GameState::Falling)
+                            .or_else(in_state(GameState::Spawning))
+                            .or_else(in_state(GameState::SwapAnimating)),
+                    ),
+            )
+            .add_systems(
+                Update,
+                motion::update_drag_constrained.run_if(in_state(GameState::Playing)),
+            )
+            .add_systems(
+                Update,
+                motion::sync_transforms
+                    .after(motion::lerp_visual_pos)
+                    .after(motion::update_drag_constrained)
+                    .run_if(not(in_state(GameState::GameOver))),
             )
             .add_systems(
                 Update,
                 (
-                    effects::tick_effect_anim,
-                    bounce::tick_land_bounce,
-                    particles::tick_particles,
-                    light_trail::tick_laser_bolt,
-                    light_trail::tick_traveling_light,
+                    effects::tick_effect_anim.run_if(any_with_component::<EffectAnim>),
+                    bounce::tick_land_bounce.run_if(any_with_component::<bounce::LandBounce>),
+                    particles::tick_particles.run_if(any_with_component::<particles::Particle>),
+                    light_trail::tick_laser_bolt
+                        .run_if(any_with_component::<light_trail::LaserBolt>),
+                    light_trail::tick_traveling_light
+                        .run_if(any_with_component::<light_trail::TravelingLight>),
                     breathing::breathe,
-                    breathing::pulse_spark_nucleus,
+                    breathing::pulse_spark_nucleus
+                        .run_if(any_with_component::<breathing::SparkNucleusPulse>),
                     core_motion::despawn_cores_on_pop,
                     hard_shadow::update_hard_shadow_label,
                 )
-                    .run_if(not(in_state(crate::state::GameState::GameOver))),
+                    .run_if(not(in_state(GameState::GameOver))),
             )
             .add_systems(
                 Update,
-                camera::apply_camera_shake.run_if(not(in_state(crate::state::GameState::GameOver))),
+                camera::apply_camera_shake.run_if(not(in_state(GameState::GameOver))),
             )
             .add_systems(
                 Update,
                 (
                     particles::sync_particle_mesh_settings
                         .run_if(resource_changed::<particles::ParticleSettings>),
-                    // Mantiene el lienzo interno al aspecto de la ventana (y a la resolución interna
-                    // elegida). Auto-gateado por un Local; solo actúa cuando algo cambia.
+                    // Keeps desktop/mobile camera viewports aligned with the window. Auto-gated by
+                    // a Local; it only acts when the window or device mode changes.
                     render_target::fit_canvas,
                 ),
             );
