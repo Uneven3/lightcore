@@ -99,6 +99,7 @@ pub fn run_game() {
         .disable::<bevy::gizmos::GizmoPlugin>()
         .disable::<bevy::gizmos_render::GizmoRenderPlugin>()
         .disable::<bevy::gltf::GltfPlugin>()
+        .disable::<bevy::light::LightPlugin>()
         .disable::<bevy::pbr::PbrPlugin>();
     #[cfg(target_os = "android")]
     let default_plugins = default_plugins
