@@ -696,6 +696,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
             },
             BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.28)),
             BackgroundColor(Color::srgba(0.05, 0.08, 0.13, 0.94)),
+            Visibility::Hidden,
         ))
         .with_children(|bar| {
             bar.spawn((
@@ -932,9 +933,9 @@ fn spawn_shop_active_badge(commands: &mut Commands, parent: Entity) {
     commands.entity(parent).add_child(badge);
 }
 
-/// The in-match HUD entities (spawned once at `Startup`) are hidden while the main menu is up and
-/// shown again when a match begins, so "Nivel 1 / Moves / Meta" don't sit behind the menu.
-type HudFilter = Or<(
+/// The in-match HUD entities (spawned once at `Startup`) are hidden while the main menu is up so
+/// "Nivel 1 / Moves / Meta" don't sit behind the menu.
+type HideHudFilter = Or<(
     With<ScoreText>,
     With<MovesText>,
     With<GoalText>,
@@ -952,13 +953,27 @@ type HudFilter = Or<(
     With<HudRoot>,
 )>;
 
-fn hide_hud(mut q: Query<&mut Visibility, HudFilter>) {
+/// Static HUD pieces that should become visible automatically when entering a match.
+/// Stateful drawers/popups/badges stay out of this list; their own systems decide visibility.
+type ShowHudFilter = Or<(
+    With<ScoreText>,
+    With<MovesText>,
+    With<GoalText>,
+    With<LivesText>,
+    With<PauseButton>,
+    With<ShopToggleButton>,
+    With<StatsButton>,
+    With<BoonIndicatorBar>,
+    With<HudRoot>,
+)>;
+
+fn hide_hud(mut q: Query<&mut Visibility, HideHudFilter>) {
     for mut v in &mut q {
         *v = Visibility::Hidden;
     }
 }
 
-fn show_hud(mut q: Query<&mut Visibility, HudFilter>) {
+fn show_hud(mut q: Query<&mut Visibility, ShowHudFilter>) {
     for mut v in &mut q {
         *v = Visibility::Visible;
     }
