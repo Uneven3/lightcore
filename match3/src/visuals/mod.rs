@@ -44,7 +44,6 @@ impl Plugin for VisualsPlugin {
             .add_plugins(grid_water::GridWaterPlugin)
             .add_systems(PreStartup, assets::build_cache)
             .add_systems(PreUpdate, camera::record_frame_start)
-            .add_systems(Update, camera::toggle_slow_mo)
             .add_systems(Last, camera::cap_framerate)
             .add_systems(Startup, camera::setup_camera)
             .add_systems(
@@ -101,6 +100,9 @@ impl Plugin for VisualsPlugin {
                     render_target::fit_canvas,
                 ),
             );
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        app.add_systems(Update, camera::toggle_slow_mo);
     }
 }
 

@@ -113,6 +113,7 @@ pub(crate) fn setup_camera(mut commands: Commands) {
     render_target::spawn_blit(&mut commands);
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn toggle_slow_mo(
     keys: Res<ButtonInput<KeyCode>>,
     mut virtual_time: ResMut<Time<Virtual>>,

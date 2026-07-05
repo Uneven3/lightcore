@@ -11,9 +11,11 @@ use crate::board::{
     spawn_light, spawn_shadow, spawn_sparks,
 };
 use crate::core::campaign::CampaignProgress;
+use crate::core::locale::{Language, TrKey};
 use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RUN_LEVELS, RunState};
 use crate::input::InputActions;
+use crate::menu::options::WindowSettings;
 use crate::state::GameState;
 use crate::visuals::EffectAnim;
 use crate::visuals::assets::VisualCache;
@@ -383,16 +385,19 @@ pub(crate) fn show_level_complete(
     collected_cores: Res<CollectedCores>,
     stats: Res<StatsBook>,
     mut reward: ResMut<LevelRewardOffer>,
+    settings: Res<WindowSettings>,
 ) {
+    let lang = settings.language;
     let title = if *mode == GameMode::ConsumeAll {
-        "Tablero Consumido!"
+        lang.tr(TrKey::BoardConsumedTitle)
     } else {
-        "Nivel Completado!"
+        lang.tr(TrKey::LevelCompleteTitle)
     };
 
     let mut reward_offer = Vec::new();
     let details = if *mode == GameMode::ConsumeAll {
-        format!("Lightcores capturados: {}", score.0)
+        lang.tr(TrKey::LightcoresCaptured)
+            .replace("{}", &score.0.to_string())
     } else {
         let unlock = progress.record_score(level.level, score.0);
         if mode.is_run() {
@@ -402,9 +407,10 @@ pub(crate) fn show_level_complete(
             }
         }
         format!(
-            "Lightcores capturados: {}\n{}",
-            score.0,
-            level_complete_meta(&unlock)
+            "{}\n{}",
+            lang.tr(TrKey::LightcoresCaptured)
+                .replace("{}", &score.0.to_string()),
+            level_complete_meta(&unlock, lang)
         )
     };
     reward.reset(reward_offer.clone());
@@ -487,104 +493,137 @@ pub(crate) fn show_level_complete(
                     },))
                         .with_children(|summary| {
                             summary.spawn((
-                                Text::new("Resumen de partida:"),
+                                Text::new(lang.tr(TrKey::MatchSummary)),
                                 TextFont {
                                     font_size: FontSize::Px(13.0),
                                     ..default()
                                 },
                                 TextColor(Color::srgb(0.65, 0.85, 1.0)),
                             ));
-                            summary.spawn((Node {
-                                flex_direction: FlexDirection::Row,
-                                flex_wrap: FlexWrap::Wrap,
-                                justify_content: JustifyContent::Center,
-                                column_gap: Val::Px(12.0),
-                                row_gap: Val::Px(4.0),
-                                ..default()
-                            },))
-                            .with_children(|grid| {
-                                if stats.reds > 0 {
+                            summary
+                                .spawn((Node {
+                                    flex_direction: FlexDirection::Row,
+                                    flex_wrap: FlexWrap::Wrap,
+                                    justify_content: JustifyContent::Center,
+                                    column_gap: Val::Px(12.0),
+                                    row_gap: Val::Px(4.0),
+                                    ..default()
+                                },))
+                                .with_children(|grid| {
+                                    if stats.reds > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsRed),
+                                                stats.reds
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
+                                    if stats.greens > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsGreen),
+                                                stats.greens
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
+                                    if stats.blues > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsBlue),
+                                                stats.blues
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
+                                    if stats.yellows > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsYellow),
+                                                stats.yellows
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
+                                    if stats.purples > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsPurple),
+                                                stats.purples
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
+                                    if stats.lightkinds > 0 {
+                                        grid.spawn((
+                                            Text::new(format!(
+                                                "{}: {}",
+                                                lang.tr(TrKey::StatsSparks),
+                                                stats.lightkinds
+                                            )),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                                        ));
+                                    }
                                     grid.spawn((
-                                        Text::new(format!("Rojos: {}", stats.reds)),
+                                        Text::new(format!(
+                                            "{}: {}",
+                                            lang.tr(TrKey::StatsMaxCombo),
+                                            stats.max_cascade
+                                        )),
                                         TextFont {
                                             font_size: FontSize::Px(12.0),
                                             ..default()
                                         },
                                         TextColor(Color::srgb(0.9, 0.9, 0.9)),
                                     ));
-                                }
-                                if stats.greens > 0 {
                                     grid.spawn((
-                                        Text::new(format!("Verdes: {}", stats.greens)),
+                                        Text::new(format!(
+                                            "{}: {}",
+                                            lang.tr(TrKey::StatsChains),
+                                            stats.total_chains
+                                        )),
                                         TextFont {
                                             font_size: FontSize::Px(12.0),
                                             ..default()
                                         },
                                         TextColor(Color::srgb(0.9, 0.9, 0.9)),
                                     ));
-                                }
-                                if stats.blues > 0 {
-                                    grid.spawn((
-                                        Text::new(format!("Azules: {}", stats.blues)),
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                    ));
-                                }
-                                if stats.yellows > 0 {
-                                    grid.spawn((
-                                        Text::new(format!("Amarillos: {}", stats.yellows)),
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                    ));
-                                }
-                                if stats.purples > 0 {
-                                    grid.spawn((
-                                        Text::new(format!("Morados: {}", stats.purples)),
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                    ));
-                                }
-                                if stats.lightkinds > 0 {
-                                    grid.spawn((
-                                        Text::new(format!("Chispas: {}", stats.lightkinds)),
-                                        TextFont {
-                                            font_size: FontSize::Px(12.0),
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                    ));
-                                }
-                                grid.spawn((
-                                    Text::new(format!("Max Cascada: {}", stats.max_cascade)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                                grid.spawn((
-                                    Text::new(format!("Cadenas: {}", stats.total_chains)),
-                                    TextFont {
-                                        font_size: FontSize::Px(12.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                                ));
-                            });
+                                });
                         });
 
                     if !reward_offer.is_empty() {
                         card.spawn((
-                            Text::new("Elige 1 modificador"),
+                            Text::new(lang.tr(TrKey::ChooseOneModifier)),
                             TextFont {
                                 font_size: FontSize::Px(13.0),
                                 ..default()
@@ -602,7 +641,10 @@ pub(crate) fn show_level_complete(
                                     list.spawn((
                                         Button,
                                         LevelRewardButton(boon),
-                                        crate::ui::get_item_tooltip(crate::gameplay::shop::ShopItem::Boon(boon)),
+                                        crate::ui::get_item_tooltip(
+                                            crate::gameplay::shop::ShopItem::Boon(boon),
+                                            lang,
+                                        ),
                                         Node {
                                             width: Val::Percent(100.0),
                                             min_height: Val::Px(50.0),
@@ -618,7 +660,7 @@ pub(crate) fn show_level_complete(
                                     ))
                                     .with_children(|button| {
                                         button.spawn((
-                                            Text::new(boon.label()),
+                                            Text::new(boon.label(lang)),
                                             TextFont {
                                                 font_size: FontSize::Px(16.0),
                                                 ..default()
@@ -626,7 +668,7 @@ pub(crate) fn show_level_complete(
                                             TextColor(Color::WHITE),
                                         ));
                                         button.spawn((
-                                            Text::new(boon.status_label()),
+                                            Text::new(boon.status_label(lang)),
                                             TextFont {
                                                 font_size: FontSize::Px(11.0),
                                                 ..default()
@@ -641,9 +683,9 @@ pub(crate) fn show_level_complete(
                     card.spawn((
                         LevelRewardInstructionText,
                         Text::new(if reward_offer.is_empty() {
-                            "[Click/Tap o Espacio] para continuar"
+                            lang.tr(TrKey::BoonContinueInstruction)
                         } else {
-                            "Selecciona un boon para seguir"
+                            lang.tr(TrKey::BoonSelectInstruction)
                         }),
                         TextFont {
                             font_size: FontSize::Px(12.0),
@@ -657,12 +699,12 @@ pub(crate) fn show_level_complete(
 
 pub(crate) fn level_reward_button_system(
     mut reward: ResMut<LevelRewardOffer>,
-    mut run: ResMut<RunState>,
     interactions: Query<(&Interaction, &LevelRewardButton), Changed<Interaction>>,
     mut buttons: Query<(&LevelRewardButton, &mut BackgroundColor, &mut BorderColor)>,
     mut instruction: Query<&mut Text, With<LevelRewardInstructionText>>,
+    settings: Res<WindowSettings>,
 ) {
-    if !reward.active() || reward.selected.is_some() {
+    if !reward.active() {
         return;
     }
 
@@ -677,12 +719,13 @@ pub(crate) fn level_reward_button_system(
     let Some(boon) = picked else {
         return;
     };
-    if !reward.offered.contains(&boon) || !run.grant(boon) {
+    if !reward.offered.contains(&boon) {
         return;
     }
 
+    let already_selected = reward.selected == Some(boon);
     reward.selected = Some(boon);
-    reward.just_selected = true;
+    reward.just_selected = !already_selected;
     for (button, mut bg, mut border) in &mut buttons {
         if button.0 == boon {
             bg.0 = Color::srgba(0.28, 0.21, 0.05, 0.96);
@@ -693,7 +736,10 @@ pub(crate) fn level_reward_button_system(
         }
     }
     for mut text in &mut instruction {
-        text.0 = "Listo · Click/Tap o Espacio".to_string();
+        text.0 = settings
+            .language
+            .tr(TrKey::BoonContinueInstruction)
+            .to_string();
     }
 }
 
@@ -728,13 +774,17 @@ fn reset_for_replay(replay_level: LevelConfig, level: &mut LevelConfig, res: &mu
     res.popup_open.0 = false;
 }
 
-fn level_complete_meta(unlock: &crate::core::campaign::CampaignUnlockResult) -> String {
+fn level_complete_meta(
+    unlock: &crate::core::campaign::CampaignUnlockResult,
+    lang: Language,
+) -> String {
     if let Some(next_level) = unlock.unlocked_next {
-        format!("Nivel {:02} desbloqueado", next_level)
+        lang.tr(TrKey::LevelUnlocked)
+            .replace("{:02}", &format!("{:02}", next_level))
     } else if unlock.new_best {
-        "Nuevo mejor score registrado".to_string()
+        lang.tr(TrKey::NewHighScore).to_string()
     } else {
-        "Nivel ya completado".to_string()
+        lang.tr(TrKey::LevelAlreadyCompleted).to_string()
     }
 }
 
@@ -742,6 +792,7 @@ pub(crate) fn handle_level_advance(
     actions: Res<InputActions>,
     mode: Res<GameMode>,
     mut reward: ResMut<LevelRewardOffer>,
+    mut run: ResMut<RunState>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if !actions.confirm {
@@ -754,6 +805,12 @@ pub(crate) fn handle_level_advance(
         }
         if reward.just_selected {
             reward.just_selected = false;
+            return;
+        }
+        let Some(boon) = reward.selected else {
+            return;
+        };
+        if !run.grant(boon) {
             return;
         }
     }

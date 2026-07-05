@@ -17,6 +17,7 @@
 use bevy::prelude::*;
 
 use super::{CascadeDepth, ChainPop, CoreReserve, CoresSpent, PendingSwap, PowerCreated, SwapData};
+use crate::core::locale::{Language, TrKey};
 use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::input::pointer::PointerInput;
@@ -38,17 +39,11 @@ pub(crate) enum ShopItem {
 
 impl ShopItem {
     /// Bar order (left→right), also used to spawn the buttons.
-    pub(crate) const ALL: [ShopItem; 10] = [
+    pub(crate) const ALL: [ShopItem; 4] = [
         ShopItem::Swap,
         ShopItem::Eliminate,
         ShopItem::Upgrade,
         ShopItem::Life,
-        ShopItem::Boon(BoonKind::RedValue),
-        ShopItem::Boon(BoonKind::GreenReserve),
-        ShopItem::Boon(BoonKind::BlueMoves),
-        ShopItem::Boon(BoonKind::SparkBounty),
-        ShopItem::Boon(BoonKind::PowerBounty),
-        ShopItem::Boon(BoonKind::HollowWard),
     ];
 
     pub(crate) fn cost(self, run: &RunState) -> Option<u32> {
@@ -61,23 +56,23 @@ impl ShopItem {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self, lang: Language) -> &'static str {
         match self {
-            ShopItem::Swap => "Cambiar",
-            ShopItem::Eliminate => "Eliminar",
-            ShopItem::Upgrade => "Subir tier",
-            ShopItem::Life => "+1 Vida",
-            ShopItem::Boon(boon) => boon.label(),
+            ShopItem::Swap => lang.tr(TrKey::ShopSwap),
+            ShopItem::Eliminate => lang.tr(TrKey::ShopEliminate),
+            ShopItem::Upgrade => lang.tr(TrKey::ShopUpgrade),
+            ShopItem::Life => lang.tr(TrKey::ShopLife),
+            ShopItem::Boon(boon) => boon.label(lang),
         }
     }
 
-    pub(crate) fn status_label(self) -> &'static str {
+    pub(crate) fn status_label(self, lang: Language) -> &'static str {
         match self {
-            ShopItem::Swap => "Reposiciona 2 luces",
-            ShopItem::Eliminate => "Rompe 1 luz",
-            ShopItem::Upgrade => "Eleva 1 tier",
-            ShopItem::Life => "Compra 1 vida extra",
-            ShopItem::Boon(boon) => boon.status_label(),
+            ShopItem::Swap => lang.tr(TrKey::ShopSwapStatus),
+            ShopItem::Eliminate => lang.tr(TrKey::ShopEliminateStatus),
+            ShopItem::Upgrade => lang.tr(TrKey::ShopUpgradeStatus),
+            ShopItem::Life => lang.tr(TrKey::ShopLifeStatus),
+            ShopItem::Boon(boon) => boon.status_label(lang),
         }
     }
 
@@ -92,6 +87,7 @@ impl ShopItem {
 pub(crate) struct Shop {
     armed: Option<ShopItem>,
     first_pick: Option<Entity>,
+    ignore_board_press: bool,
     pub(crate) open: bool,
 }
 
@@ -110,13 +106,15 @@ impl Shop {
         self.first_pick.is_some()
     }
 
-    pub(crate) fn active_badge_text(&self) -> Option<String> {
+    pub(crate) fn active_badge_text(&self, lang: Language) -> Option<String> {
         let item = self.armed?;
         Some(match item {
-            ShopItem::Swap if self.first_pick.is_some() => "Cambiar activo 1/2".to_string(),
-            ShopItem::Swap => "Cambiar activo".to_string(),
-            ShopItem::Eliminate => "Eliminar activo".to_string(),
-            ShopItem::Upgrade => "Subir tier activo".to_string(),
+            ShopItem::Swap if self.first_pick.is_some() => {
+                lang.tr(TrKey::ArmedSwap1of2).to_string()
+            }
+            ShopItem::Swap => lang.tr(TrKey::ArmedSwap).to_string(),
+            ShopItem::Eliminate => lang.tr(TrKey::ArmedEliminate).to_string(),
+            ShopItem::Upgrade => lang.tr(TrKey::ArmedUpgrade).to_string(),
             ShopItem::Life => return None,
             ShopItem::Boon(_) => return None,
         })
@@ -161,7 +159,13 @@ fn clear_pick(commands: &mut Commands, shop: &mut Shop, selected: &Query<Entity,
 
 fn disarm(commands: &mut Commands, shop: &mut Shop, selected: &Query<Entity, With<Selected>>) {
     shop.armed = None;
+    shop.ignore_board_press = false;
     clear_pick(commands, shop, selected);
+}
+
+fn arm(shop: &mut Shop, item: ShopItem, pointer: &PointerInput) {
+    shop.armed = Some(item);
+    shop.ignore_board_press = pointer.just_pressed;
 }
 
 /// Arms / disarms a booster when its bar button is clicked. Doesn't charge — payment happens when
@@ -172,6 +176,7 @@ pub(crate) fn shop_button_system(
     mut reserve: ResMut<CoreReserve>,
     mut spent: ResMut<CoresSpent>,
     mut run: ResMut<RunState>,
+    pointer: Res<PointerInput>,
     interactions: Query<(&Interaction, &ShopButton), Changed<Interaction>>,
     selected: Query<Entity, With<Selected>>,
 ) {
@@ -204,13 +209,21 @@ pub(crate) fn shop_button_system(
         if shop.armed == Some(item) {
             // Click the armed booster again to put it away.
             disarm(&mut commands, &mut shop, &selected);
+        } else if shop.is_armed() {
+            // A different booster is currently armed. Clear it first, then try to arm the new one.
+            disarm(&mut commands, &mut shop, &selected);
+            if reserve.0 >= cost {
+                clear_pick(&mut commands, &mut shop, &selected);
+                arm(&mut shop, item, &pointer);
+                shop.open = false;
+            }
         } else if reserve.0 >= cost {
-            // Arm / switch boosters — drop any leftover Swap pick first.
+            // No booster armed yet — arm this one.
             clear_pick(&mut commands, &mut shop, &selected);
-            shop.armed = Some(item);
+            arm(&mut shop, item, &pointer);
             shop.open = false; // Close drawer when armed!
         }
-        // Can't afford → ignore (the button is shown greyed by `update_shop_buttons`).
+        // Can't afford and nothing armed → ignore (the button is shown greyed by `update_shop_buttons`).
     }
 }
 
@@ -241,6 +254,11 @@ pub(crate) fn shop_targeting(
     };
 
     if !pointer.just_pressed {
+        return;
+    }
+
+    if shop.ignore_board_press {
+        shop.ignore_board_press = false;
         return;
     }
 

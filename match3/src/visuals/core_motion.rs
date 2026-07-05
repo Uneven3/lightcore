@@ -359,7 +359,11 @@ pub(crate) fn animate_hollow_material(
     let t = time.elapsed_secs();
     // Blink red slowly (slower frequency, less bright red warning)
     let blink = (t * 1.2).sin() * 0.5 + 0.5; // 0..1 oscillating
-    let color = Color::srgb(0.18 + 0.52 * blink, 0.02 + 0.04 * blink, 0.03 + 0.05 * blink);
+    let color = Color::srgb(
+        0.18 + 0.52 * blink,
+        0.02 + 0.04 * blink,
+        0.03 + 0.05 * blink,
+    );
     if let Some(mut mat) = color_materials.get_mut(&cache.hollow_mat) {
         mat.color = color;
     }

@@ -239,10 +239,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             sparks_total: 2,
             shadow_positions: vec![],
             hard_shadow_positions: vec![],
-            blocker_positions: vec![
-                GridPos { x: 1, y: 3 },
-                GridPos { x: 6, y: 3 },
-            ],
+            blocker_positions: vec![GridPos { x: 1, y: 3 }, GridPos { x: 6, y: 3 }],
             grade_baseline: 1000,
         },
         _ => make_level(1),

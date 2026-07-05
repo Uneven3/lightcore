@@ -7,6 +7,7 @@ use bevy::window::{MonitorSelection, WindowMode};
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
 use crate::core::grid::{RaySettings, TILE};
+use crate::core::locale::{Language, TrKey};
 use crate::input::InputActions;
 use crate::platform::PlatformProfile;
 use crate::state::GameState;
@@ -14,7 +15,6 @@ use crate::visuals::camera::{FpsTarget, ShakeSettings};
 use crate::visuals::glow::GlowSettings;
 use crate::visuals::grid_water::GridWaterSettings;
 use crate::visuals::particles::ParticleSettings;
-use crate::visuals::render_target::RenderScale;
 use crate::visuals::score_light::ShardSettings;
 
 /// Settings screen — glow, camera shake and particle parameters (otherwise hardcoded constants)
@@ -37,12 +37,14 @@ impl Plugin for OptionsPlugin {
                     apply_slider_values,
                     update_slider_value_labels,
                     fps_button_system,
+                    show_fps_button_system,
                     grid_water_button_system,
                     fullscreen_button_system,
-                    resolution_button_system,
                     device_button_system,
                     tutorial_button_system,
+                    language_button_system,
                     update_settings_labels,
+                    update_options_static_labels,
                     scroll_drag_system,
                 )
                     .run_if(in_state(GameState::Options)),
@@ -63,6 +65,12 @@ struct FpsButton;
 struct FpsLabel;
 
 #[derive(Component)]
+struct ShowFpsButton;
+
+#[derive(Component)]
+struct ShowFpsLabel;
+
+#[derive(Component)]
 struct GridWaterButton;
 
 #[derive(Component)]
@@ -71,18 +79,25 @@ struct GridWaterLabel;
 struct TutorialButton;
 #[derive(Component)]
 struct TutorialLabel;
+#[derive(Component)]
+struct LanguageButton;
+#[derive(Component)]
+struct LanguageLabel;
+
+#[derive(Component)]
+struct OptionsTitleLabel;
+
+#[derive(Component)]
+struct BackButtonLabel;
+
+#[derive(Component)]
+struct SliderLabel(SliderTarget);
 
 #[derive(Component)]
 struct FullscreenButton;
 
 #[derive(Component)]
-struct ResolutionButton;
-
-#[derive(Component)]
 struct FullscreenLabel;
-
-#[derive(Component)]
-struct ResolutionLabel;
 
 #[derive(Component)]
 struct DeviceButton;
@@ -93,9 +108,6 @@ struct DeviceLabel;
 /// Marker on the numeric `Text` shown to the right of each slider track.
 #[derive(Component, Clone, Copy)]
 struct SliderValueLabel(SliderTarget);
-
-/// Internal render-resolution presets (ALTURA en píxeles) the cycler steps through.
-const RES_PRESETS: [u32; 5] = [720, 900, 1080, 1440, 2160];
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub(crate) enum DeviceMode {
@@ -111,19 +123,22 @@ impl DeviceMode {
             Self::Mobile => Self::Desktop,
         }
     }
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Desktop => "Dispositivo: Escritorio",
-            Self::Mobile => "Dispositivo: Movil",
-        }
+    pub(crate) fn label(self, lang: Language) -> String {
+        let prefix = lang.tr(TrKey::DeviceLabel);
+        let mode = match self {
+            Self::Desktop => lang.tr(TrKey::DeviceDesktop),
+            Self::Mobile => lang.tr(TrKey::DeviceMobile),
+        };
+        format!("{}: {}", prefix, mode)
     }
 }
 
 #[derive(Resource)]
 pub(crate) struct WindowSettings {
-    pub(crate) res_index: usize,
     pub(crate) device_mode: DeviceMode,
     pub(crate) tutorial_enabled: bool,
+    pub(crate) show_fps_watermark: bool,
+    pub(crate) language: Language,
 }
 
 impl Default for WindowSettings {
@@ -134,9 +149,10 @@ impl Default for WindowSettings {
         let mode = DeviceMode::Desktop;
 
         Self {
-            res_index: 2,
             device_mode: mode,
             tutorial_enabled: true,
+            show_fps_watermark: true,
+            language: Language::default(),
         }
     }
 }
@@ -200,6 +216,7 @@ fn spawn_options(
         ))
         .with_children(|root| {
             root.spawn((
+                OptionsTitleLabel,
                 Text::new("Opciones"),
                 TextFont {
                     font_size: FontSize::Px(40.0),
@@ -224,6 +241,7 @@ fn spawn_options(
             ))
             .with_children(|b| {
                 b.spawn((
+                    BackButtonLabel,
                     Text::new("Volver"),
                     TextFont {
                         font_size: FontSize::Px(22.0),
@@ -233,41 +251,61 @@ fn spawn_options(
                 ));
             });
 
+            let mut button_index = 1;
             spawn_text_button(
                 root,
                 DeviceButton,
                 DeviceLabel,
-                1,
+                button_index,
                 "Dispositivo: Escritorio",
             );
-            spawn_text_button(
-                root,
-                ResolutionButton,
-                ResolutionLabel,
-                2,
-                "Resolucion interna: 1080p",
-            );
+            button_index += 1;
             if profile.show_desktop_options {
                 spawn_text_button(
                     root,
                     FullscreenButton,
                     FullscreenLabel,
-                    3,
+                    button_index,
                     "Fullscreen: OFF",
                 );
+                button_index += 1;
             }
-            spawn_text_button(root, FpsButton, FpsLabel, 4, fps_target.label());
-            spawn_text_button(root, GridWaterButton, GridWaterLabel, 5, "Grid agua: ON");
+            spawn_text_button(root, FpsButton, FpsLabel, button_index, fps_target.label());
+            button_index += 1;
+            spawn_text_button(
+                root,
+                ShowFpsButton,
+                ShowFpsLabel,
+                button_index,
+                "Mostrar FPS: ON",
+            );
+            button_index += 1;
+            spawn_text_button(
+                root,
+                GridWaterButton,
+                GridWaterLabel,
+                button_index,
+                "Grid agua: ON",
+            );
+            button_index += 1;
             spawn_text_button(
                 root,
                 TutorialButton,
                 TutorialLabel,
-                6,
+                button_index,
                 if settings.tutorial_enabled {
                     "Tutorial: ON"
                 } else {
                     "Tutorial: OFF"
                 },
+            );
+            button_index += 1;
+            spawn_text_button(
+                root,
+                LanguageButton,
+                LanguageLabel,
+                button_index,
+                settings.language.label(),
             );
 
             spawn_slider(
@@ -480,6 +518,7 @@ fn spawn_slider(
         })
         .with_children(|col| {
             col.spawn((
+                SliderLabel(target),
                 Text::new(label),
                 TextFont {
                     font_size: FontSize::Px(15.0),
@@ -688,6 +727,19 @@ fn grid_water_button_system(
     }
 }
 
+fn show_fps_button_system(
+    interactions: Query<(Entity, Ref<Interaction>), With<ShowFpsButton>>,
+    menu_activated: Res<MenuActivated>,
+    mut settings: ResMut<WindowSettings>,
+) {
+    if interactions
+        .iter()
+        .any(|(e, i)| activated(&i, e, &menu_activated))
+    {
+        settings.show_fps_watermark = !settings.show_fps_watermark;
+    }
+}
+
 fn tutorial_button_system(
     interactions: Query<(Entity, Ref<Interaction>), With<TutorialButton>>,
     menu_activated: Res<MenuActivated>,
@@ -702,24 +754,30 @@ fn tutorial_button_system(
         for mut t in &mut label {
             t.0 = format!(
                 "Tutorial: {}",
-                if settings.tutorial_enabled { "ON" } else { "OFF" }
+                if settings.tutorial_enabled {
+                    "ON"
+                } else {
+                    "OFF"
+                }
             );
         }
     }
 }
 
-fn resolution_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<ResolutionButton>>,
+fn language_button_system(
+    interactions: Query<(Entity, Ref<Interaction>), With<LanguageButton>>,
     menu_activated: Res<MenuActivated>,
     mut settings: ResMut<WindowSettings>,
-    mut render_scale: ResMut<RenderScale>,
+    mut label: Query<&mut Text, With<LanguageLabel>>,
 ) {
     if interactions
         .iter()
         .any(|(e, i)| activated(&i, e, &menu_activated))
     {
-        settings.res_index = (settings.res_index + 1) % RES_PRESETS.len();
-        render_scale.internal_height = RES_PRESETS[settings.res_index];
+        settings.language = settings.language.next();
+        for mut t in &mut label {
+            t.0 = settings.language.label().to_string();
+        }
     }
 }
 
@@ -727,7 +785,6 @@ fn device_button_system(
     interactions: Query<(Entity, Ref<Interaction>), With<DeviceButton>>,
     menu_activated: Res<MenuActivated>,
     mut settings: ResMut<WindowSettings>,
-    mut window: Single<&mut Window>,
 ) {
     if interactions
         .iter()
@@ -739,20 +796,6 @@ fn device_button_system(
             "Cambiando modo de dispositivo de {:?} a {:?}",
             prev, settings.device_mode
         );
-        match settings.device_mode {
-            DeviceMode::Mobile => {
-                window.set_maximized(false);
-                window.resolution.set(450.0, 800.0);
-                window.mode = WindowMode::Windowed;
-                info!("Ventana establecida a 450x800");
-            }
-            DeviceMode::Desktop => {
-                window.set_maximized(false);
-                window.resolution.set(1280.0, 720.0);
-                window.mode = WindowMode::Windowed;
-                info!("Ventana establecida a 1280x720");
-            }
-        }
     }
 }
 
@@ -765,17 +808,7 @@ fn update_settings_labels(
         &mut Text,
         (
             With<FullscreenLabel>,
-            Without<ResolutionLabel>,
-            Without<GridWaterLabel>,
-            Without<FpsLabel>,
-            Without<DeviceLabel>,
-        ),
-    >,
-    mut rs: Query<
-        &mut Text,
-        (
-            With<ResolutionLabel>,
-            Without<FullscreenLabel>,
+            Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<FpsLabel>,
             Without<DeviceLabel>,
@@ -786,7 +819,17 @@ fn update_settings_labels(
         (
             With<GridWaterLabel>,
             Without<FullscreenLabel>,
-            Without<ResolutionLabel>,
+            Without<ShowFpsLabel>,
+            Without<FpsLabel>,
+            Without<DeviceLabel>,
+        ),
+    >,
+    mut show_fps_q: Query<
+        &mut Text,
+        (
+            With<ShowFpsLabel>,
+            Without<FullscreenLabel>,
+            Without<GridWaterLabel>,
             Without<FpsLabel>,
             Without<DeviceLabel>,
         ),
@@ -796,7 +839,7 @@ fn update_settings_labels(
         (
             With<FpsLabel>,
             Without<FullscreenLabel>,
-            Without<ResolutionLabel>,
+            Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<DeviceLabel>,
         ),
@@ -806,31 +849,91 @@ fn update_settings_labels(
         (
             With<DeviceLabel>,
             Without<FullscreenLabel>,
-            Without<ResolutionLabel>,
+            Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<FpsLabel>,
         ),
     >,
 ) {
+    let lang = settings.language;
     let fs_on = !matches!(window.mode, WindowMode::Windowed);
     for mut t in &mut fs {
-        **t = format!("Fullscreen: {}", if fs_on { "ON" } else { "OFF" });
-    }
-    let h = RES_PRESETS[settings.res_index];
-    for mut t in &mut rs {
-        **t = format!("Resolucion interna: {h}p");
+        **t = format!(
+            "{}: {}",
+            lang.tr(TrKey::Fullscreen),
+            if fs_on { "ON" } else { "OFF" }
+        );
     }
     for mut t in &mut gw {
         **t = format!(
-            "Grid agua: {}",
+            "{}: {}",
+            lang.tr(TrKey::GridWater),
             if grid_water.enabled { "ON" } else { "OFF" }
+        );
+    }
+    for mut t in &mut show_fps_q {
+        **t = format!(
+            "Mostrar FPS: {}",
+            if settings.show_fps_watermark {
+                "ON"
+            } else {
+                "OFF"
+            }
         );
     }
     for mut t in &mut fps_q {
         **t = fps_target.label().to_string();
     }
     for mut t in &mut ds {
-        **t = settings.device_mode.label().to_string();
+        **t = settings.device_mode.label(lang);
+    }
+}
+
+fn get_slider_label_text(target: SliderTarget, lang: Language) -> &'static str {
+    match target {
+        SliderTarget::GlowBrightness => lang.tr(TrKey::SliderGlowBrightness),
+        SliderTarget::GlowOuterRadius => lang.tr(TrKey::SliderGlowOuterRadius),
+        SliderTarget::GlowOuterAlpha => lang.tr(TrKey::SliderGlowOuterAlpha),
+        SliderTarget::GlowInnerRadius => lang.tr(TrKey::SliderGlowInnerRadius),
+        SliderTarget::GlowInnerAlpha => lang.tr(TrKey::SliderGlowInnerAlpha),
+        SliderTarget::ShakeMaxOffset => lang.tr(TrKey::SliderShakeMaxOffset),
+        SliderTarget::ShakeDecayRate => lang.tr(TrKey::SliderShakeDecayRate),
+        SliderTarget::PopBurstCount => lang.tr(TrKey::SliderPopBurstCount),
+        SliderTarget::BurstRadius => lang.tr(TrKey::SliderBurstRadius),
+        SliderTarget::MembraneRadius => lang.tr(TrKey::SliderMembraneRadius),
+        SliderTarget::TrailParticleCount => lang.tr(TrKey::SliderTrailParticleCount),
+        SliderTarget::RaySpeed => lang.tr(TrKey::SliderRaySpeed),
+        SliderTarget::PopDuration => lang.tr(TrKey::SliderPopDuration),
+        SliderTarget::StarStagger => lang.tr(TrKey::SliderStarStagger),
+        SliderTarget::BoltWidth => lang.tr(TrKey::SliderBoltWidth),
+        SliderTarget::TrailDuration => lang.tr(TrKey::SliderTrailDuration),
+        SliderTarget::ShardMinSecs => lang.tr(TrKey::SliderShardMinSecs),
+        SliderTarget::ShardMaxSecs => lang.tr(TrKey::SliderShardMaxSecs),
+        SliderTarget::ShardBaseSize => lang.tr(TrKey::SliderShardBaseSize),
+        SliderTarget::ShardCurve => lang.tr(TrKey::SliderShardCurve),
+        SliderTarget::ShardHdrBoost => lang.tr(TrKey::SliderShardHdrBoost),
+        SliderTarget::Volume => lang.tr(TrKey::SliderVolume),
+    }
+}
+
+fn update_options_static_labels(
+    settings: Res<WindowSettings>,
+    mut title: Query<&mut Text, With<OptionsTitleLabel>>,
+    mut back: Query<&mut Text, (With<BackButtonLabel>, Without<OptionsTitleLabel>)>,
+    mut sliders: Query<
+        (&SliderLabel, &mut Text),
+        (Without<OptionsTitleLabel>, Without<BackButtonLabel>),
+    >,
+) {
+    let lang = settings.language;
+    for mut t in &mut title {
+        **t = lang.tr(TrKey::OptionsTitle).to_string();
+    }
+    for mut t in &mut back {
+        **t = lang.tr(TrKey::Back).to_string();
+    }
+    for (slider, mut t) in &mut sliders {
+        **t = get_slider_label_text(slider.0, lang).to_string();
     }
 }
 

@@ -13,8 +13,8 @@
 use bevy::prelude::*;
 
 /// Resolución interna de render (ALTURA en píxeles; el ancho se deriva del aspecto de la ventana para
-/// no distorsionar). Más alto = más nítido y más caro: es la palanca calidad↔FPS que expone la opción
-/// "Resolución" del menú. El coste del bloom escala con esto, NO con el tamaño de la ventana.
+/// no distorsionar). Más alto = más nítido y más caro; la plataforma fija este valor al iniciar.
+/// El coste del bloom escala con esto, NO con el tamaño de la ventana.
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct RenderScale {
     pub(crate) internal_height: u32,

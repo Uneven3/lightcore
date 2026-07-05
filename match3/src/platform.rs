@@ -67,24 +67,27 @@ fn apply_platform_defaults(
     mut render_scale: ResMut<RenderScale>,
     mut particles: ResMut<ParticleSettings>,
     mut grid_water: ResMut<GridWaterSettings>,
-    mut settings: ResMut<crate::menu::options::WindowSettings>,
 ) {
     match profile.performance_tier {
         PerfTier::Low => {
             render_scale.internal_height = 720;
-            settings.res_index = 0; // 720p
             particles.trail_particle_count = 2;
-            grid_water.enabled = false;
+            #[cfg(target_os = "android")]
+            {
+                grid_water.enabled = true;
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                grid_water.enabled = false;
+            }
         }
         PerfTier::Medium => {
             render_scale.internal_height = 900;
-            settings.res_index = 1; // 900p
             particles.trail_particle_count = 4;
             grid_water.enabled = true;
         }
         PerfTier::High => {
             render_scale.internal_height = 1080;
-            settings.res_index = 2; // 1080p
             particles.trail_particle_count = 6;
             grid_water.enabled = true;
         }

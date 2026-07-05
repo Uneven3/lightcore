@@ -5,6 +5,7 @@ use rand::{Rng, SeedableRng};
 
 use super::{BTN_HOVER, MenuFocus};
 use crate::core::campaign::CampaignProgress;
+use crate::core::locale::{Language, TrKey};
 use crate::core::run::{RUN_LEVELS, RunState};
 use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
 use crate::input::pointer::PointerInput;
@@ -497,7 +498,7 @@ fn spawn_level_menu(
                     .with_children(|button| {
                         button.spawn((
                             PlayButtonLabel,
-                            Text::new("Jugar"),
+                            Text::new(settings.language.tr(TrKey::Play)),
                             TextFont {
                                 font_size: FontSize::Px(22.0),
                                 ..default()
@@ -526,7 +527,7 @@ fn spawn_level_menu(
                     .with_children(|button| {
                         button.spawn((
                             RestartRunButtonLabel,
-                            Text::new("Reiniciar Run"),
+                            Text::new(settings.language.tr(TrKey::Restart)),
                             TextFont {
                                 font_size: FontSize::Px(22.0),
                                 ..default()
@@ -918,22 +919,38 @@ fn update_info_panel_system(
     map_state: Res<LevelMapState>,
     mut texts: Query<(&InfoTextKind, &mut Text)>,
 ) {
-    let entry = &MENU_ENTRIES[map_state.selected];
+    let lang = settings.language;
     let best = entry_best_score(map_state.selected, &progress);
     let unlocked = entry_is_unlocked(map_state.selected, &progress);
     let mut progress_line = if unlocked {
         if let Some(level) = entry_level(map_state.selected) {
             if best > 0 {
-                format!("Mejor score: {}  ·  {}", best, grade_summary(level, best))
+                if lang == Language::English {
+                    format!("Best score: {}  ·  {}", best, grade_summary(level, best))
+                } else {
+                    format!("Mejor score: {}  ·  {}", best, grade_summary(level, best))
+                }
             } else {
-                "Disponible para jugar".to_string()
+                if lang == Language::English {
+                    "Available to play".to_string()
+                } else {
+                    "Disponible para jugar".to_string()
+                }
             }
         } else {
-            "Modo especial · disponible siempre".to_string()
+            if lang == Language::English {
+                "Special mode · always available".to_string()
+            } else {
+                "Modo especial · disponible siempre".to_string()
+            }
         }
     } else {
         let prev = entry_level(map_state.selected.saturating_sub(1)).unwrap_or(1);
-        format!("Bloqueado · completa Nivel {:02} para desbloquear", prev)
+        if lang == Language::English {
+            format!("Locked · complete Level {:02} to unlock", prev)
+        } else {
+            format!("Bloqueado · completa Nivel {:02} para desbloquear", prev)
+        }
     };
     if run.active
         && matches!(
@@ -941,20 +958,41 @@ fn update_info_panel_system(
             MenuEntryKind::Campaign(_)
         )
     {
-        progress_line = format!(
-            "{progress_line}\nRun activo: Nivel {:02}",
-            run.depth.min(RUN_LEVELS)
-        );
+        if lang == Language::English {
+            progress_line = format!(
+                "{progress_line}\nActive run: Level {:02}",
+                run.depth.min(RUN_LEVELS)
+            );
+        } else {
+            progress_line = format!(
+                "{progress_line}\nRun activo: Nivel {:02}",
+                run.depth.min(RUN_LEVELS)
+            );
+        }
     }
     let hint = match settings.device_mode {
-        DeviceMode::Mobile => "Desliza el mapa · pellizca zoom".to_string(),
-        DeviceMode::Desktop => "Arrastra el mapa · rueda zoom".to_string(),
+        DeviceMode::Mobile => {
+            if lang == Language::English {
+                "Swipe the map · pinch to zoom".to_string()
+            } else {
+                "Desliza el mapa · pellizca zoom".to_string()
+            }
+        }
+        DeviceMode::Desktop => {
+            if lang == Language::English {
+                "Drag the map · scroll to zoom".to_string()
+            } else {
+                "Arrastra el mapa · rueda zoom".to_string()
+            }
+        }
     };
+
+    let (_, blurb) = entry_localized_title_blurb(map_state.selected, lang);
 
     for (kind, mut text) in &mut texts {
         **text = match kind {
-            InfoTextKind::Title => info_title_text(map_state.selected),
-            InfoTextKind::Objective => entry.blurb.to_string(),
+            InfoTextKind::Title => info_title_text(map_state.selected, lang),
+            InfoTextKind::Objective => blurb.clone(),
             InfoTextKind::Progress => progress_line.clone(),
             InfoTextKind::Hint => hint.clone(),
         };
@@ -990,19 +1028,25 @@ fn update_play_button_visuals_system(
 fn update_play_button_text_system(
     run: Res<RunState>,
     map_state: Res<LevelMapState>,
+    settings: Res<WindowSettings>,
     mut label: Query<&mut Text, With<PlayButtonLabel>>,
 ) {
     let Ok(mut text) = label.single_mut() else {
         return;
     };
+    let lang = settings.language;
     text.0 = if run.active
         && matches!(
             MENU_ENTRIES[map_state.selected].kind,
             MenuEntryKind::Campaign(_)
         ) {
-        "Continuar run".to_string()
+        if lang == Language::English {
+            "Continue Run".to_string()
+        } else {
+            "Continuar run".to_string()
+        }
     } else {
-        "Jugar".to_string()
+        lang.tr(TrKey::Play).to_string()
     };
 }
 
@@ -1080,7 +1124,12 @@ fn update_restart_button_visuals_system(
     run: Res<RunState>,
     map_state: Res<LevelMapState>,
     mut restart_button: Query<
-        (&Interaction, &mut BackgroundColor, &mut BorderColor, &mut Node),
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &mut Node,
+        ),
         With<RestartRunButton>,
     >,
 ) {
@@ -1272,12 +1321,77 @@ fn entry_is_unlocked(index: usize, progress: &CampaignProgress) -> bool {
     }
 }
 
-fn info_title_text(index: usize) -> String {
+fn entry_localized_title_blurb(index: usize, lang: Language) -> (&'static str, String) {
+    let entry = &MENU_ENTRIES[index];
+    if lang == Language::Spanish {
+        return (entry.title, entry.blurb.to_string());
+    }
+    // English translations
+    match index {
+        0 => ("Basic Score", "Reach the target score.".to_string()),
+        1 => (
+            "Ingredients",
+            "Bring ingredients down to the exit.".to_string(),
+        ),
+        2 => ("Shadows", "Clear all shadows.".to_string()),
+        3 => (
+            "Time Trial",
+            "Reach the target score before time runs out.".to_string(),
+        ),
+        4 => ("Red Cores", "Collect red cores.".to_string()),
+        5 => ("Blue Cores", "Collect blue cores.".to_string()),
+        6 => (
+            "Few Moves",
+            "Reach the target score with limited moves.".to_string(),
+        ),
+        7 => (
+            "Blocked Ingredients",
+            "Bring ingredients down on a blocked grid.".to_string(),
+        ),
+        8 => (
+            "Irregular Grid",
+            "Collect green cores on a different grid.".to_string(),
+        ),
+        9 => (
+            "Blue Tempest",
+            "Collect 10 blue cores in 1 minute.".to_string(),
+        ),
+        10 => (
+            "Minefield",
+            "Reach 650 points while avoiding blockers.".to_string(),
+        ),
+        11 => (
+            "Shadow Invasion",
+            "Clear the shadows and the central ultra hard jelly.".to_string(),
+        ),
+        12 => (
+            "Solar Storm",
+            "Reach 800 points in 3 minutes with active sparks.".to_string(),
+        ),
+        13 => (
+            "ConsumeAll",
+            "Special mode. Clear the entire board to win, no campaign gating.".to_string(),
+        ),
+        14 => (
+            "Sandbox",
+            "Free mode. Board pre-loaded with powers to test interactions and VFX.".to_string(),
+        ),
+        _ => (entry.title, entry.blurb.to_string()),
+    }
+}
+
+fn info_title_text(index: usize, lang: Language) -> String {
+    let (title, _) = entry_localized_title_blurb(index, lang);
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => {
-            format!("Nivel {:02} · {}", level, MENU_ENTRIES[index].title)
+            let label = if lang == Language::English {
+                "Level"
+            } else {
+                "Nivel"
+            };
+            format!("{} {:02} · {}", label, level, title)
         }
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox => MENU_ENTRIES[index].title.to_string(),
+        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox => title.to_string(),
     }
 }
 

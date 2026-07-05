@@ -86,7 +86,10 @@ impl Plugin for GameplayPlugin {
             )
             .add_systems(
                 Update,
-                (shop::shop_button_system, shop::update_shop_buttons)
+                (
+                    shop::shop_button_system.before(shop::shop_targeting),
+                    shop::update_shop_buttons,
+                )
                     .run_if(in_state(GameState::Playing)),
             )
             .add_systems(OnExit(GameState::Playing), shop::reset_shop)

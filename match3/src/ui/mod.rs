@@ -1,6 +1,8 @@
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
+use crate::core::locale::{Language, TrKey};
 use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::embedded;
@@ -37,7 +39,10 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::MainMenu), hide_hud)
             .add_systems(OnEnter(GameState::LevelMenu), hide_hud)
             .add_systems(OnEnter(GameState::Options), hide_hud)
-            .add_systems(OnEnter(GameState::Loading), (show_hud, reset_level_tutorial_shown))
+            .add_systems(
+                OnEnter(GameState::Loading),
+                (show_hud, reset_level_tutorial_shown),
+            )
             // The match stays alive while paused — keep the HUD up; this also restores it when
             // returning from Options (which hid it) back to the pause overlay.
             .add_systems(OnEnter(GameState::Paused), show_hud)
@@ -66,6 +71,9 @@ impl Plugin for UiPlugin {
                     update_shop_bar_visibility,
                     update_shop_button_texts,
                     update_shop_active_badge,
+                    update_slow_mo_badge,
+                    update_watermark_fps,
+                    update_static_hud_labels.run_if(resource_changed::<WindowSettings>),
                 ),
             )
             .add_systems(
@@ -126,14 +134,34 @@ pub(crate) struct ShopActiveBadge;
 #[derive(Component)]
 pub(crate) struct ShopActiveBadgeText;
 #[derive(Component)]
+pub(crate) struct SlowMoBadge;
+#[derive(Component)]
+pub(crate) struct SlowMoBadgeText;
+#[derive(Component)]
 pub(crate) struct ShopButtonStatusText(pub(crate) ShopItem);
 #[derive(Component)]
 pub(crate) struct ShopButtonCostText(pub(crate) ShopItem);
 
+// Marker components for static labels that must be updated when the language changes.
+#[derive(Component)]
+struct MovesUnitLabel;
+#[derive(Component)]
+struct LivesUnitLabel;
+#[derive(Component)]
+struct ShopHeaderLabel;
+#[derive(Component)]
+struct ShopCoresLabel;
+#[derive(Component)]
+struct ShopModifiersLabel;
+#[derive(Component)]
+struct TutorialCloseBtnLabel;
+#[derive(Component)]
+struct FpsWatermarkText;
+
 #[derive(Resource, Default)]
 struct GoalHintTouchTimer(Option<Timer>);
 
-fn setup_ui(mut commands: Commands, cache: Res<VisualCache>) {
+fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<WindowSettings>) {
     // ScoreText is in world space (Text2d), so keep it independent of Bevy UI HudRoot.
     commands.spawn((
         ScoreText,
@@ -149,386 +177,417 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>) {
     ));
 
     // Fullscreen transparent container that centers HudRoot horizontally
-    let mut screen = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::FlexStart,
-            ..default()
-        },
-    ));
+    let mut screen = commands.spawn((Node {
+        position_type: PositionType::Absolute,
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::FlexStart,
+        ..default()
+    },));
 
     let mut hud_root_id = Entity::PLACEHOLDER;
     screen.with_children(|screen_parent| {
-        hud_root_id = screen_parent.spawn((
-            HudRoot,
-            Node {
-                width: Val::Px(600.0),
-                max_width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            Visibility::Hidden,
-        ))
-        .with_children(|hud| {
-            // StatsButton
-            hud.spawn((
-                Button,
-                StatsButton,
+        hud_root_id = screen_parent
+            .spawn((
+                HudRoot,
                 Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    left: Val::Percent(50.0),
-                    width: Val::Px(120.0),
-                    height: Val::Px(44.0),
-                    margin: UiRect::left(Val::Px(-60.0)),
-                    ..default()
-                },
-                Visibility::Hidden,
-            ));
-
-            // StatsPopupContainer
-            hud.spawn((
-                StatsPopupContainer,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(80.0),
-                    left: Val::Percent(50.0),
-                    width: Val::Px(240.0),
-                    margin: UiRect::left(Val::Px(-120.0)),
+                    width: Val::Px(600.0),
+                    max_width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
                     flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    display: Display::None,
                     ..default()
                 },
-                BorderColor::all(Color::srgba(0.65, 0.85, 1.0, 0.35)),
-                BackgroundColor(Color::srgba(0.08, 0.08, 0.15, 0.95)),
                 Visibility::Hidden,
             ))
-            .with_children(|parent| {
-                parent.spawn((
-                    StatsPopupText,
-                    Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.65, 0.85, 1.0)),
-                ));
-            });
-
-            // PauseButton
-            hud.spawn((
-                Button,
-                PauseButton,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    left: Val::Px(12.0),
-                    width: Val::Px(36.0),
-                    height: Val::Px(36.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.5)),
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
-                Visibility::Hidden,
-            ))
-            .with_children(|b| {
-                b.spawn((
-                    Text::new("||"),
-                    TextFont {
-                        font_size: FontSize::Px(15.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                ));
-            });
-
-            // MovesText
-            hud.spawn((
-                MovesText,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    right: Val::Px(12.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
-                Visibility::Hidden,
-            ))
-            .with_children(|m| {
-                m.spawn((
-                    MovesNumberText,
-                    Text::new("30"),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                ));
-                m.spawn((
-                    Text::new("moves"),
-                    TextFont {
-                        font_size: FontSize::Px(9.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-                ));
-            });
-
-            // LivesText
-            hud.spawn((
-                LivesText,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(72.0),
-                    right: Val::Px(12.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                BackgroundColor(Color::srgba(0.12, 0.05, 0.05, 0.7)),
-                Visibility::Hidden,
-            ))
-            .with_children(|l| {
-                l.spawn((
-                    LivesNumberText,
-                    Text::new("2"),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(1.0, 0.45, 0.45)),
-                ));
-                l.spawn((
-                    Text::new("vidas"),
-                    TextFont {
-                        font_size: FontSize::Px(9.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
-                ));
-            });
-
-            // BoonIndicatorBar
-            hud.spawn((
-                BoonIndicatorBar,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(56.0),
-                    left: Val::Px(12.0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(6.0),
-                    ..default()
-                },
-                Visibility::Hidden,
-            ));
-
-            // GoalText
-            hud.spawn((
-                Button,
-                GoalText,
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(16.0),
-                    left: Val::Px(12.0),
-                    min_width: Val::Px(96.0),
-                    min_height: Val::Px(40.0),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
-                BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
-                Visibility::Hidden,
-            ))
-            .with_children(|goal| {
-                goal.spawn((
-                    GoalIcon,
+            .with_children(|hud| {
+                // StatsButton
+                hud.spawn((
+                    Button,
+                    StatsButton,
                     Node {
-                        width: Val::Px(24.0),
-                        height: Val::Px(24.0),
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(12.0),
+                        left: Val::Percent(50.0),
+                        width: Val::Px(120.0),
+                        height: Val::Px(44.0),
+                        margin: UiRect::left(Val::Px(-60.0)),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ));
+
+                // StatsPopupContainer
+                hud.spawn((
+                    StatsPopupContainer,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(80.0),
+                        left: Val::Percent(50.0),
+                        width: Val::Px(240.0),
+                        margin: UiRect::left(Val::Px(-120.0)),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        padding: UiRect::all(Val::Px(12.0)),
+                        border: UiRect::all(Val::Px(1.5)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(0.65, 0.85, 1.0, 0.35)),
+                    BackgroundColor(Color::srgba(0.08, 0.08, 0.15, 0.95)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        StatsPopupText,
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.65, 0.85, 1.0)),
+                    ));
+                });
+
+                // PauseButton
+                hud.spawn((
+                    Button,
+                    PauseButton,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(12.0),
+                        left: Val::Px(12.0),
+                        width: Val::Px(36.0),
+                        height: Val::Px(36.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.5)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                    BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("||"),
+                        TextFont {
+                            font_size: FontSize::Px(15.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+
+                // MovesText
+                hud.spawn((
+                    MovesText,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(12.0),
+                        right: Val::Px(12.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.5)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                    BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|m| {
+                    m.spawn((
+                        MovesNumberText,
+                        Text::new("30"),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                    m.spawn((
+                        MovesUnitLabel,
+                        Text::new("moves"),
+                        TextFont {
+                            font_size: FontSize::Px(9.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                    ));
+                });
+
+                // LivesText
+                hud.spawn((
+                    LivesText,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(72.0),
+                        right: Val::Px(12.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.5)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                    BackgroundColor(Color::srgba(0.12, 0.05, 0.05, 0.7)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|l| {
+                    l.spawn((
+                        LivesNumberText,
+                        Text::new("2"),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.45, 0.45)),
+                    ));
+                    l.spawn((
+                        LivesUnitLabel,
+                        Text::new("vidas"),
+                        TextFont {
+                            font_size: FontSize::Px(9.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
+                    ));
+                });
+
+                hud.spawn((
+                    SlowMoBadge,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(132.0),
+                        right: Val::Px(12.0),
+                        padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
+                        border: UiRect::all(Val::Px(1.5)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.6)),
+                    BackgroundColor(Color::srgba(0.20, 0.13, 0.03, 0.82)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|badge| {
+                    badge.spawn((
+                        SlowMoBadgeText,
+                        Text::new("SLOW"),
+                        TextFont {
+                            font_size: FontSize::Px(12.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.86, 0.46)),
+                    ));
+                });
+
+                // BoonIndicatorBar
+                hud.spawn((
+                    BoonIndicatorBar,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(56.0),
+                        left: Val::Px(12.0),
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ));
+
+                // GoalText
+                hud.spawn((
+                    Button,
+                    GoalText,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(16.0),
+                        left: Val::Px(12.0),
+                        min_width: Val::Px(96.0),
+                        min_height: Val::Px(40.0),
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.5)),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
                         ..default()
                     },
+                    BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
+                    BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
+                    Visibility::Hidden,
                 ))
-                .with_children(|icon| {
-                    icon.spawn((
-                        GoalIconImage,
-                        ImageNode {
-                            image: cache.core_image.clone(),
-                            color: Color::srgb(0.8, 1.0, 0.8),
-                            ..default()
-                        },
+                .with_children(|goal| {
+                    goal.spawn((
+                        GoalIcon,
                         Node {
-                            width: Val::Px(22.0),
-                            height: Val::Px(22.0),
+                            width: Val::Px(24.0),
+                            height: Val::Px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
+                    ))
+                    .with_children(|icon| {
+                        icon.spawn((
+                            GoalIconImage,
+                            ImageNode {
+                                image: cache.core_image.clone(),
+                                color: Color::srgb(0.8, 1.0, 0.8),
+                                ..default()
+                            },
+                            Node {
+                                width: Val::Px(22.0),
+                                height: Val::Px(22.0),
+                                ..default()
+                            },
+                        ));
+                    });
+                    goal.spawn((
+                        GoalPrimaryText,
+                        Text::new("0"),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.90, 1.0, 0.90)),
+                    ));
+                    goal.spawn((
+                        GoalTargetText,
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(13.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
                     ));
                 });
-                goal.spawn((
-                    GoalPrimaryText,
-                    Text::new("0"),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.90, 1.0, 0.90)),
-                ));
-                goal.spawn((
-                    GoalTargetText,
-                    Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(13.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
-                ));
-            });
 
-            // GoalHintContainer
-            hud.spawn((
-                GoalHintContainer,
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(64.0),
-                    left: Val::Px(12.0),
-                    max_width: Val::Px(180.0),
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    display: Display::None,
-                    ..default()
-                },
-                BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
-                BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
-                Visibility::Hidden,
-            ))
-            .with_children(|hint| {
-                hint.spawn((
-                    GoalHintText,
-                    Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(13.0),
+                // GoalHintContainer
+                hud.spawn((
+                    GoalHintContainer,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(64.0),
+                        left: Val::Px(12.0),
+                        max_width: Val::Px(180.0),
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                        border: UiRect::all(Val::Px(1.5)),
+                        display: Display::None,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
-                ));
-            });
+                    BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
+                    BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|hint| {
+                    hint.spawn((
+                        GoalHintText,
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(13.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
 
-            // ShopToggleButton
-            hud.spawn((
-                Button,
-                ShopToggleButton,
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: Val::Px(16.0),
-                    right: Val::Px(12.0),
-                    width: Val::Px(78.0),
-                    height: Val::Px(76.0),
-                    flex_direction: FlexDirection::Column,
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    row_gap: Val::Px(2.0),
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    ..default()
-                },
-                BorderColor::all(BTN_BORDER_IDLE),
-                BackgroundColor(Color::srgba(0.07, 0.10, 0.17, 0.88)),
-                Visibility::Hidden,
-            ))
-            .with_children(|b| {
-                b.spawn((
-                    Text::new("SHOP"),
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
+                // ShopToggleButton
+                hud.spawn((
+                    Button,
+                    ShopToggleButton,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(16.0),
+                        right: Val::Px(12.0),
+                        width: Val::Px(78.0),
+                        height: Val::Px(76.0),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(2.0),
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                        border: UiRect::all(Val::Px(1.5)),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.70, 0.86, 1.0)),
-                ));
-                b.spawn((
-                    ShopReserveText,
-                    Text::new("0"),
-                    TextFont {
-                        font_size: FontSize::Px(24.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                ));
-                b.spawn((
-                    Text::new("cores"),
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
-                ));
-            });
-        })
-        .id();
+                    BorderColor::all(BTN_BORDER_IDLE),
+                    BackgroundColor(Color::srgba(0.07, 0.10, 0.17, 0.88)),
+                    Visibility::Hidden,
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        ShopHeaderLabel,
+                        Text::new("SHOP"),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.70, 0.86, 1.0)),
+                    ));
+                    b.spawn((
+                        ShopReserveText,
+                        Text::new("0"),
+                        TextFont {
+                            font_size: FontSize::Px(24.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                    b.spawn((
+                        ShopCoresLabel,
+                        Text::new("cores"),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
+                    ));
+                });
+            })
+            .id();
     });
 
     // BoonTooltipContainer
     commands.entity(hud_root_id).with_children(|parent| {
-        parent.spawn((
-            BoonTooltipContainer,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(120.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-200.0)),
-                width: Val::Px(400.0),
-                max_width: Val::Percent(90.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                padding: UiRect::all(Val::Px(10.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                ..default()
-            },
-            BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75)),
-            BackgroundColor(Color::srgba(0.06, 0.07, 0.10, 0.95)),
-            Visibility::Hidden,
-        ))
-        .with_children(|t| {
-            t.spawn((
-                BoonTooltipText,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
+        parent
+            .spawn((
+                BoonTooltipContainer,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(120.0),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(-200.0)),
+                    width: Val::Px(400.0),
+                    max_width: Val::Percent(90.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    padding: UiRect::all(Val::Px(10.0)),
+                    border: UiRect::all(Val::Px(1.5)),
                     ..default()
                 },
-                TextColor(Color::WHITE),
-            ));
-        });
+                BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75)),
+                BackgroundColor(Color::srgba(0.06, 0.07, 0.10, 0.95)),
+                Visibility::Hidden,
+            ))
+            .with_children(|t| {
+                t.spawn((
+                    BoonTooltipText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(13.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
     });
 
-    spawn_shop_bar(&mut commands, hud_root_id);
+    spawn_shop_bar(&mut commands, hud_root_id, settings.language);
     spawn_shop_active_badge(&mut commands, hud_root_id);
     spawn_tutorial_overlay(&mut commands);
 }
@@ -573,10 +632,20 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
                 },
                 TextColor(cyan),
             ));
+            row.spawn((
+                FpsWatermarkText,
+                Text::new("FPS --"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(cyan),
+                Visibility::Hidden,
+            ));
         });
 }
 
-fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
+fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
     let bar = commands
         .spawn((
             ShopBar,
@@ -599,6 +668,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
         ))
         .with_children(|bar| {
             bar.spawn((
+                ShopModifiersLabel,
                 Text::new("MODIFICADORES DE TIENDA"),
                 TextFont {
                     font_size: FontSize::Px(12.0),
@@ -620,7 +690,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
                             Button,
                             ShopCard,
                             ShopButton(item),
-                            get_item_tooltip(item),
+                            get_item_tooltip(item, lang),
                             Node {
                                 width: Val::Percent(48.0),
                                 min_height: Val::Px(52.0),
@@ -643,7 +713,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
                             },))
                                 .with_children(|row| {
                                     row.spawn((
-                                        Text::new(item.label()),
+                                        Text::new(item.label(lang)),
                                         TextFont {
                                             font_size: FontSize::Px(14.0),
                                             ..default()
@@ -662,7 +732,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity) {
                                 });
                             b.spawn((
                                 ShopButtonStatusText(item),
-                                Text::new(item.status_label()),
+                                Text::new(item.status_label(lang)),
                                 TextFont {
                                     font_size: FontSize::Px(10.0),
                                     ..default()
@@ -732,66 +802,68 @@ fn spawn_tutorial_overlay(commands: &mut Commands) {
                 ));
 
                 // Fila de controles del tutorial (Toggle Checkbox + Botón Entendí)
-                box_node.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    // Checkbox / Toggle
-                    row.spawn((
-                        Button,
-                        TutorialOverlayToggle,
-                        Node {
-                            width: Val::Px(160.0),
-                            height: Val::Px(40.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.5)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                        BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
-                    ))
-                    .with_children(|b| {
-                        b.spawn((
-                            TutorialOverlayToggleText,
-                            Text::new(""),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
+                box_node
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(16.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        // Checkbox / Toggle
+                        row.spawn((
+                            Button,
+                            TutorialOverlayToggle,
+                            Node {
+                                width: Val::Px(160.0),
+                                height: Val::Px(40.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(Val::Px(1.5)),
                                 ..default()
                             },
-                            TextColor(Color::WHITE),
-                        ));
-                    });
+                            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                            BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                TutorialOverlayToggleText,
+                                Text::new(""),
+                                TextFont {
+                                    font_size: FontSize::Px(14.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
 
-                    // Botón "Entendí" (verde)
-                    row.spawn((
-                        Button,
-                        TutorialCloseButton,
-                        Node {
-                            width: Val::Px(120.0),
-                            height: Val::Px(40.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.5)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::srgb(0.4, 1.0, 0.4)),
-                        BackgroundColor(Color::srgba(0.05, 0.18, 0.05, 0.90)),
-                    ))
-                    .with_children(|b| {
-                        b.spawn((
-                            Text::new("Entendí"),
-                            TextFont {
-                                font_size: FontSize::Px(16.0),
+                        // Botón "Entendí" (verde)
+                        row.spawn((
+                            Button,
+                            TutorialCloseButton,
+                            Node {
+                                width: Val::Px(120.0),
+                                height: Val::Px(40.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(Val::Px(1.5)),
                                 ..default()
                             },
-                            TextColor(Color::srgb(0.85, 1.0, 0.85)),
-                        ));
+                            BorderColor::all(Color::srgb(0.4, 1.0, 0.4)),
+                            BackgroundColor(Color::srgba(0.05, 0.18, 0.05, 0.90)),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                TutorialCloseBtnLabel,
+                                Text::new("Entendí"),
+                                TextFont {
+                                    font_size: FontSize::Px(16.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.85, 1.0, 0.85)),
+                            ));
+                        });
                     });
-                });
             });
         });
 }
@@ -841,6 +913,7 @@ type HudFilter = Or<(
     With<PauseButton>,
     With<ShopToggleButton>,
     With<ShopActiveBadge>,
+    With<SlowMoBadge>,
     With<GoalHintContainer>,
     With<StatsButton>,
     With<StatsPopupContainer>,
@@ -857,6 +930,43 @@ fn hide_hud(mut q: Query<&mut Visibility, HudFilter>) {
 fn show_hud(mut q: Query<&mut Visibility, HudFilter>) {
     for mut v in &mut q {
         *v = Visibility::Visible;
+    }
+}
+
+fn update_watermark_fps(
+    diagnostics: Res<DiagnosticsStore>,
+    settings: Res<WindowSettings>,
+    text: Single<(&mut Text, &mut Visibility), With<FpsWatermarkText>>,
+) {
+    let (mut text, mut visibility) = text.into_inner();
+    if !settings.show_fps_watermark {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Visible;
+    let fps = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    text.0 = format!("FPS {fps:>4.0}");
+}
+
+fn update_slow_mo_badge(
+    virtual_time: Res<Time<Virtual>>,
+    badge: Single<(&mut Visibility, &mut Node), With<SlowMoBadge>>,
+    mut text: Single<&mut Text, With<SlowMoBadgeText>>,
+) {
+    let speed = virtual_time.relative_speed();
+    let active = speed < 0.99;
+    let (mut visibility, mut node) = badge.into_inner();
+    *visibility = if active {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    node.display = if active { Display::Flex } else { Display::None };
+    if active {
+        text.0 = format!("SLOW x{speed:.1}");
     }
 }
 
@@ -925,7 +1035,11 @@ fn update_moves_text(
     mut q_num: Query<&mut Text, With<MovesNumberText>>,
     mut q_badge: Query<&mut Node, With<MovesText>>,
 ) {
-    let is_unbounded = mode.is_sandbox() || matches!(level.goal, LevelGoal::TimedScore { .. } | LevelGoal::TimedCollectColor { .. });
+    let is_unbounded = mode.is_sandbox()
+        || matches!(
+            level.goal,
+            LevelGoal::TimedScore { .. } | LevelGoal::TimedCollectColor { .. }
+        );
 
     if let Ok(mut text) = q_num.single_mut() {
         if is_unbounded {
@@ -1074,6 +1188,7 @@ fn update_goal_hint(
     mode: Res<GameMode>,
     level: Res<LevelConfig>,
     state: Res<State<GameState>>,
+    settings: Res<WindowSettings>,
     mut touch_timer: ResMut<GoalHintTouchTimer>,
     interaction: Single<&Interaction, With<GoalText>>,
     hint: Single<(&mut Visibility, &mut Node), With<GoalHintContainer>>,
@@ -1107,21 +1222,21 @@ fn update_goal_hint(
     node.display = if show { Display::Flex } else { Display::None };
 
     if show {
-        hint_text.0 = goal_hint_text(&mode, &level);
+        hint_text.0 = goal_hint_text(&mode, &level, settings.language);
     }
 }
 
-fn goal_hint_text(mode: &GameMode, level: &LevelConfig) -> String {
+fn goal_hint_text(mode: &GameMode, level: &LevelConfig, lang: Language) -> String {
     if mode.is_sandbox() {
-        return "Captura libre".to_string();
+        return lang.tr(TrKey::GoalFreePlay).to_string();
     }
     match &level.goal {
-        LevelGoal::Score(_) => "Alcanza meta".to_string(),
-        LevelGoal::Sparks => "Rescata chispas".to_string(),
-        LevelGoal::ClearShadow => "Limpia sombras".to_string(),
-        LevelGoal::TimedScore { .. } => "Score antes del reloj".to_string(),
-        LevelGoal::CollectColor { .. } => "Junta este color".to_string(),
-        LevelGoal::TimedCollectColor { .. } => "Color antes del reloj".to_string(),
+        LevelGoal::Score(_) => lang.tr(TrKey::GoalReachTarget).to_string(),
+        LevelGoal::Sparks => lang.tr(TrKey::GoalRescueSparks).to_string(),
+        LevelGoal::ClearShadow => lang.tr(TrKey::GoalClearShadows).to_string(),
+        LevelGoal::TimedScore { .. } => lang.tr(TrKey::GoalScoreOnClock).to_string(),
+        LevelGoal::CollectColor { .. } => lang.tr(TrKey::GoalCollectColor).to_string(),
+        LevelGoal::TimedCollectColor { .. } => lang.tr(TrKey::GoalColorOnClock).to_string(),
     }
 }
 
@@ -1147,22 +1262,33 @@ fn stats_button_system(
 fn update_stats_popup(
     stats: Res<StatsBook>,
     open: Res<StatsPopupOpen>,
+    settings: Res<WindowSettings>,
     mut q_visible: Single<&mut Visibility, With<StatsPopupContainer>>,
     mut q_node: Single<&mut Node, With<StatsPopupContainer>>,
     mut q_text: Single<&mut Text, With<StatsPopupText>>,
 ) {
+    let lang = settings.language;
     if open.0 {
         **q_visible = Visibility::Visible;
         q_node.display = Display::Flex;
         q_text.0 = format!(
-            "--- DETALLES ---\nRojo: {}\nVerde: {}\nAzul: {}\nAmarillo: {}\nMorado: {}\nEspeciales: {}\nMax Combo: {}x\nCadenas: {}",
+            "{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}: {}x\n{}: {}",
+            lang.tr(TrKey::StatsTitle),
+            lang.tr(TrKey::StatsRed),
             stats.reds,
+            lang.tr(TrKey::StatsGreen),
             stats.greens,
+            lang.tr(TrKey::StatsBlue),
             stats.blues,
+            lang.tr(TrKey::StatsYellow),
             stats.yellows,
+            lang.tr(TrKey::StatsPurple),
             stats.purples,
+            lang.tr(TrKey::StatsSpecials),
             stats.lightkinds,
+            lang.tr(TrKey::StatsMaxCombo),
             stats.max_cascade,
+            lang.tr(TrKey::StatsChains),
             stats.total_chains
         );
     } else {
@@ -1239,27 +1365,29 @@ fn update_shop_button_texts(
     reserve: Res<CoreReserve>,
     run: Res<RunState>,
     shop: Res<Shop>,
+    settings: Res<WindowSettings>,
     mut texts: Query<(&ShopButtonStatusText, &mut Text, &mut TextColor)>,
     mut costs: Query<
         (&ShopButtonCostText, &mut Text, &mut TextColor),
         Without<ShopButtonStatusText>,
     >,
 ) {
+    let lang = settings.language;
     for (status, mut text, mut color) in &mut texts {
         let item = status.0;
         if shop.armed_item() == Some(item) {
             text.0 = if item == ShopItem::Swap && shop.has_first_pick() {
-                "Activo: elige destino".to_string()
+                lang.tr(TrKey::ActiveChooseTarget).to_string()
             } else {
-                "Activo: listo".to_string()
+                lang.tr(TrKey::ActiveReady).to_string()
             };
             color.0 = Color::srgb(1.0, 0.95, 0.78);
         } else if let Some(cost) = item.cost(&run) {
             if reserve.0 >= cost {
-                text.0 = item.status_label().to_string();
+                text.0 = item.status_label(lang).to_string();
                 color.0 = Color::srgb(0.64, 0.81, 0.98);
             } else {
-                text.0 = "Sin cores suficientes".to_string();
+                text.0 = lang.tr(TrKey::NotEnoughCores).to_string();
                 color.0 = BTN_BORDER_BROKE.with_alpha(0.92);
             }
         } else {
@@ -1285,11 +1413,12 @@ fn update_shop_button_texts(
 
 fn update_shop_active_badge(
     shop: Res<Shop>,
+    settings: Res<WindowSettings>,
     badge: Single<(&mut Visibility, &mut Node), With<ShopActiveBadge>>,
     mut text: Single<&mut Text, With<ShopActiveBadgeText>>,
 ) {
     let (mut visibility, mut node) = badge.into_inner();
-    if let Some(label) = shop.active_badge_text() {
+    if let Some(label) = shop.active_badge_text(settings.language) {
         *visibility = Visibility::Visible;
         node.display = Display::Flex;
         text.0 = label;
@@ -1322,77 +1451,132 @@ fn check_show_tutorial_on_start(
         state.open = true;
         shown.0 = true;
 
+        let lang = settings.language;
         let (title, description) = match &level.goal {
             LevelGoal::Score(target) => (
-                "TUTORIAL: META DE PUNTAJE",
-                format!(
-                    "• Desliza núcleos adyacentes para alinearlos en grupos de 3 o más del mismo color.\n\n\
-                     • OBJETIVO: Consigue al menos {} puntos en total.\n\n\
-                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
-                    target
-                ),
+                lang.tr(TrKey::TutorialScoreTitle),
+                if lang == crate::core::locale::Language::English {
+                    format!(
+                        "• Slide adjacent nuclei to align them in groups of 3 or more of the same color.\n\n\
+                         • GOAL: Reach at least {} points.\n\n\
+                         • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                         • You can disable this tutorial with the button below or in Options.",
+                        target
+                    )
+                } else {
+                    format!(
+                        "• Desliza núcleos adyacentes para alinearlos en grupos de 3 o más del mismo color.\n\n\
+                         • OBJETIVO: Consigue al menos {} puntos en total.\n\n\
+                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                         • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                        target
+                    )
+                },
             ),
             LevelGoal::Sparks => (
-                "TUTORIAL: RECOLECTAR CHISPAS",
-                "• OBJETIVO: Lleva las chispas (ingredientes con forma hexagonal) hasta el final de su columna (fila inferior) para recolectarlas.\n\n\
-                 • Las chispas solo caen en vertical (no deslizan diagonalmente como las piezas normales).\n\n\
-                 • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                 • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string(),
+                lang.tr(TrKey::TutorialSparksTitle),
+                if lang == crate::core::locale::Language::English {
+                    "• GOAL: Bring sparks (hexagonal ingredients) to the bottom row to collect them.\n\n\
+                     • Sparks only fall vertically (they don't slide diagonally like normal pieces).\n\n\
+                     • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                     • You can disable this tutorial with the button below or in Options.".to_string()
+                } else {
+                    "• OBJETIVO: Lleva las chispas (ingredientes con forma hexagonal) hasta el final de su columna (fila inferior) para recolectarlas.\n\n\
+                     • Las chispas solo caen en vertical (no deslizan diagonalmente como las piezas normales).\n\n\
+                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string()
+                },
             ),
             LevelGoal::ClearShadow => (
-                "TUTORIAL: LIMPIAR SOMBRAS",
-                "• OBJETIVO: Limpia todas las casillas oscuras (sombras) del tablero.\n\n\
-                 • Para limpiar una sombra, realiza una combinación de 3 o más piezas sobre ella.\n\n\
-                 • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                 • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string(),
+                lang.tr(TrKey::TutorialShadowTitle),
+                if lang == crate::core::locale::Language::English {
+                    "• GOAL: Clear all dark tiles (shadows) from the board.\n\n\
+                     • To clear a shadow, make a match of 3 or more pieces on top of it.\n\n\
+                     • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                     • You can disable this tutorial with the button below or in Options.".to_string()
+                } else {
+                    "• OBJETIVO: Limpia todas las casillas oscuras (sombras) del tablero.\n\n\
+                     • Para limpiar una sombra, realiza una combinación de 3 o más piezas sobre ella.\n\n\
+                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string()
+                },
             ),
             LevelGoal::TimedScore { target, .. } => (
-                "TUTORIAL: CONTRARRELOJ",
-                format!(
-                    "• OBJETIVO: Consigue al menos {} puntos antes de que el reloj de arriba llegue a cero.\n\n\
-                     • ¡No hay límite de movimientos! Combina rápido para maximizar tu puntuación.\n\n\
-                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
-                    target
-                ),
+                lang.tr(TrKey::TutorialTimedScoreTitle),
+                if lang == crate::core::locale::Language::English {
+                    format!(
+                        "• GOAL: Reach at least {} points before the timer hits zero.\n\n\
+                         • No move limit! Combine fast to maximize your score.\n\n\
+                         • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                         • You can disable this tutorial with the button below or in Options.",
+                        target
+                    )
+                } else {
+                    format!(
+                        "• OBJETIVO: Consigue al menos {} puntos antes de que el reloj de arriba llegue a cero.\n\n\
+                         • ¡No hay límite de movimientos! Combina rápido para maximizar tu puntuación.\n\n\
+                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                         • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                        target
+                    )
+                },
             ),
             LevelGoal::CollectColor { color, target } => {
-                let color_name = match color {
-                    LightColor::Red => "rojos",
-                    LightColor::Green => "verdes",
-                    LightColor::Blue => "azules",
-                    LightColor::Yellow => "amarillos",
-                    LightColor::Purple => "morados",
-                };
+                let color_name = lang.tr(match color {
+                    LightColor::Red => TrKey::ColorRed,
+                    LightColor::Green => TrKey::ColorGreen,
+                    LightColor::Blue => TrKey::ColorBlue,
+                    LightColor::Yellow => TrKey::ColorYellow,
+                    LightColor::Purple => TrKey::ColorPurple,
+                });
                 (
-                    "TUTORIAL: RECOLECTAR COLOR",
-                    format!(
-                        "• OBJETIVO: Junta al menos {} núcleos de color {}.\n\n\
-                         • Solo los núcleos de este color sumarán a tu meta, pero puedes combinar los otros para despejar el tablero.\n\n\
-                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                         • Puedes desactivar este tutorial con el toggle de abajo.",
-                        target, color_name
-                    ),
+                    lang.tr(TrKey::TutorialCollectColorTitle),
+                    if lang == crate::core::locale::Language::English {
+                        format!(
+                            "• GOAL: Collect at least {} {} nuclei.\n\n\
+                             • Only nuclei of this color count toward your goal, but you can match others to clear the board.\n\n\
+                             • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                             • You can disable this tutorial with the toggle below.",
+                            target, color_name
+                        )
+                    } else {
+                        format!(
+                            "• OBJETIVO: Junta al menos {} núcleos de color {}.\n\n\
+                             • Solo los núcleos de este color sumarán a tu meta, pero puedes combinar los otros para despejar el tablero.\n\n\
+                             • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                             • Puedes desactivar este tutorial con el toggle de abajo.",
+                            target, color_name
+                        )
+                    },
                 )
             }
             LevelGoal::TimedCollectColor { color, target, .. } => {
-                let color_name = match color {
-                    LightColor::Red => "rojos",
-                    LightColor::Green => "verdes",
-                    LightColor::Blue => "azules",
-                    LightColor::Yellow => "amarillos",
-                    LightColor::Purple => "morados",
-                };
+                let color_name = lang.tr(match color {
+                    LightColor::Red => TrKey::ColorRed,
+                    LightColor::Green => TrKey::ColorGreen,
+                    LightColor::Blue => TrKey::ColorBlue,
+                    LightColor::Yellow => TrKey::ColorYellow,
+                    LightColor::Purple => TrKey::ColorPurple,
+                });
                 (
-                    "TUTORIAL: COLOR BAJO TIEMPO",
-                    format!(
-                        "• OBJETIVO: Junta al menos {} núcleos de color {} antes de que el reloj llegue a cero.\n\n\
-                         • ¡No hay límite de movimientos! Combina rápido enfocado en este color.\n\n\
-                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                         • Puedes desactivar este tutorial con el toggle de abajo.",
-                        target, color_name
-                    ),
+                    lang.tr(TrKey::TutorialTimedColorTitle),
+                    if lang == crate::core::locale::Language::English {
+                        format!(
+                            "• GOAL: Collect at least {} {} nuclei before the timer hits zero.\n\n\
+                             • No move limit! Combine fast, focused on this color.\n\n\
+                             • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
+                             • You can disable this tutorial with the toggle below.",
+                            target, color_name
+                        )
+                    } else {
+                        format!(
+                            "• OBJETIVO: Junta al menos {} núcleos de color {} antes de que el reloj llegue a cero.\n\n\
+                             • ¡No hay límite de movimientos! Combina rápido enfocado en este color.\n\n\
+                             • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
+                             • Puedes desactivar este tutorial con el toggle de abajo.",
+                            target, color_name
+                        )
+                    },
                 )
             }
         };
@@ -1447,14 +1631,16 @@ struct TutorialText;
 
 fn update_boon_indicators(
     run: Res<RunState>,
+    settings: Res<WindowSettings>,
     mut commands: Commands,
     bar: Single<Entity, With<BoonIndicatorBar>>,
 ) {
     let bar_entity = *bar;
-    
+    let lang = settings.language;
+
     // Clear old indicators
     commands.entity(bar_entity).despawn_children();
-    
+
     // Spawn new indicators for active boons
     commands.entity(bar_entity).with_children(|parent| {
         for boon in BoonKind::ALL {
@@ -1468,31 +1654,32 @@ fn update_boon_indicators(
                     BoonKind::PowerBounty => ("P", Color::srgba(1.1, 0.4, 1.2, 0.85)),
                     BoonKind::HollowWard => ("H", Color::srgba(0.5, 0.5, 0.6, 0.85)),
                 };
-                
-                parent.spawn((
-                    Interaction::default(),
-                    get_item_tooltip(ShopItem::Boon(boon)),
-                    Node {
-                        width: Val::Px(24.0),
-                        height: Val::Px(24.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
-                    BackgroundColor(color),
-                ))
-                .with_children(|b| {
-                    b.spawn((
-                        Text::new(format!("{}{}", label, lvl)),
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
+
+                parent
+                    .spawn((
+                        Interaction::default(),
+                        get_item_tooltip(ShopItem::Boon(boon), lang),
+                        Node {
+                            width: Val::Px(24.0),
+                            height: Val::Px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
-                    ));
-                });
+                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
+                        BackgroundColor(color),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new(format!("{}{}", label, lvl)),
+                            TextFont {
+                                font_size: FontSize::Px(11.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
             }
         }
     });
@@ -1562,6 +1749,98 @@ fn update_tutorial_overlay_toggle_text(
     }
 }
 
+/// Refreshes all static HUD labels that are language-tagged whenever `WindowSettings` changes
+/// (i.e. when the user cycles the language in Options).
+fn update_static_hud_labels(
+    settings: Res<WindowSettings>,
+    mut moves_labels: Query<
+        &mut Text,
+        (
+            With<MovesUnitLabel>,
+            Without<LivesUnitLabel>,
+            Without<ShopHeaderLabel>,
+            Without<ShopCoresLabel>,
+            Without<ShopModifiersLabel>,
+            Without<TutorialCloseBtnLabel>,
+        ),
+    >,
+    mut lives_labels: Query<
+        &mut Text,
+        (
+            With<LivesUnitLabel>,
+            Without<MovesUnitLabel>,
+            Without<ShopHeaderLabel>,
+            Without<ShopCoresLabel>,
+            Without<ShopModifiersLabel>,
+            Without<TutorialCloseBtnLabel>,
+        ),
+    >,
+    mut shop_header: Query<
+        &mut Text,
+        (
+            With<ShopHeaderLabel>,
+            Without<MovesUnitLabel>,
+            Without<LivesUnitLabel>,
+            Without<ShopCoresLabel>,
+            Without<ShopModifiersLabel>,
+            Without<TutorialCloseBtnLabel>,
+        ),
+    >,
+    mut shop_cores: Query<
+        &mut Text,
+        (
+            With<ShopCoresLabel>,
+            Without<MovesUnitLabel>,
+            Without<LivesUnitLabel>,
+            Without<ShopHeaderLabel>,
+            Without<ShopModifiersLabel>,
+            Without<TutorialCloseBtnLabel>,
+        ),
+    >,
+    mut shop_modifiers: Query<
+        &mut Text,
+        (
+            With<ShopModifiersLabel>,
+            Without<MovesUnitLabel>,
+            Without<LivesUnitLabel>,
+            Without<ShopHeaderLabel>,
+            Without<ShopCoresLabel>,
+            Without<TutorialCloseBtnLabel>,
+        ),
+    >,
+    mut tutorial_close: Query<
+        &mut Text,
+        (
+            With<TutorialCloseBtnLabel>,
+            Without<MovesUnitLabel>,
+            Without<LivesUnitLabel>,
+            Without<ShopHeaderLabel>,
+            Without<ShopCoresLabel>,
+            Without<ShopModifiersLabel>,
+        ),
+    >,
+) {
+    let lang = settings.language;
+    for mut t in &mut moves_labels {
+        t.0 = lang.tr(TrKey::Moves).to_string();
+    }
+    for mut t in &mut lives_labels {
+        t.0 = lang.tr(TrKey::Lives).to_string();
+    }
+    for mut t in &mut shop_header {
+        t.0 = lang.tr(TrKey::Shop).to_string();
+    }
+    for mut t in &mut shop_cores {
+        t.0 = lang.tr(TrKey::Cores).to_string();
+    }
+    for mut t in &mut shop_modifiers {
+        t.0 = lang.tr(TrKey::ShopModifiers).to_string();
+    }
+    for mut t in &mut tutorial_close {
+        t.0 = lang.tr(TrKey::TutorialClose).to_string();
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct BoonTooltipContainer;
 
@@ -1574,50 +1853,50 @@ pub(crate) struct TooltipTrigger {
     pub(crate) description: String,
 }
 
-pub(crate) fn get_item_tooltip(item: ShopItem) -> TooltipTrigger {
+pub(crate) fn get_item_tooltip(item: ShopItem, lang: Language) -> TooltipTrigger {
     match item {
         ShopItem::Swap => TooltipTrigger {
-            title: "Habilidad: Cambiar".to_string(),
-            description: "Intercambia la posición de 2 núcleos cualesquiera en el tablero.".to_string(),
+            title: lang.tr(TrKey::TooltipSwapTitle).to_string(),
+            description: lang.tr(TrKey::TooltipSwapDesc).to_string(),
         },
         ShopItem::Eliminate => TooltipTrigger {
-            title: "Habilidad: Eliminar".to_string(),
-            description: "Destruye un núcleo seleccionado, activando nuevas cascadas.".to_string(),
+            title: lang.tr(TrKey::TooltipEliminateTitle).to_string(),
+            description: lang.tr(TrKey::TooltipEliminateDesc).to_string(),
         },
         ShopItem::Upgrade => TooltipTrigger {
-            title: "Habilidad: Subir tier".to_string(),
-            description: "Sube el tier del núcleo seleccionado (ej. normal a Rayo).".to_string(),
+            title: lang.tr(TrKey::TooltipUpgradeTitle).to_string(),
+            description: lang.tr(TrKey::TooltipUpgradeDesc).to_string(),
         },
         ShopItem::Life => TooltipTrigger {
-            title: "Artículo: +1 Vida".to_string(),
-            description: "Otorga una vida de reserva para poder reintentar si fallas un nivel.".to_string(),
+            title: lang.tr(TrKey::TooltipLifeTitle).to_string(),
+            description: lang.tr(TrKey::TooltipLifeDesc).to_string(),
         },
         ShopItem::Boon(boon) => match boon {
             BoonKind::RedValue => TooltipTrigger {
-                title: "Boon: Rojos+".to_string(),
-                description: "Los núcleos rojos recolectados otorgan +25% de puntuación.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonRedTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonRedDesc).to_string(),
             },
             BoonKind::GreenReserve => TooltipTrigger {
-                title: "Boon: Verdes+".to_string(),
-                description: "Los núcleos verdes recolectados te dan reserva de cores para la tienda.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonGreenTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonGreenDesc).to_string(),
             },
             BoonKind::BlueMoves => TooltipTrigger {
-                title: "Boon: Azul+".to_string(),
-                description: "Cada 7 cores azules recolectados te devuelven +1 movimiento extra.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonBlueTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonBlueDesc).to_string(),
             },
             BoonKind::SparkBounty => TooltipTrigger {
-                title: "Boon: Chispa+".to_string(),
-                description: "Las chispas rescatadas otorgan +25 puntos adicionales.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonSparkTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonSparkDesc).to_string(),
             },
             BoonKind::PowerBounty => TooltipTrigger {
-                title: "Boon: Power+".to_string(),
-                description: "Crear núcleos especiales otorga +12 puntos.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonPowerTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonPowerDesc).to_string(),
             },
             BoonKind::HollowWard => TooltipTrigger {
-                title: "Boon: Hollow-".to_string(),
-                description: "Disminuye la probabilidad de aparición de Hollows en el tablero.".to_string(),
+                title: lang.tr(TrKey::TooltipBoonHollowTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonHollowDesc).to_string(),
             },
-        }
+        },
     }
 }
 

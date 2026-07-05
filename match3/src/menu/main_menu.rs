@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
 use crate::core::campaign::CampaignProgress;
+use crate::core::locale::TrKey;
 use crate::core::run::RunState;
 use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
 use crate::menu::options::WindowSettings;
@@ -45,7 +46,8 @@ enum RunMenuButton {
 #[derive(Component)]
 struct QuitButton;
 
-fn spawn_main_menu(mut commands: Commands, run: Res<RunState>) {
+fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<WindowSettings>) {
+    let lang = settings.language;
     commands
         .spawn((
             MainMenuRoot,
@@ -70,18 +72,23 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>) {
             ));
             let mut index = 0;
             if run.active {
-                spawn_run_button(root, index, "Continuar", RunMenuButton::Continue);
+                spawn_run_button(
+                    root,
+                    index,
+                    lang.tr(TrKey::Continue),
+                    RunMenuButton::Continue,
+                );
                 index += 1;
             }
-            spawn_run_button(root, index, "Nuevo run", RunMenuButton::New);
+            spawn_run_button(root, index, lang.tr(TrKey::NewRun), RunMenuButton::New);
             index += 1;
 
-            spawn_run_button(root, index, "Modo Debug", RunMenuButton::Debug);
+            spawn_run_button(root, index, lang.tr(TrKey::DebugMode), RunMenuButton::Debug);
             index += 1;
 
             for (label, target) in [
-                ("Niveles", GameState::LevelMenu),
-                ("Opciones", GameState::Options),
+                (lang.tr(TrKey::Levels), GameState::LevelMenu),
+                (lang.tr(TrKey::Options), GameState::Options),
             ] {
                 root.spawn((
                     Button,
@@ -150,7 +157,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>) {
             ))
             .with_children(|b| {
                 b.spawn((
-                    Text::new("Salir"),
+                    Text::new(lang.tr(TrKey::Quit)),
                     TextFont {
                         font_size: FontSize::Px(30.0),
                         ..default()
@@ -164,7 +171,7 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>) {
 fn spawn_run_button(
     root: &mut ChildSpawnerCommands,
     index: usize,
-    label: &'static str,
+    label: &str,
     action: RunMenuButton,
 ) {
     root.spawn((
@@ -293,11 +300,12 @@ fn update_main_menu_tutorial_text(
     settings: Res<WindowSettings>,
     mut q: Query<&mut Text, With<MainMenuTutorialText>>,
 ) {
+    let lang = settings.language;
     if let Ok(mut text) = q.single_mut() {
         if settings.tutorial_enabled {
-            text.0 = "Tutorial: ON".to_string();
+            text.0 = lang.tr(TrKey::TutorialOn).to_string();
         } else {
-            text.0 = "Tutorial: OFF".to_string();
+            text.0 = lang.tr(TrKey::TutorialOff).to_string();
         }
     }
 }

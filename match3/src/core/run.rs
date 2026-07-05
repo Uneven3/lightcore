@@ -3,6 +3,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::light::LightColor;
+use super::locale::{Language, TrKey};
+use super::storage::save_file_path;
 use crate::gameplay::CoreReserve;
 
 pub(crate) const RUN_LEVELS: u32 = 13;
@@ -62,25 +64,25 @@ impl BoonKind {
         base + level as u32 * 45
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self, lang: Language) -> &'static str {
         match self {
-            BoonKind::RedValue => "Rojo+",
-            BoonKind::GreenReserve => "Verde+",
-            BoonKind::BlueMoves => "Azul+",
-            BoonKind::SparkBounty => "Chispa+",
-            BoonKind::PowerBounty => "Power+",
-            BoonKind::HollowWard => "Hollow-",
+            BoonKind::RedValue => lang.tr(TrKey::BoonRedValue),
+            BoonKind::GreenReserve => lang.tr(TrKey::BoonGreenReserve),
+            BoonKind::BlueMoves => lang.tr(TrKey::BoonBlueMoves),
+            BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBounty),
+            BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBounty),
+            BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWard),
         }
     }
 
-    pub(crate) fn status_label(self) -> &'static str {
+    pub(crate) fn status_label(self, lang: Language) -> &'static str {
         match self {
-            BoonKind::RedValue => "Rojos dan score",
-            BoonKind::GreenReserve => "Verdes dan reserve",
-            BoonKind::BlueMoves => "Azules devuelven moves",
-            BoonKind::SparkBounty => "Chispas dan score",
-            BoonKind::PowerBounty => "Powers dan score",
-            BoonKind::HollowWard => "Menos hollows",
+            BoonKind::RedValue => lang.tr(TrKey::BoonRedValueStatus),
+            BoonKind::GreenReserve => lang.tr(TrKey::BoonGreenReserveStatus),
+            BoonKind::BlueMoves => lang.tr(TrKey::BoonBlueMovesStatus),
+            BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBountyStatus),
+            BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBountyStatus),
+            BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWardStatus),
         }
     }
 }
@@ -259,7 +261,7 @@ impl RunState {
         let depth = lines.next()?.parse::<u32>().ok()?.clamp(1, RUN_LEVELS);
         let blue_meter = lines.next()?.parse().ok()?;
         let reserve = lines.next()?.parse().ok()?;
-        
+
         let (lives, raw_boons) = if ver == "lightcore-run-v2" {
             let l = lines.next()?.parse::<u32>().ok()?;
             let b = lines.next()?;
@@ -332,42 +334,7 @@ fn save_run_text(raw: &str) -> Result<(), String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_save_path() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            return std::path::PathBuf::from(appdata)
-                .join("Lightcore")
-                .join("run.txt");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("Lightcore")
-                .join("run.txt");
-        }
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-            return std::path::PathBuf::from(data_home)
-                .join("lightcore")
-                .join("run.txt");
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("lightcore")
-                .join("run.txt");
-        }
-    }
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("lightcore_run.txt")
+    save_file_path("run.txt")
 }
 
 #[cfg(test)]

@@ -5,8 +5,8 @@ use super::{DragState, PendingSwap, SwapData, SwapHappened};
 use crate::core::prelude::*;
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
-use crate::ui::TutorialState;
 use crate::state::GameState;
+use crate::ui::TutorialState;
 
 pub(crate) fn handle_input(
     mut commands: Commands,

@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
+use crate::core::locale::TrKey;
 use crate::input::InputActions;
+use crate::menu::options::WindowSettings;
 use crate::state::GameState;
 
 /// In-match pause overlay. `pause` (Esc / Start) from `Playing` opens it; the board is left intact
@@ -46,7 +48,8 @@ fn close_pause(actions: Res<InputActions>, mut next: ResMut<NextState<GameState>
     }
 }
 
-fn spawn_pause(mut commands: Commands) {
+fn spawn_pause(mut commands: Commands, settings: Res<WindowSettings>) {
+    let lang = settings.language;
     commands
         .spawn((
             PauseRoot,
@@ -64,7 +67,7 @@ fn spawn_pause(mut commands: Commands) {
         ))
         .with_children(|root| {
             root.spawn((
-                Text::new("Pausa"),
+                Text::new(lang.tr(TrKey::PauseTitle)),
                 TextFont {
                     font_size: FontSize::Px(52.0),
                     ..default()
@@ -72,9 +75,9 @@ fn spawn_pause(mut commands: Commands) {
                 TextColor(Color::srgb(1.5, 1.7, 2.4)), // HDR → blooms
             ));
             for (index, (label, action)) in [
-                ("Reanudar", PauseButton::Resume),
-                ("Opciones", PauseButton::Options),
-                ("Salir al menu", PauseButton::Quit),
+                (lang.tr(TrKey::Resume), PauseButton::Resume),
+                (lang.tr(TrKey::Options), PauseButton::Options),
+                (lang.tr(TrKey::ExitToMenu), PauseButton::Quit),
             ]
             .into_iter()
             .enumerate()

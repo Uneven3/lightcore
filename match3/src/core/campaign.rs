@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+use super::storage::save_file_path;
+
 pub(crate) const CAMPAIGN_LEVELS: usize = 13;
 const SAVE_VERSION: &str = "lightcore-progress-v2";
 
@@ -211,7 +213,11 @@ impl CampaignProgress {
             return None;
         }
         let mut progress = Self::default();
-        let max_lines = if ver == "lightcore-progress-v2" { 13 } else { 9 };
+        let max_lines = if ver == "lightcore-progress-v2" {
+            13
+        } else {
+            9
+        };
         for (idx, line) in lines.take(max_lines).enumerate() {
             if idx >= CAMPAIGN_LEVELS {
                 break;
@@ -269,42 +275,7 @@ fn save_progress_text(raw: &str) -> Result<(), String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn progress_save_path() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            return std::path::PathBuf::from(appdata)
-                .join("Lightcore")
-                .join("campaign.txt");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("Lightcore")
-                .join("campaign.txt");
-        }
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
-            return std::path::PathBuf::from(data_home)
-                .join("lightcore")
-                .join("campaign.txt");
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("lightcore")
-                .join("campaign.txt");
-        }
-    }
-    std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("lightcore_campaign.txt")
+    save_file_path("campaign.txt")
 }
 
 #[cfg(test)]
