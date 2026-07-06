@@ -420,6 +420,11 @@ fn spawn_level_menu(
         DeviceMode::Mobile => Val::Percent(4.0),
         DeviceMode::Desktop => Val::Px(24.0),
     };
+    let (back_size, back_font, back_right, back_top, back_bottom, back_label) =
+        match settings.device_mode {
+            DeviceMode::Mobile => (52.0, 26.0, Val::Px(18.0), Val::Px(18.0), Val::Auto, "<"),
+            DeviceMode::Desktop => (92.0, 32.0, Val::Px(22.0), Val::Auto, Val::Px(20.0), "<-"),
+        };
 
     commands
         .spawn((
@@ -542,10 +547,11 @@ fn spawn_level_menu(
                 BackButton,
                 Node {
                     position_type: PositionType::Absolute,
-                    right: Val::Px(22.0),
-                    bottom: Val::Px(20.0),
-                    width: Val::Px(92.0),
-                    height: Val::Px(92.0),
+                    right: back_right,
+                    top: back_top,
+                    bottom: back_bottom,
+                    width: Val::Px(back_size),
+                    height: Val::Px(back_size),
                     border: UiRect::all(Val::Px(1.0)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
@@ -556,9 +562,9 @@ fn spawn_level_menu(
             ))
             .with_children(|button| {
                 button.spawn((
-                    Text::new("<-"),
+                    Text::new(back_label),
                     TextFont {
-                        font_size: FontSize::Px(32.0),
+                        font_size: FontSize::Px(back_font),
                         ..default()
                     },
                     TextColor(Color::srgb(0.22, 0.22, 0.26)),
@@ -721,8 +727,6 @@ fn map_drag_and_select_system(
     mut map_state: ResMut<LevelMapState>,
     mut focus: ResMut<MenuFocus>,
 ) {
-    let active_touches =
-        pointer.source == crate::input::pointer::PointerSource::Touch && pointer.held;
     let Some(window_pos) = pointer.position_window else {
         return;
     };
@@ -742,7 +746,7 @@ fn map_drag_and_select_system(
         && let (Some(anchor), Some(last_world)) =
             (map_state.drag_anchor_window, map_state.drag_last_world)
     {
-        if window_pos.distance(anchor) > 8.0 || active_touches {
+        if window_pos.distance(anchor) > 8.0 {
             map_state.dragged = true;
         }
         if map_state.dragged {

@@ -133,6 +133,17 @@ pub(crate) fn handle_input(
                 neighbor_e,
                 neighbor_gp,
             );
+        } else if let (Some(start_e), Some(start_gp)) = (drag.start_entity, drag.start_grid) {
+            commands
+                .entity(start_e)
+                .insert(VisualPos(to_world(start_gp)));
+            if let (Some(neighbor_e), Some(neighbor_gp)) =
+                (drag.neighbor_entity, drag.neighbor_grid)
+            {
+                commands
+                    .entity(neighbor_e)
+                    .insert(VisualPos(to_world(neighbor_gp)));
+            }
         }
 
         drag.locked_axis = None;
