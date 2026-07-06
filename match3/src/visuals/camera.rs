@@ -9,14 +9,27 @@ use crate::core::grid::TILE;
 use crate::gameplay::ChainPop;
 use crate::visuals::render_target::{self, WorldCamera};
 
-/// Target frames per second — cycles through presets via the Options screen. Default 60.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+/// Target frames per second — cycles through presets via the Options screen.
+#[derive(Resource, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FpsTarget {
     Unlimited,
     Fps30,
-    #[default]
     Fps60,
     Fps120,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for FpsTarget {
+    fn default() -> Self {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            Self::Unlimited
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            Self::Fps60
+        }
+    }
 }
 
 impl FpsTarget {
@@ -91,7 +104,16 @@ pub(crate) struct CameraShake {
     pub(crate) trauma: f32,
 }
 
-pub(crate) fn setup_camera(mut commands: Commands) {
+pub(crate) fn setup_camera(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    settings: Res<crate::menu::options::WindowSettings>,
+) {
+    let initial_size = settings
+        .internal_resolution
+        .size_for_viewport(UVec2::new(1280, 720));
+    let image_handle = images.add(render_target::create_canvas_image(initial_size));
+
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -105,11 +127,23 @@ pub(crate) fn setup_camera(mut commands: Commands) {
             order: -1,
             ..default()
         },
+        bevy::camera::RenderTarget::Image(image_handle.clone().into()),
         Tonemapping::TonyMcMapface,
         DebandDither::Enabled,
+        Msaa::Off,
         WorldCamera,
     ));
 
+    commands.spawn((
+        Sprite::from_image(image_handle.clone()),
+        Transform::default(),
+        render_target::InternalCanvas,
+        bevy::camera::visibility::RenderLayers::layer(1),
+    ));
+    commands.insert_resource(render_target::InternalRenderTarget {
+        image: image_handle,
+        size: initial_size,
+    });
     render_target::spawn_blit(&mut commands);
 }
 

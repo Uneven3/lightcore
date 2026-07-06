@@ -133,6 +133,9 @@ fn on_chain_pop(
     virtual_time: Res<Time<Virtual>>,
     mut commands: Commands,
 ) {
+    if trigger.hollow {
+        return;
+    }
     let speed = virtual_time.relative_speed();
     if cascade.0 <= 1 {
         let handle = if trigger.removed >= 5 {

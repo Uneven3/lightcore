@@ -353,6 +353,7 @@ pub(crate) fn teardown_match(
     }
     res.moves.0 = level.total_moves;
     res.pending.0 = None;
+    res.reverting.0.clear();
     *res.drag = DragState::default();
     res.settled.0 = false;
     res.cascade.0 = 0;
@@ -754,6 +755,7 @@ fn reset_for_replay(replay_level: LevelConfig, level: &mut LevelConfig, res: &mu
     res.spent.0 = 0;
     res.moves.0 = level.total_moves;
     res.pending.0 = None;
+    res.reverting.0.clear();
     *res.drag = DragState::default();
     res.settled.0 = false;
     res.cascade.0 = 0;

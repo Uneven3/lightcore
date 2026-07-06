@@ -37,6 +37,7 @@ impl Plugin for GameplayPlugin {
             .insert_resource(MovesLeft(crate::core::level::MOVES))
             .insert_resource(make_level(1))
             .init_resource::<PendingSwap>()
+            .init_resource::<RevertingSwap>()
             .init_resource::<GravitySettled>()
             .init_resource::<DragState>()
             .init_resource::<CascadeDepth>()
@@ -273,6 +274,9 @@ pub(crate) struct MovesLeft(pub(crate) u32);
 #[derive(Resource, Default)]
 pub(crate) struct PendingSwap(pub(crate) Option<SwapData>);
 
+#[derive(Resource, Default)]
+pub(crate) struct RevertingSwap(pub(crate) Vec<Entity>);
+
 pub(crate) struct SwapData {
     pub(crate) a: Entity,
     pub(crate) b: Option<Entity>,
@@ -314,6 +318,7 @@ pub(crate) struct SuperComboPending(pub(crate) Vec<LightKind>);
 pub(crate) struct DragState {
     pub(crate) active: bool,
     pub(crate) start_world: Vec2,
+    pub(crate) last_world: Option<Vec2>,
     pub(crate) start_grid: Option<GridPos>,
     pub(crate) start_entity: Option<Entity>,
     pub(crate) locked_axis: Option<IVec2>,
@@ -338,6 +343,7 @@ pub(crate) struct ResetParams<'w> {
     pub(crate) spent: ResMut<'w, CoresSpent>,
     pub(crate) moves: ResMut<'w, MovesLeft>,
     pub(crate) pending: ResMut<'w, PendingSwap>,
+    pub(crate) reverting: ResMut<'w, RevertingSwap>,
     pub(crate) drag: ResMut<'w, DragState>,
     pub(crate) settled: ResMut<'w, GravitySettled>,
     pub(crate) cascade: ResMut<'w, CascadeDepth>,
@@ -398,6 +404,7 @@ pub(crate) struct PowerCombo {
 pub(crate) struct ChainPop {
     pub(crate) removed: u32,
     pub(crate) points: u32,
+    pub(crate) hollow: bool,
     /// (world position, color, pop_delay_secs) of each light. The delay matches PopDelay so
     /// score shards start flying when the light's pop actually begins, not all at once.
     pub(crate) pops: Vec<(Vec3, LightColor, f32)>,

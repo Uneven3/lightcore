@@ -15,6 +15,7 @@ use crate::visuals::camera::{FpsTarget, ShakeSettings};
 use crate::visuals::glow::GlowSettings;
 use crate::visuals::grid_water::GridWaterSettings;
 use crate::visuals::particles::ParticleSettings;
+use crate::visuals::render_target::InternalResolution;
 use crate::visuals::score_light::ShardSettings;
 
 /// Settings screen — glow, camera shake and particle parameters (otherwise hardcoded constants)
@@ -38,6 +39,7 @@ impl Plugin for OptionsPlugin {
                     update_slider_value_labels,
                     fps_button_system,
                     show_fps_button_system,
+                    internal_resolution_button_system,
                     grid_water_button_system,
                     fullscreen_button_system,
                     device_button_system,
@@ -69,6 +71,12 @@ struct ShowFpsButton;
 
 #[derive(Component)]
 struct ShowFpsLabel;
+
+#[derive(Component)]
+struct InternalResolutionButton;
+
+#[derive(Component)]
+struct InternalResolutionLabel;
 
 #[derive(Component)]
 struct GridWaterButton;
@@ -136,6 +144,7 @@ impl DeviceMode {
 #[derive(Resource)]
 pub(crate) struct WindowSettings {
     pub(crate) device_mode: DeviceMode,
+    pub(crate) internal_resolution: InternalResolution,
     pub(crate) tutorial_enabled: bool,
     pub(crate) show_fps_watermark: bool,
     pub(crate) language: Language,
@@ -147,9 +156,11 @@ impl Default for WindowSettings {
         let mode = DeviceMode::Mobile;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let mode = DeviceMode::Desktop;
+        let internal_resolution = InternalResolution::Native;
 
         Self {
             device_mode: mode,
+            internal_resolution,
             tutorial_enabled: true,
             show_fps_watermark: true,
             language: Language::default(),
@@ -271,6 +282,14 @@ fn spawn_options(
                 button_index += 1;
             }
             spawn_text_button(root, FpsButton, FpsLabel, button_index, fps_target.label());
+            button_index += 1;
+            spawn_text_button(
+                root,
+                InternalResolutionButton,
+                InternalResolutionLabel,
+                button_index,
+                settings.internal_resolution.label(),
+            );
             button_index += 1;
             spawn_text_button(
                 root,
@@ -740,6 +759,19 @@ fn show_fps_button_system(
     }
 }
 
+fn internal_resolution_button_system(
+    interactions: Query<(Entity, Ref<Interaction>), With<InternalResolutionButton>>,
+    menu_activated: Res<MenuActivated>,
+    mut settings: ResMut<WindowSettings>,
+) {
+    if interactions
+        .iter()
+        .any(|(e, i)| activated(&i, e, &menu_activated))
+    {
+        settings.internal_resolution = settings.internal_resolution.next();
+    }
+}
+
 fn tutorial_button_system(
     interactions: Query<(Entity, Ref<Interaction>), With<TutorialButton>>,
     menu_activated: Res<MenuActivated>,
@@ -812,6 +844,7 @@ fn update_settings_labels(
             Without<GridWaterLabel>,
             Without<FpsLabel>,
             Without<DeviceLabel>,
+            Without<InternalResolutionLabel>,
         ),
     >,
     mut gw: Query<
@@ -822,6 +855,7 @@ fn update_settings_labels(
             Without<ShowFpsLabel>,
             Without<FpsLabel>,
             Without<DeviceLabel>,
+            Without<InternalResolutionLabel>,
         ),
     >,
     mut show_fps_q: Query<
@@ -829,6 +863,18 @@ fn update_settings_labels(
         (
             With<ShowFpsLabel>,
             Without<FullscreenLabel>,
+            Without<GridWaterLabel>,
+            Without<FpsLabel>,
+            Without<DeviceLabel>,
+            Without<InternalResolutionLabel>,
+        ),
+    >,
+    mut internal_resolution_q: Query<
+        &mut Text,
+        (
+            With<InternalResolutionLabel>,
+            Without<FullscreenLabel>,
+            Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<FpsLabel>,
             Without<DeviceLabel>,
@@ -842,6 +888,7 @@ fn update_settings_labels(
             Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<DeviceLabel>,
+            Without<InternalResolutionLabel>,
         ),
     >,
     mut ds: Query<
@@ -852,6 +899,7 @@ fn update_settings_labels(
             Without<ShowFpsLabel>,
             Without<GridWaterLabel>,
             Without<FpsLabel>,
+            Without<InternalResolutionLabel>,
         ),
     >,
 ) {
@@ -883,6 +931,9 @@ fn update_settings_labels(
     }
     for mut t in &mut fps_q {
         **t = fps_target.label().to_string();
+    }
+    for mut t in &mut internal_resolution_q {
+        **t = settings.internal_resolution.label().to_string();
     }
     for mut t in &mut ds {
         **t = settings.device_mode.label(lang);

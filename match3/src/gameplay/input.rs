@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use super::shop::Shop;
-use super::{DragState, PendingSwap, SwapData, SwapHappened};
+use super::{DragState, PendingSwap, RevertingSwap, SwapData, SwapHappened};
 use crate::core::prelude::*;
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
@@ -28,7 +28,13 @@ pub(crate) fn handle_input(
     if shop.is_armed() {
         return;
     }
-    let Some(world) = pointer.position_world else {
+    let Some(world) = pointer.position_world.or_else(|| {
+        if pointer.just_released && drag.active {
+            drag.last_world
+        } else {
+            None
+        }
+    }) else {
         return;
     };
 
@@ -39,6 +45,7 @@ pub(crate) fn handle_input(
 
         drag.active = true;
         drag.start_world = world;
+        drag.last_world = Some(world);
         drag.locked_axis = None;
         drag.neighbor_entity = None;
         drag.neighbor_grid = None;
@@ -59,6 +66,10 @@ pub(crate) fn handle_input(
             commands.entity(e).insert(Selected);
         }
         return;
+    }
+
+    if drag.active && pointer.position_world.is_some() {
+        drag.last_world = Some(world);
     }
 
     if drag.active && drag.locked_axis.is_none() && !pointer.just_released {
@@ -150,6 +161,7 @@ pub(crate) fn handle_input(
         drag.neighbor_entity = None;
         drag.neighbor_is_empty = false;
         drag.neighbor_grid = None;
+        drag.last_world = None;
         drag.start_entity = None;
         drag.start_grid = None;
     }
@@ -382,33 +394,48 @@ pub(crate) fn update_board_cursor(
 pub(crate) fn check_swap_visual_done(
     mut commands: Commands,
     pending: Res<PendingSwap>,
+    mut reverting: ResMut<RevertingSwap>,
+    mut next_state: ResMut<NextState<GameState>>,
     lights: Query<(&GridPos, &VisualPos), With<Light>>,
     fallables: Query<(&GridPos, &VisualPos), With<Spark>>,
 ) {
     let Some(ref swap) = pending.0 else {
+        if reverting.0.is_empty() {
+            return;
+        }
+        let done = reverting
+            .0
+            .iter()
+            .all(|&e| visual_at_grid(e, &lights, &fallables));
+        if done {
+            reverting.0.clear();
+            next_state.set(GameState::Playing);
+        }
         return;
     };
-    let (gp_a, vp_a) = if let Ok(x) = lights.get(swap.a) {
-        x
-    } else if let Ok(x) = fallables.get(swap.a) {
-        x
-    } else {
-        return;
-    };
-    let a_done = vp_a.0.distance(to_world(*gp_a)) < TILE * 0.05;
+    let a_done = visual_at_grid(swap.a, &lights, &fallables);
 
     let b_done = match swap.b {
         None => true,
-        Some(b_ent) => {
-            let Some((gp_b, vp_b)) = lights.get(b_ent).ok().or_else(|| fallables.get(b_ent).ok())
-            else {
-                return;
-            };
-            vp_b.0.distance(to_world(*gp_b)) < TILE * 0.05
-        }
+        Some(b_ent) => visual_at_grid(b_ent, &lights, &fallables),
     };
 
     if a_done && b_done {
         commands.trigger(SwapHappened);
     }
+}
+
+fn visual_at_grid(
+    entity: Entity,
+    lights: &Query<(&GridPos, &VisualPos), With<Light>>,
+    fallables: &Query<(&GridPos, &VisualPos), With<Spark>>,
+) -> bool {
+    let Some((gp, vp)) = lights
+        .get(entity)
+        .ok()
+        .or_else(|| fallables.get(entity).ok())
+    else {
+        return false;
+    };
+    vp.0.distance(to_world(*gp)) < TILE * 0.05
 }

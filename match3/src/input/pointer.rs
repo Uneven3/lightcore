@@ -2,7 +2,9 @@ use bevy::input::touch::Touches;
 use bevy::prelude::*;
 
 use super::LastInputDevice;
-use crate::visuals::render_target::{FinalCamera, WorldCamera, window_point_to_world};
+use crate::visuals::render_target::{
+    FinalCamera, WorldCamera, final_viewport_logical_rect, window_point_to_world,
+};
 
 #[derive(Default, Clone, Copy, PartialEq)]
 pub(crate) enum PointerSource {
@@ -42,20 +44,7 @@ pub(crate) fn gather_pointer_input(
 ) {
     let (cam, cam_t) = *camera;
     let final_cam = *final_camera;
-    let (_vp_pos, vp_size) = if let Some(ref viewport) = final_cam.viewport {
-        let scale_factor = window.scale_factor();
-        let pos = Vec2::new(
-            viewport.physical_position.x as f32,
-            viewport.physical_position.y as f32,
-        ) / scale_factor;
-        let size = Vec2::new(
-            viewport.physical_size.x as f32,
-            viewport.physical_size.y as f32,
-        ) / scale_factor;
-        (pos, size)
-    } else {
-        (Vec2::ZERO, window.size())
-    };
+    let (vp_pos, vp_size) = final_viewport_logical_rect(final_cam, &window);
 
     let mut next = PointerInput::default();
 
@@ -79,7 +68,7 @@ pub(crate) fn gather_pointer_input(
         let win_pos = press_pos.or(held_pos).or(release_pos);
         next.position_window = win_pos;
         if let Some(pos) = win_pos {
-            next.position_world = window_point_to_world(cam, cam_t, vp_size, pos);
+            next.position_world = window_point_to_world(cam, cam_t, vp_pos, vp_size, pos);
         }
         *last = LastInputDevice::Touch;
     } else {
@@ -90,7 +79,7 @@ pub(crate) fn gather_pointer_input(
         next.held = mouse.pressed(MouseButton::Left);
         if let Some(pos) = window.cursor_position() {
             next.position_window = Some(pos);
-            next.position_world = window_point_to_world(cam, cam_t, vp_size, pos);
+            next.position_world = window_point_to_world(cam, cam_t, vp_pos, vp_size, pos);
         }
     }
 

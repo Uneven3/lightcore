@@ -6,8 +6,8 @@ use super::popping::{accumulate_pop_delays, apply_pop_delay};
 use super::vfx;
 use super::{
     CascadeDepth, ChainPop, CollectedCores, CoreReserve, DisplayedScore, MovesLeft, PendingSwap,
-    PowerComboParams, PowerCreated, Score, ScoreDrained, ShadowCount, StatsBook, SwapFailed,
-    SwapHappened,
+    PowerComboParams, PowerCreated, RevertingSwap, Score, ScoreDrained, ShadowCount, StatsBook,
+    SwapFailed, SwapHappened,
 };
 use crate::board::clear_shadow_at;
 use crate::core::grid::RaySettings;
@@ -47,6 +47,7 @@ pub(crate) fn on_swap_happened(
         (With<Light>, Without<Shadow>),
     >,
     mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    mut reverting: ResMut<RevertingSwap>,
     mut power: PowerComboParams,
     ray_settings: Res<RaySettings>,
 ) {
@@ -237,6 +238,7 @@ pub(crate) fn on_swap_happened(
                 commands.trigger(ChainPop {
                     removed: compound.len() as u32,
                     points,
+                    hollow: false,
                     pops,
                 });
                 next_state.set(GameState::Popping);
@@ -253,24 +255,31 @@ pub(crate) fn on_swap_happened(
         // break the rules; only a normal swap snaps the two pieces back.
         if !free {
             if let Some(swap) = pending.0.take() {
+                reverting.0.clear();
                 if let Ok((_, mut pos, _, _)) = lights.get_mut(swap.a) {
                     pos.set_if_neq(swap.a_pos);
                 } else if let Ok((_, mut pos)) = sparks.get_mut(swap.a) {
                     pos.set_if_neq(swap.a_pos);
                 }
+                reverting.0.push(swap.a);
                 if let Some(b) = swap.b {
                     if let Ok((_, mut pos, _, _)) = lights.get_mut(b) {
                         pos.set_if_neq(swap.b_pos);
                     } else if let Ok((_, mut pos)) = sparks.get_mut(b) {
                         pos.set_if_neq(swap.b_pos);
                     }
+                    reverting.0.push(b);
                 }
             }
             commands.trigger(SwapFailed);
         } else {
             pending.0 = None;
         }
-        next_state.set(GameState::Playing);
+        next_state.set(if reverting.0.is_empty() {
+            GameState::Playing
+        } else {
+            GameState::SwapAnimating
+        });
         return;
     }
 
@@ -470,6 +479,7 @@ pub(crate) fn on_swap_happened(
     commands.trigger(ChainPop {
         removed: to_remove.len() as u32,
         points: if result.score_reset { 0 } else { points },
+        hollow: result.score_reset,
         pops,
     });
     next_state.set(GameState::Popping);

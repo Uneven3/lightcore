@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::core::prelude::*;
 use crate::gameplay::falling::Dropping;
-use crate::gameplay::{DragState, PendingSwap};
+use crate::gameplay::{DragState, PendingSwap, RevertingSwap};
 use crate::input::pointer::PointerInput;
 use crate::state::GameState;
 
@@ -27,6 +27,7 @@ pub(crate) fn lerp_visual_pos(
     time: Res<Time>,
     state: Res<State<GameState>>,
     pending: Res<PendingSwap>,
+    reverting: Res<RevertingSwap>,
 ) {
     let dt = time.delta_secs();
     let in_swap = *state.get() == GameState::SwapAnimating;
@@ -44,28 +45,29 @@ pub(crate) fn lerp_visual_pos(
         {
             continue;
         }
-        let speed = if Some(entity) == swap_a || Some(entity) == swap_b {
-            TILE * 5.0
-        } else if let Some(fs) = fall_speed {
-            fs.0
-        } else if is_dropping {
-            let elapsed = match &mut momentum {
-                Some(m) => {
-                    m.0 += dt;
-                    m.0
+        let speed =
+            if Some(entity) == swap_a || Some(entity) == swap_b || reverting.0.contains(&entity) {
+                TILE * 5.0
+            } else if let Some(fs) = fall_speed {
+                fs.0
+            } else if is_dropping {
+                let elapsed = match &mut momentum {
+                    Some(m) => {
+                        m.0 += dt;
+                        m.0
+                    }
+                    None => {
+                        commands.entity(entity).insert(FallMomentum(0.0));
+                        0.0
+                    }
+                };
+                (BASE_FALL_SPEED + FALL_ACCEL * elapsed).min(MAX_FALL_SPEED)
+            } else {
+                if momentum.is_some() {
+                    commands.entity(entity).remove::<FallMomentum>();
                 }
-                None => {
-                    commands.entity(entity).insert(FallMomentum(0.0));
-                    0.0
-                }
+                TILE * 10.0
             };
-            (BASE_FALL_SPEED + FALL_ACCEL * elapsed).min(MAX_FALL_SPEED)
-        } else {
-            if momentum.is_some() {
-                commands.entity(entity).remove::<FallMomentum>();
-            }
-            TILE * 10.0
-        };
         let target = to_world(*gpos);
         let next = vpos.0.move_towards(target, speed * dt);
         if next.distance_squared(vpos.0) > 0.000001 {

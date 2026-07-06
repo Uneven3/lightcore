@@ -55,15 +55,18 @@ pub fn run_game() {
         console_error_panic_hook::set_once();
     }
 
-    // Modo de presentación. Por defecto Mailbox (triple buffer): sin tearing y SIN el precipicio del
-    // FIFO/AutoVsync, que en esta máquina (PRIME: render en la Radeon, pantalla en la Intel) castiga
-    // cualquier dip bajo 60 cuantizando a 30/20/15 fps. Mailbox muestra el framerate real y suave.
-    // Si una GPU no soporta Mailbox, wgpu recae en Fifo. Overrides para diagnóstico vía env.
+    // Modo de presentación. En desktop usamos Mailbox porque en esta máquina (PRIME: render en la
+    // Radeon, pantalla en la Intel) FIFO/AutoVsync castiga cualquier dip bajo 60 cuantizando a
+    // 30/20/15 fps. En móvil dejamos que Android/iOS gobiernen el frame pacing con AutoVsync.
+    // Overrides para diagnóstico vía env.
     let present_mode = match std::env::var("MATCH3_PRESENT").as_deref() {
         Ok("vsync") | Ok("fifo") => PresentMode::AutoVsync,
         Ok("immediate") => PresentMode::Immediate,
         Ok("novsync") => PresentMode::AutoNoVsync,
         _ if std::env::var("MATCH3_NOVSYNC").is_ok() => PresentMode::AutoNoVsync,
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        _ => PresentMode::AutoVsync,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         _ => PresentMode::Mailbox,
     };
     // Diagnóstico: MATCH3_RES=1920x1080 arranca a esa resolución para medir coste de fillrate a

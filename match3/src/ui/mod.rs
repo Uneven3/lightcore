@@ -17,7 +17,10 @@ use crate::gameplay::{
 use crate::menu::options::WindowSettings;
 use crate::state::GameState;
 use crate::visuals::assets::VisualCache;
-use crate::visuals::render_target::{FinalCamera, WorldCamera, window_point_to_world};
+use crate::visuals::render_target::{
+    FinalCamera, InternalRenderTarget, WorldCamera, final_viewport_logical_rect,
+    window_point_to_world,
+};
 
 const SCORE_NEON_BASE: f32 = 1.7;
 const SCORE_NEON_PULSE: f32 = 2.6;
@@ -182,7 +185,7 @@ struct GoalHintTouchTimer(Option<Timer>);
 #[derive(Default)]
 struct FpsWatermarkState {
     visible: bool,
-    last_fps: Option<u32>,
+    last_text: Option<String>,
     elapsed_since_refresh: f32,
 }
 
@@ -421,10 +424,10 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     BoonIndicatorBar,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(56.0),
-                        left: Val::Px(12.0),
+                        top: Val::Px(64.0),
+                        left: Val::Px(18.0),
                         flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(6.0),
+                        column_gap: Val::Px(8.0),
                         ..default()
                     },
                     Visibility::Hidden,
@@ -983,6 +986,7 @@ fn update_watermark_fps(
     time: Res<Time>,
     diagnostics: Res<DiagnosticsStore>,
     settings: Res<WindowSettings>,
+    internal_target: Res<InternalRenderTarget>,
     text: Single<(&mut Text, &mut Visibility), With<FpsWatermarkText>>,
     mut state: Local<FpsWatermarkState>,
 ) {
@@ -999,7 +1003,7 @@ fn update_watermark_fps(
         state.visible = true;
     }
     state.elapsed_since_refresh += time.delta_secs();
-    if state.elapsed_since_refresh < 0.25 && state.last_fps.is_some() {
+    if state.elapsed_since_refresh < 0.25 && state.last_text.is_some() {
         return;
     }
     state.elapsed_since_refresh = 0.0;
@@ -1009,9 +1013,13 @@ fn update_watermark_fps(
         .unwrap_or(0.0)
         .round()
         .max(0.0) as u32;
-    if state.last_fps != Some(fps) {
-        text.0 = format!("FPS {fps:>4}");
-        state.last_fps = Some(fps);
+    let next_text = format!(
+        "FPS {fps:>4} | {}x{}",
+        internal_target.size.x, internal_target.size.y
+    );
+    if state.last_text.as_deref() != Some(next_text.as_str()) {
+        text.0 = next_text.clone();
+        state.last_text = Some(next_text);
     }
 }
 
@@ -1075,24 +1083,11 @@ fn position_score(
 ) {
     let (cam, cam_t) = *camera;
     let final_cam = *final_camera;
-    let (vp_pos, vp_size) = if let Some(ref viewport) = final_cam.viewport {
-        let scale_factor = window.scale_factor();
-        let pos = Vec2::new(
-            viewport.physical_position.x as f32,
-            viewport.physical_position.y as f32,
-        ) / scale_factor;
-        let size = Vec2::new(
-            viewport.physical_size.x as f32,
-            viewport.physical_size.y as f32,
-        ) / scale_factor;
-        (pos, size)
-    } else {
-        (Vec2::ZERO, window.size())
-    };
+    let (vp_pos, vp_size) = final_viewport_logical_rect(final_cam, &window);
     // Score siempre centrado en el tercio superior de la pantalla
     let score_screen_pos = Vec2::new(vp_size.x * 0.5, 36.0);
     let score_window_pos = score_screen_pos + vp_pos;
-    let Some(world) = window_point_to_world(cam, cam_t, vp_size, score_window_pos) else {
+    let Some(world) = window_point_to_world(cam, cam_t, vp_pos, vp_size, score_window_pos) else {
         return;
     };
     let pos = world.extend(6.0); // above the board and shards
@@ -1729,11 +1724,12 @@ fn update_boon_indicators(
 
                 parent
                     .spawn((
+                        Button,
                         Interaction::default(),
                         get_item_tooltip(ShopItem::Boon(boon), lang),
                         Node {
-                            width: Val::Px(24.0),
-                            height: Val::Px(24.0),
+                            width: Val::Px(40.0),
+                            height: Val::Px(40.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: UiRect::all(Val::Px(1.0)),
@@ -1746,7 +1742,7 @@ fn update_boon_indicators(
                         b.spawn((
                             Text::new(format!("{}{}", label, lvl)),
                             TextFont {
-                                font_size: FontSize::Px(11.0),
+                                font_size: FontSize::Px(14.0),
                                 ..default()
                             },
                             TextColor(Color::WHITE),
@@ -1979,7 +1975,7 @@ fn update_tooltip_system(
 ) {
     let mut hovered_trigger = None;
     for (interaction, trigger) in &triggers {
-        if *interaction == Interaction::Hovered {
+        if matches!(*interaction, Interaction::Hovered | Interaction::Pressed) {
             hovered_trigger = Some(trigger);
             break;
         }

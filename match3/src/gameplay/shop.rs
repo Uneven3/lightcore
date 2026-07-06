@@ -301,6 +301,7 @@ pub(crate) fn shop_targeting(
             commands.trigger(ChainPop {
                 removed: 1,
                 points: 0,
+                hollow: false,
                 pops: vec![(w, color, 0.0)],
             });
             spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));

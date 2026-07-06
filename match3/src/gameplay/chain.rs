@@ -194,6 +194,7 @@ pub(crate) fn check_chain_matches(
         commands.trigger(ChainPop {
             removed: final_remove.len() as u32,
             points: points + score_bonus,
+            hollow: false,
             pops,
         });
         next_state.set(GameState::Popping);
@@ -447,6 +448,7 @@ pub(crate) fn check_chain_matches(
         } else {
             points + score_bonus
         },
+        hollow: result.score_reset,
         pops,
     });
     next_state.set(GameState::Popping);
