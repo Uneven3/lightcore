@@ -3325,6 +3325,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcore"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "console_error_panic_hook",
+ "getrandom 0.3.4",
+ "rand 0.9.4",
+ "web-time",
+]
+
+[[package]]
 name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3376,17 +3387,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "match3"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "console_error_panic_hook",
- "getrandom 0.3.4",
- "rand 0.9.4",
- "web-time",
 ]
 
 [[package]]
