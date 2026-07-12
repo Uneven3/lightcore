@@ -1,4 +1,5 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::color::Srgba;
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -42,6 +43,14 @@ pub(crate) struct VisualCache {
     /// per kind via `Sprite::custom_size`); `glow_image` is a radial falloff for the halo.
     pub(crate) core_image: Handle<Image>,
     pub(crate) glow_image: Handle<Image>,
+    /// Per-`LightColor` hot-core disc for score shards (see `radial_hot_core_image`) — white at the
+    /// center, fading to the light's own hue toward the rim, so a captured light reads as a real
+    /// emitter instead of a flat tinted dot.
+    shard_core_image: [Handle<Image>; 5],
+    /// Plain 1×1 quad, UVs 0..1: the `Mesh2d` counterpart of a `Sprite`'s implicit quad, for
+    /// entities that need a custom `Material2d` (e.g. `AdditiveMaterial`) instead of `Sprite`'s
+    /// hardcoded alpha blend. Scale the `Transform` to size it, same as `Sprite::custom_size` did.
+    pub(crate) unit_quad_mesh: Handle<Mesh>,
     /// Horizontal beam texture: alpha = (1-dy²)² along the full length, gentle tip fade at ends.
     /// Used by LaserBolt — scale to (length, glow_width); rotate 90° for vertical bolts.
     pub(crate) beam_image: Handle<Image>,
@@ -70,6 +79,9 @@ impl VisualCache {
     }
     pub(crate) fn ring_mat(&self, c: LightColor) -> Handle<ColorMaterial> {
         self.ring_mat[c.index()].clone()
+    }
+    pub(crate) fn shard_core_image(&self, c: LightColor) -> Handle<Image> {
+        self.shard_core_image[c.index()].clone()
     }
     pub(crate) fn light_mat(&self, kind: LightKind, color: LightColor) -> Handle<ColorMaterial> {
         if kind.is_hollow() {
@@ -215,6 +227,55 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Radial "hot core" disc, one per `LightColor`: pure white at the very center, blending out to
+/// the light's own color by `white_frac` of the radius, then solid color out to the same
+/// anti-aliased rim as `core_image`. A plain color-tinted white disc (the old `core_image` +
+/// per-instance `Sprite::color` approach) reads as a flat blob of paint; real bright light sources
+/// clip to white at the emitter and only show their true hue where the intensity has fallen off, so
+/// baking that gradient into the texture is what makes a score shard read as an actual light instead
+/// of a colored dot. RGB is baked per-color at cache-build time (`LightColor` is a fixed palette);
+/// `Sprite::color` still applies a uniform (hue-preserving) HDR brightness multiplier at spawn time.
+fn radial_hot_core_image(
+    images: &mut Assets<Image>,
+    size: u32,
+    color: Color,
+    white_frac: f32,
+) -> Handle<Image> {
+    let Srgba {
+        red, green, blue, ..
+    } = color.to_srgba();
+    let r = size as f32 / 2.0;
+    let mut data = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - r;
+            let dy = y as f32 + 0.5 - r;
+            let d = ((dx * dx + dy * dy).sqrt() / r).min(1.0);
+            let t = smoothstep(0.0, white_frac, d);
+            let cr = 1.0 + (red - 1.0) * t;
+            let cg = 1.0 + (green - 1.0) * t;
+            let cb = 1.0 + (blue - 1.0) * t;
+            let a = 1.0 - smoothstep(0.80, 1.0, d);
+            let i = ((y * size + x) * 4) as usize;
+            data[i] = (cr.clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 1] = (cg.clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 2] = (cb.clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 3] = (a.clamp(0.0, 1.0) * 255.0) as u8;
+        }
+    }
+    images.add(Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    ))
+}
+
 pub(crate) fn build_cache(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -273,6 +334,15 @@ pub(crate) fn build_cache(
         core_image: radial_image(&mut images, 32, |d| 1.0 - smoothstep(0.80, 1.0, d)),
         // Radial halo: bright center easing to nothing at the rim, optimized for 128x128 size.
         glow_image: radial_image(&mut images, 128, |d| (1.0 - d) * (1.0 - d)),
+        shard_core_image: std::array::from_fn(|i| {
+            radial_hot_core_image(
+                &mut images,
+                32,
+                LightColor::from_index(i).bevy_color(),
+                0.45,
+            )
+        }),
+        unit_quad_mesh: meshes.add(Rectangle::new(1.0, 1.0)),
         // Horizontal beam: uniform brightness along length, soft perpendicular falloff.
         beam_image: make_beam_image(&mut images, 256),
         square_image: images.add(Image::new(

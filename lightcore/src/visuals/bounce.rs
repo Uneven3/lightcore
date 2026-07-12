@@ -3,9 +3,12 @@ use bevy::prelude::*;
 use crate::core::prelude::*;
 use crate::gameplay::PendingSwap;
 
-const BOUNCE_DURATION: f32 = 0.21;
-const BOUNCE_SQUASH_Y: f32 = 0.78;
-const BOUNCE_STRETCH_X: f32 = 1.12;
+const BOUNCE_DURATION: f32 = 0.48;
+/// Peak squash/stretch deviation from `Vec3::ONE` at the instant of landing (t=0) — same damped-
+/// spring shape as `gameplay::input::SelectJelly`.
+const BOUNCE_AMOUNT: f32 = 0.24;
+/// Number of full squash↔stretch cycles over `BOUNCE_DURATION`.
+const BOUNCE_CYCLES: f32 = 3.0;
 
 #[derive(Component)]
 pub(crate) struct Settling;
@@ -51,12 +54,14 @@ pub(crate) fn tick_land_bounce(
 ) {
     for (e, mut t, mut b) in &mut q {
         b.timer.tick(time.delta());
-        let ease = 1.0 - (1.0 - b.timer.fraction()).powi(3);
-        t.scale = Vec3::new(
-            BOUNCE_STRETCH_X + (1.0 - BOUNCE_STRETCH_X) * ease,
-            BOUNCE_SQUASH_Y + (1.0 - BOUNCE_SQUASH_Y) * ease,
-            1.0,
-        );
+        let frac = b.timer.fraction();
+        // Damped cosine: full amplitude at the instant of impact (t=0 ⇒ cos(0)=1), ringing through
+        // `BOUNCE_CYCLES` squash↔stretch swings that shrink as `decay` falls off — same shape as
+        // the select-jelly punch, so landing and grabbing share one consistent "juice" language.
+        let decay = (1.0 - frac).powi(2);
+        let wobble = (frac * BOUNCE_CYCLES * std::f32::consts::TAU).cos() * decay;
+        let squash = BOUNCE_AMOUNT * wobble;
+        t.scale = Vec3::new(1.0 + squash, 1.0 - squash, 1.0);
         if b.timer.is_finished() {
             t.scale = Vec3::ONE;
             commands.entity(e).try_remove::<LandBounce>();

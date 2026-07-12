@@ -11,14 +11,14 @@ use crate::core::locale::{Language, TrKey};
 use crate::input::InputActions;
 use crate::platform::PlatformProfile;
 use crate::state::GameState;
-use crate::visuals::camera::{FpsTarget, ShakeSettings};
+use crate::visuals::camera::FpsTarget;
 use crate::visuals::glow::GlowSettings;
 use crate::visuals::grid_water::GridWaterSettings;
 use crate::visuals::particles::ParticleSettings;
 use crate::visuals::render_target::InternalResolution;
 use crate::visuals::score_light::ShardSettings;
 
-/// Settings screen — glow, camera shake and particle parameters (otherwise hardcoded constants)
+/// Settings screen — glow and particle parameters (otherwise hardcoded constants)
 /// plus volume, all edited live via Bevy's native headless `Slider` widget. Changes apply
 /// immediately to the underlying resources; nothing is persisted to disk this pass.
 pub(crate) struct OptionsPlugin;
@@ -175,8 +175,6 @@ enum SliderTarget {
     GlowOuterAlpha,
     GlowInnerRadius,
     GlowInnerAlpha,
-    ShakeMaxOffset,
-    ShakeDecayRate,
     PopBurstCount,
     BurstRadius,
     MembraneRadius,
@@ -194,13 +192,13 @@ enum SliderTarget {
     ShardBaseSize,
     ShardCurve,
     ShardHdrBoost,
+    ShardHold,
 }
 
 fn spawn_options(
     mut commands: Commands,
     settings: Res<WindowSettings>,
     glow: Res<GlowSettings>,
-    shake: Res<ShakeSettings>,
     particles: Res<ParticleSettings>,
     gv: Res<GlobalVolume>,
     fps_target: Res<FpsTarget>,
@@ -369,22 +367,6 @@ fn spawn_options(
             );
             spawn_slider(
                 root,
-                "Shake offset",
-                SliderTarget::ShakeMaxOffset,
-                0.0,
-                TILE * 0.3,
-                shake.max_offset,
-            );
-            spawn_slider(
-                root,
-                "Shake decay",
-                SliderTarget::ShakeDecayRate,
-                1.0,
-                15.0,
-                shake.decay_rate,
-            );
-            spawn_slider(
-                root,
                 "Pop burst count",
                 SliderTarget::PopBurstCount,
                 1.0,
@@ -506,6 +488,14 @@ fn spawn_options(
                 1.0,
                 8.0,
                 shards.hdr_boost,
+            );
+            spawn_slider(
+                root,
+                "Shard pausa",
+                SliderTarget::ShardHold,
+                0.0,
+                0.4,
+                shards.hold_secs,
             );
         });
 }
@@ -631,7 +621,6 @@ fn update_slider_value_labels(
 fn apply_slider_values(
     sliders: Query<(&SliderTarget, &SliderValue), Changed<SliderValue>>,
     mut glow: ResMut<GlowSettings>,
-    mut shake: ResMut<ShakeSettings>,
     mut particles: ResMut<ParticleSettings>,
     mut gv: ResMut<GlobalVolume>,
     mut ray: ResMut<RaySettings>,
@@ -644,8 +633,6 @@ fn apply_slider_values(
             SliderTarget::GlowOuterAlpha => glow.outer_alpha = value.0,
             SliderTarget::GlowInnerRadius => glow.inner_radius = value.0,
             SliderTarget::GlowInnerAlpha => glow.inner_alpha = value.0,
-            SliderTarget::ShakeMaxOffset => shake.max_offset = value.0,
-            SliderTarget::ShakeDecayRate => shake.decay_rate = value.0,
             SliderTarget::PopBurstCount => {
                 particles.pop_burst_count = value.0.round().max(1.0) as usize
             }
@@ -665,6 +652,7 @@ fn apply_slider_values(
             SliderTarget::ShardBaseSize => shards.base_size_frac = value.0,
             SliderTarget::ShardCurve => shards.curve_frac = value.0,
             SliderTarget::ShardHdrBoost => shards.hdr_boost = value.0,
+            SliderTarget::ShardHold => shards.hold_secs = value.0,
         }
     }
 }
@@ -947,8 +935,6 @@ fn get_slider_label_text(target: SliderTarget, lang: Language) -> &'static str {
         SliderTarget::GlowOuterAlpha => lang.tr(TrKey::SliderGlowOuterAlpha),
         SliderTarget::GlowInnerRadius => lang.tr(TrKey::SliderGlowInnerRadius),
         SliderTarget::GlowInnerAlpha => lang.tr(TrKey::SliderGlowInnerAlpha),
-        SliderTarget::ShakeMaxOffset => lang.tr(TrKey::SliderShakeMaxOffset),
-        SliderTarget::ShakeDecayRate => lang.tr(TrKey::SliderShakeDecayRate),
         SliderTarget::PopBurstCount => lang.tr(TrKey::SliderPopBurstCount),
         SliderTarget::BurstRadius => lang.tr(TrKey::SliderBurstRadius),
         SliderTarget::MembraneRadius => lang.tr(TrKey::SliderMembraneRadius),
@@ -963,6 +949,7 @@ fn get_slider_label_text(target: SliderTarget, lang: Language) -> &'static str {
         SliderTarget::ShardBaseSize => lang.tr(TrKey::SliderShardBaseSize),
         SliderTarget::ShardCurve => lang.tr(TrKey::SliderShardCurve),
         SliderTarget::ShardHdrBoost => lang.tr(TrKey::SliderShardHdrBoost),
+        SliderTarget::ShardHold => lang.tr(TrKey::SliderShardHold),
         SliderTarget::Volume => lang.tr(TrKey::SliderVolume),
     }
 }

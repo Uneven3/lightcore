@@ -68,8 +68,6 @@ pub(crate) enum TrKey {
     SliderGlowOuterAlpha,
     SliderGlowInnerRadius,
     SliderGlowInnerAlpha,
-    SliderShakeMaxOffset,
-    SliderShakeDecayRate,
     SliderPopBurstCount,
     SliderBurstRadius,
     SliderMembraneRadius,
@@ -84,6 +82,7 @@ pub(crate) enum TrKey {
     SliderShardBaseSize,
     SliderShardCurve,
     SliderShardHdrBoost,
+    SliderShardHold,
     SliderVolume,
 
     // ── HUD / in-game ─────────────────────────────────────────────────────────
@@ -258,8 +257,6 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::SliderGlowOuterAlpha => "Glow alpha ext",
         TrKey::SliderGlowInnerRadius => "Glow radio int",
         TrKey::SliderGlowInnerAlpha => "Glow alpha int",
-        TrKey::SliderShakeMaxOffset => "Shake max offset",
-        TrKey::SliderShakeDecayRate => "Shake decay",
         TrKey::SliderPopBurstCount => "Part pop burst",
         TrKey::SliderBurstRadius => "Part burst radio",
         TrKey::SliderMembraneRadius => "Part membrane radio",
@@ -274,6 +271,7 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::SliderShardBaseSize => "Fragmento base size",
         TrKey::SliderShardCurve => "Fragmento curve",
         TrKey::SliderShardHdrBoost => "Fragmento HDR boost",
+        TrKey::SliderShardHold => "Fragmento pausa",
         TrKey::SliderVolume => "Volumen",
         // HUD
         TrKey::Moves => "moves",
@@ -428,8 +426,6 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::SliderGlowOuterAlpha => "Glow Outer Alpha",
         TrKey::SliderGlowInnerRadius => "Glow Inner Radius",
         TrKey::SliderGlowInnerAlpha => "Glow Inner Alpha",
-        TrKey::SliderShakeMaxOffset => "Shake Max Offset",
-        TrKey::SliderShakeDecayRate => "Shake Decay Rate",
         TrKey::SliderPopBurstCount => "Particle Pop Burst",
         TrKey::SliderBurstRadius => "Particle Burst Radius",
         TrKey::SliderMembraneRadius => "Particle Membrane Radius",
@@ -444,6 +440,7 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::SliderShardBaseSize => "Shard Base Size",
         TrKey::SliderShardCurve => "Shard Curve",
         TrKey::SliderShardHdrBoost => "Shard HDR Boost",
+        TrKey::SliderShardHold => "Shard Hold",
         TrKey::SliderVolume => "Volume",
         // HUD
         TrKey::Moves => "moves",

@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::core::grid::RaySettings;
 use crate::state::GameState;
 
+pub(crate) mod additive_material;
 pub(crate) mod assets;
 pub(crate) mod bounce;
 pub(crate) mod breathing;
@@ -23,9 +24,7 @@ pub(crate) struct VisualsPlugin;
 
 impl Plugin for VisualsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<camera::CameraShake>()
-            .init_resource::<camera::ShakeSettings>()
-            .init_resource::<camera::FpsTarget>()
+        app.init_resource::<camera::FpsTarget>()
             .init_resource::<camera::FrameTimer>()
             .init_resource::<glow::GlowSettings>()
             .init_resource::<grid_water::GridWaterSettings>()
@@ -36,12 +35,12 @@ impl Plugin for VisualsPlugin {
             .add_observer(effects::on_power_light_consumed)
             .add_observer(effects::on_power_combo)
             .add_observer(light_trail::on_power_blast_trail)
-            .add_observer(camera::on_chain_pop)
             .add_observer(score_light::on_chain_pop_score_light)
             .add_observer(score_light::on_score_drained)
             .add_observer(score_light::on_light_popped)
             .add_plugins(space_background::SpaceBackgroundPlugin)
             .add_plugins(grid_water::GridWaterPlugin)
+            .add_plugins(additive_material::AdditiveMaterialPlugin)
             .add_systems(PreStartup, assets::build_cache)
             .add_systems(PreUpdate, camera::record_frame_start)
             .add_systems(Last, camera::cap_framerate)
@@ -55,6 +54,8 @@ impl Plugin for VisualsPlugin {
                         .run_if(any_with_component::<score_light::ScoreShardScatter>),
                     score_light::tick_score_shard_absorb
                         .run_if(any_with_component::<score_light::ScoreShardAbsorb>),
+                    score_light::tick_score_shard_absorb_glow
+                        .run_if(any_with_component::<score_light::ScoreShardAbsorbGlow>),
                     glow::attach_glow_pools,
                     glow::flicker,
                     core_motion::rebuild_cores,
@@ -103,10 +104,6 @@ impl Plugin for VisualsPlugin {
                     hard_shadow::update_hard_shadow_label,
                 )
                     .run_if(not(in_state(GameState::GameOver))),
-            )
-            .add_systems(
-                Update,
-                camera::apply_camera_shake.run_if(not(in_state(GameState::GameOver))),
             )
             .add_systems(
                 Update,

@@ -1,12 +1,9 @@
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
-use rand::Rng;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 use web_time::Instant;
 
-use crate::core::grid::TILE;
-use crate::gameplay::ChainPop;
 use crate::visuals::render_target::{self, WorldCamera};
 
 /// Target frames per second — cycles through presets via the Options screen.
@@ -82,28 +79,6 @@ pub(crate) fn cap_framerate(t: Res<FrameTimer>, target: Res<FpsTarget>) {
     }
 }
 
-/// Live-tunable camera shake parameters, edited from the Options screen.
-#[derive(Resource, Clone, Copy)]
-pub(crate) struct ShakeSettings {
-    pub(crate) max_offset: f32,
-    /// Exponential decay coefficient, ~150-250ms to settle at the default.
-    pub(crate) decay_rate: f32,
-}
-
-impl Default for ShakeSettings {
-    fn default() -> Self {
-        Self {
-            max_offset: TILE * 0.12,
-            decay_rate: 6.0,
-        }
-    }
-}
-
-#[derive(Resource, Default)]
-pub(crate) struct CameraShake {
-    pub(crate) trauma: f32,
-}
-
 pub(crate) fn setup_camera(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -160,28 +135,4 @@ pub(crate) fn toggle_slow_mo(
         };
         virtual_time.set_relative_speed(new_speed);
     }
-}
-
-pub(crate) fn on_chain_pop(trigger: On<ChainPop>, mut shake: ResMut<CameraShake>) {
-    shake.trauma = (shake.trauma + trigger.removed as f32 * 0.04).min(1.0);
-}
-
-pub(crate) fn apply_camera_shake(
-    time: Res<Time>,
-    mut shake: ResMut<CameraShake>,
-    shake_settings: Res<ShakeSettings>,
-    mut camera_t: Single<&mut Transform, With<WorldCamera>>,
-) {
-    if shake.trauma <= 0.001 {
-        shake.trauma = 0.0;
-        camera_t.translation.x = 0.0;
-        camera_t.translation.y = 0.0;
-        return;
-    }
-    let mut rng = rand::rng();
-    let amount = shake.trauma * shake.trauma;
-    camera_t.translation.x = rng.random_range(-1.0..1.0) * shake_settings.max_offset * amount;
-    camera_t.translation.y = rng.random_range(-1.0..1.0) * shake_settings.max_offset * amount;
-    shake.trauma =
-        (shake.trauma - shake_settings.decay_rate * shake.trauma * time.delta_secs()).max(0.0);
 }

@@ -167,11 +167,75 @@ pub(crate) fn handle_input(
     }
 }
 
+/// Steady-state scale for a selected light — `SelectJelly` eases into this same value, so the
+/// punch hands off to this flat highlight seamlessly once it finishes.
+const SELECTED_SCALE: f32 = 1.15;
+
 pub(crate) fn highlight_selected(
-    mut lights: Query<(&mut Transform, Has<Selected>), With<FallPhysics>>,
+    mut lights: Query<(&mut Transform, Has<Selected>), (With<FallPhysics>, Without<SelectJelly>)>,
 ) {
     for (mut t, sel) in &mut lights {
-        t.scale = if sel { Vec3::splat(1.15) } else { Vec3::ONE };
+        t.scale = if sel {
+            Vec3::splat(SELECTED_SCALE)
+        } else {
+            Vec3::ONE
+        };
+    }
+}
+
+const SELECT_JELLY_DURATION: f32 = 0.5;
+/// Peak squash/stretch deviation from `SELECTED_SCALE`, at the very first instant (t=0) — same
+/// strength as a single punch would be, just spent on ringing down instead of one settle.
+const SELECT_JELLY_AMOUNT: f32 = 0.35;
+/// Number of full squash↔stretch cycles over `SELECT_JELLY_DURATION` — "3 rebotes".
+const SELECT_JELLY_CYCLES: f32 = 3.0;
+
+/// A squash-stretch bounce the instant a light is grabbed (tapped/dragged): starts fully deformed
+/// and rings down through `SELECT_JELLY_CYCLES` decaying oscillations (each one gentler than the
+/// last) before settling into `SELECTED_SCALE` — a damped spring, not a single ease-out settle, so
+/// picking one up reads as actual jelly wobbling instead of one snap. Hands scale control back to
+/// `highlight_selected` once it finishes.
+#[derive(Component)]
+pub(crate) struct SelectJelly {
+    timer: Timer,
+}
+
+/// Fires the punch the frame a light becomes `Selected` — tap-select and the keyboard/gamepad
+/// cursor path both insert `Selected` the same way, so this one hook covers both.
+pub(crate) fn on_light_selected(mut commands: Commands, q: Query<Entity, Added<Selected>>) {
+    for e in &q {
+        commands.entity(e).try_insert(SelectJelly {
+            timer: Timer::from_seconds(SELECT_JELLY_DURATION, TimerMode::Once),
+        });
+    }
+}
+
+pub(crate) fn tick_select_jelly(
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut Transform, &mut SelectJelly, Has<Selected>)>,
+    time: Res<Time>,
+) {
+    for (e, mut t, mut jelly, sel) in &mut q {
+        if !sel {
+            // Deselected before the punch finished (fast tap-then-drag-away) — bail immediately so
+            // `highlight_selected` regains control and snaps back to rest next frame instead of
+            // fighting over `Transform::scale`.
+            commands.entity(e).try_remove::<SelectJelly>();
+            continue;
+        }
+        jelly.timer.tick(time.delta());
+        let frac = jelly.timer.fraction();
+        // Damped cosine: starts at full amplitude (t=0 ⇒ cos(0)=1, matching a grab impact) and
+        // rings through `SELECT_JELLY_CYCLES` full squash↔stretch swings, each one smaller than
+        // the last as `decay` falls off toward 0 by the time the timer finishes.
+        let decay = (1.0 - frac).powi(2);
+        let wobble = (frac * SELECT_JELLY_CYCLES * std::f32::consts::TAU).cos() * decay;
+        let squash = SELECT_JELLY_AMOUNT * wobble;
+        t.scale = Vec3::new(SELECTED_SCALE + squash, SELECTED_SCALE - squash, 1.0);
+        if jelly.timer.is_finished() {
+            t.scale = Vec3::splat(SELECTED_SCALE);
+            commands.entity(e).try_remove::<SelectJelly>();
+        }
     }
 }
 

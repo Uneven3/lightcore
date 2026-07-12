@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use rand::Rng;
 use std::f32::consts::TAU;
 
+use super::additive_material::AdditiveMaterial;
 use super::assets::VisualCache;
 use super::particles::{ParticleSettings, spawn_membrane_pop};
 use crate::core::grid::TILE;
@@ -36,6 +37,9 @@ pub(crate) struct ShardSettings {
     pub max_secs: f32,
     /// HDR brightness multiplier applied to the shard sprite color.
     pub hdr_boost: f32,
+    /// Seconds — brief hover at the capture point before the shard launches into its curved
+    /// flight, so the capture reads as "gather, then throw" instead of an instant snap into motion.
+    pub hold_secs: f32,
 }
 
 impl Default for ShardSettings {
@@ -48,6 +52,7 @@ impl Default for ShardSettings {
             min_secs: 0.68,
             max_secs: 1.08,
             hdr_boost: 5.0,
+            hold_secs: 0.24,
         }
     }
 }
@@ -56,8 +61,9 @@ impl Default for ShardSettings {
 /// point and is drawn into the score readout along a curved, accelerating path, carrying its
 /// share of the points it adds to `DisplayedScore` on arrival (see `gameplay::DisplayedScore`
 /// for why this is decoupled from the real, immediate `Score`) and tinting `ScoreGlow`.
-/// Rendered as a `Sprite` using `glow_image` (radial falloff) so it looks like a glowing orb,
-/// not a flat disc — alpha is driven directly via `Sprite::color` in `tick_score_light`.
+/// Rendered as `Mesh2d` + `AdditiveMaterial` (not `Sprite`) so overlapping shards SUM brightness
+/// instead of alpha-blending into a muddy average — see `additive_material` for why. Alpha is
+/// driven directly via the material's color in `tick_score_light`.
 #[derive(Component)]
 pub(crate) struct ScoreShard {
     from: Vec3,
@@ -71,7 +77,15 @@ pub(crate) struct ScoreShard {
     /// Waits for the light's PopDelay to expire before the shard starts moving — keeps it invisible
     /// until the light's core actually disappears (so shards don't appear before the pop).
     pop_delay: Timer,
+    /// Once `pop_delay` clears, the shard hovers at `from` for this long — a little gathered breath
+    /// before it throws itself into the curve — instead of snapping straight into flight.
+    hold: Timer,
+    /// Random phase offset so each shard's glow twinkle is out of sync with its neighbors'.
+    glow_phase: f32,
     color: LightColor,
+    /// Base on-screen size in pixels, baked into `Transform::scale` at spawn (Mesh2d has no
+    /// `Sprite::custom_size` equivalent) — animation systems must multiply by this, not overwrite it.
+    base_size: f32,
 }
 
 #[derive(Component)]
@@ -88,6 +102,16 @@ pub(crate) struct ScoreShardAbsorb {
     timer: Timer,
 }
 
+/// Marks a `ScoreShardAbsorb` that was converted from a `ScoreShard` mid-flight (see
+/// `on_score_drained`) and therefore renders via `Mesh2d` + `AdditiveMaterial` instead of `Sprite`
+/// — ticked separately by `tick_score_shard_absorb_glow` since it needs `base_size` and a
+/// different set of components than the plain-`Sprite` drain shards `tick_score_shard_absorb`
+/// handles.
+#[derive(Component)]
+pub(crate) struct ScoreShardAbsorbGlow {
+    base_size: f32,
+}
+
 fn quad_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
     let u = 1.0 - t;
     p0 * (u * u) + p1 * (2.0 * u * t) + p2 * (t * t)
@@ -98,18 +122,18 @@ fn tint_of(color: LightColor) -> Vec3 {
     Vec3::new(lin.red, lin.green, lin.blue)
 }
 
-fn shard_core_color(color: LightColor, hdr_boost: f32) -> Color {
-    let lin = color.bevy_color().to_linear();
-    Color::linear_rgb(
-        lin.red * hdr_boost,
-        lin.green * hdr_boost,
-        lin.blue * hdr_boost,
-    )
+/// Uniform (hue-preserving) brightness multiplier for the shard's hot-core sprite — the hue
+/// gradient itself now lives in the baked `shard_core_image` texture (see `visuals::assets`), so
+/// this only needs to scale intensity for Bloom, not tint.
+fn shard_core_boost(hdr_boost: f32) -> Color {
+    Color::linear_rgb(hdr_boost, hdr_boost, hdr_boost)
 }
 
 fn shard_halo_color(color: LightColor, hdr_boost: f32) -> Color {
     let lin = color.bevy_color().to_linear();
-    let halo_boost = hdr_boost * 0.85;
+    // Brighter than the old 0.85× — now that the halo also carries the trail streak, a smaller,
+    // more concentrated shape reads as "dim" unless it's pushed hotter to match.
+    let halo_boost = hdr_boost * 1.3;
     Color::linear_rgb(
         lin.red * halo_boost,
         lin.green * halo_boost,
@@ -123,6 +147,7 @@ pub(crate) fn on_chain_pop_score_light(
     cache: Res<VisualCache>,
     anchor: Res<ScoreAnchor>,
     shards: Res<ShardSettings>,
+    mut materials: ResMut<Assets<AdditiveMaterial>>,
 ) {
     if trigger.points == 0 || trigger.pops.is_empty() {
         return;
@@ -168,7 +193,7 @@ pub(crate) fn on_chain_pop_score_light(
         let radial =
             Vec2::from_angle(rng.random_range(0.0..TAU)) * rng.random_range(0.0..TILE * 0.6);
         let ctrl = from + (line * along + perp * side + radial).extend(0.0);
-        let core_color = shard_core_color(c, shards.hdr_boost);
+        let core_color = shard_core_boost(shards.hdr_boost);
         let glow_color = shard_halo_color(c, shards.hdr_boost);
 
         let parent = commands
@@ -184,27 +209,36 @@ pub(crate) fn on_chain_pop_score_light(
                         TimerMode::Once,
                     ),
                     pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
+                    hold: Timer::from_seconds(
+                        shards.hold_secs * rng.random_range(0.75..1.25),
+                        TimerMode::Once,
+                    ),
+                    glow_phase: rng.random_range(0.0..TAU),
                     color: c,
+                    base_size: size,
                 },
-                Sprite {
-                    image: cache.core_image.clone(),
-                    color: core_color,
-                    custom_size: Some(Vec2::splat(size)),
-                    ..default()
-                },
-                Transform::from_translation(from),
+                Mesh2d(cache.unit_quad_mesh.clone()),
+                MeshMaterial2d(materials.add(AdditiveMaterial {
+                    color: core_color.to_linear(),
+                    texture: cache.shard_core_image(c),
+                })),
+                Transform::from_translation(from).with_scale(Vec3::splat(size)),
             ))
             .id();
 
+        // Local scale is a RATIO relative to the parent, not a pixel size — the parent's own scale
+        // (base_size, then base_size·shrink-fraction as it animates) is inherited via
+        // GlobalTransform composition, so this child ends up at 2.8× the parent's *current* size
+        // exactly like the old `Sprite::custom_size = size * 2.8` did (custom_size is also
+        // multiplied by the inherited transform scale). Baking `size` in again here would square it.
         let glow_child = commands
             .spawn((
-                Sprite {
-                    image: cache.glow_image.clone(),
-                    color: glow_color,
-                    custom_size: Some(Vec2::splat(size * 2.8)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, 0.0, -0.1),
+                Mesh2d(cache.unit_quad_mesh.clone()),
+                MeshMaterial2d(materials.add(AdditiveMaterial {
+                    color: glow_color.to_linear(),
+                    texture: cache.glow_image.clone(),
+                })),
+                Transform::from_xyz(0.0, 0.0, -0.1).with_scale(Vec3::splat(2.8)),
             ))
             .id();
 
@@ -218,14 +252,24 @@ pub(crate) fn on_score_drained(
     cache: Res<VisualCache>,
     anchor: Res<ScoreAnchor>,
     score_glow: Res<ScoreGlow>,
-    mut q: Query<(Entity, &Transform, &mut Sprite, Option<&Children>), With<ScoreShard>>,
-    mut child_sprite_q: Query<&mut Sprite, Without<ScoreShard>>,
+    mut materials: ResMut<Assets<AdditiveMaterial>>,
+    mut q: Query<
+        (
+            Entity,
+            &ScoreShard,
+            &Transform,
+            &MeshMaterial2d<AdditiveMaterial>,
+            Option<&Children>,
+        ),
+        With<ScoreShard>,
+    >,
+    child_material_q: Query<&MeshMaterial2d<AdditiveMaterial>, Without<ScoreShard>>,
 ) {
     if trigger.origins.is_empty() {
         return;
     }
     let mut rng = rand::rng();
-    for (e, t, mut sprite, children) in &mut q {
+    for (e, shard, t, material, children) in &mut q {
         let from = t.translation;
         let to = nearest_origin(from, &trigger.origins)
             + Vec3::new(
@@ -234,11 +278,15 @@ pub(crate) fn on_score_drained(
                 0.0,
             );
         let ctrl = drain_ctrl(from, to, &mut rng);
-        sprite.color = sprite.color.with_alpha(1.0);
+        if let Some(mut mat) = materials.get_mut(&material.0) {
+            mat.color.alpha = 1.0;
+        }
         if let Some(children) = children {
             for child in children.iter() {
-                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
-                    child_sprite.color = child_sprite.color.with_alpha(0.62);
+                if let Ok(child_material) = child_material_q.get(child)
+                    && let Some(mut mat) = materials.get_mut(&child_material.0)
+                {
+                    mat.color.alpha = 0.62;
                 }
             }
         }
@@ -249,7 +297,10 @@ pub(crate) fn on_score_drained(
                 to,
                 timer: Timer::from_seconds(rng.random_range(0.42..0.68), TimerMode::Once),
             },
-            Transform::from_translation(t.translation),
+            ScoreShardAbsorbGlow {
+                base_size: shard.base_size,
+            },
+            Transform::from_translation(t.translation).with_scale(Vec3::splat(shard.base_size)),
         ));
     }
 
@@ -380,46 +431,99 @@ pub(crate) fn tick_score_light(
     mut displayed: ResMut<DisplayedScore>,
     mut glow: ResMut<ScoreGlow>,
     mut displayed_cores: ResMut<DisplayedCollectedCores>,
+    mut materials: ResMut<Assets<AdditiveMaterial>>,
     mut q: Query<(
         Entity,
         &mut ScoreShard,
         &mut Transform,
-        &mut Sprite,
+        &MeshMaterial2d<AdditiveMaterial>,
         Option<&Children>,
     )>,
-    mut child_sprite_q: Query<&mut Sprite, Without<ScoreShard>>,
+    child_material_q: Query<&MeshMaterial2d<AdditiveMaterial>, Without<ScoreShard>>,
+    mut child_transform_q: Query<&mut Transform, Without<ScoreShard>>,
 ) {
-    for (e, mut shard, mut t, mut sprite, children) in &mut q {
+    for (e, mut shard, mut t, material, children) in &mut q {
         if !shard.pop_delay.tick(time.delta()).is_finished() {
-            sprite.color = sprite.color.with_alpha(0.0);
+            if let Some(mut mat) = materials.get_mut(&material.0) {
+                mat.color.alpha = 0.0;
+            }
             if let Some(children) = children {
                 for child in children.iter() {
-                    if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
-                        child_sprite.color = child_sprite.color.with_alpha(0.0);
+                    if let Ok(child_material) = child_material_q.get(child)
+                        && let Some(mut mat) = materials.get_mut(&child_material.0)
+                    {
+                        mat.color.alpha = 0.0;
                     }
                 }
             }
             continue;
         }
+
+        if !shard.hold.tick(time.delta()).is_finished() {
+            // Hover at the capture point and pop into view instead of appearing already mid-flight
+            // — a short gathered breath before the shard throws itself into the curve.
+            let hold_frac = shard.hold.fraction();
+            let pop_in = (hold_frac / 0.4).min(1.0);
+            t.translation = shard.from;
+            t.scale = Vec3::splat(shard.base_size * (0.55 + 0.45 * pop_in));
+            if let Some(mut mat) = materials.get_mut(&material.0) {
+                mat.color.alpha = pop_in;
+            }
+            if let Some(children) = children {
+                for child in children.iter() {
+                    if let Ok(child_material) = child_material_q.get(child)
+                        && let Some(mut mat) = materials.get_mut(&child_material.0)
+                    {
+                        mat.color.alpha = pop_in;
+                    }
+                }
+            }
+            continue;
+        }
+
         shard.timer.tick(time.delta());
         let frac = shard.timer.fraction();
-        // ease-in (t²): the shard drifts out of the core slowly, then accelerates as it's pulled
-        // into the score — "una curva que va acelerando".
-        let eased = frac * frac;
+        // ease-in (t³): a strong hang-then-snap — the shard barely creeps for the first half of
+        // the trip, then accelerates hard into the score, instead of the gentler t² curve.
+        let eased = frac * frac * frac;
         t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
         // Shrink as it's absorbed, so arrival reads as the score "drinking" the light.
-        t.scale = Vec3::splat(1.0 - 0.6 * frac);
-        // Alpha: hold full for the first 65% of the trip, fade to 0 in the last 35% (comet tail).
-        let alpha = if frac < 0.65 {
-            1.0
-        } else {
-            (1.0 - frac) / 0.35
-        };
-        sprite.color = sprite.color.with_alpha(alpha);
+        t.scale = Vec3::splat(shard.base_size * (1.0 - 0.6 * frac));
+        // Full brightness for the whole flight — the light disappears ABRUPTLY on arrival (the
+        // despawn below), not a gradual fade-out.
+        let alpha = 1.0;
+        if let Some(mut mat) = materials.get_mut(&material.0) {
+            mat.color.alpha = alpha;
+        }
+        // Cheap twinkle: modulate just the halo child's alpha with a per-shard-phased sine, so the
+        // glow gently shimmers in flight instead of sitting at one flat brightness — no extra draw
+        // calls or entities, just a sin() per shard per frame.
+        let twinkle = 1.0 + 0.15 * (time.elapsed_secs() * 10.0 + shard.glow_phase).sin();
+        // Bézier tangent at `eased`: gives the instantaneous direction of travel so the halo can
+        // stretch into a streak pointing back along the path — a trail, without spawning any extra
+        // entities. Grows with `frac` since the ease-in curve is fastest right before landing.
+        // Kept small (vs. a wide smear) and boosted via `shard_halo_color`'s brighter multiplier so
+        // it reads as a tight, hot streak rather than a diffuse smudge.
+        let tangent = (2.0 * (1.0 - eased) * (shard.ctrl - shard.from)
+            + 2.0 * eased * (shard.to - shard.ctrl))
+            .truncate();
+        let dir = tangent.normalize_or_zero();
+        let trail_stretch = 1.0 + 0.9 * frac;
+        // Shift the streak backward by half its added length (in the same child-local units as
+        // `scale`, so it composes the same way through the parent's transform) — the elongation
+        // trails BEHIND the shard instead of growing symmetrically through it.
+        let trail_offset = -dir * (2.3 * (trail_stretch - 1.0) * 0.5);
         if let Some(children) = children {
             for child in children.iter() {
-                if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
-                    child_sprite.color = child_sprite.color.with_alpha(alpha);
+                if let Ok(child_material) = child_material_q.get(child)
+                    && let Some(mut mat) = materials.get_mut(&child_material.0)
+                {
+                    mat.color.alpha = (alpha * twinkle).clamp(0.0, 1.0);
+                }
+                if let Ok(mut child_t) = child_transform_q.get_mut(child) {
+                    child_t.rotation = Quat::from_rotation_z(dir.y.atan2(dir.x));
+                    child_t.scale = Vec3::new(2.3 * trail_stretch, 1.3, 1.0);
+                    child_t.translation = trail_offset.extend(-0.1);
                 }
             }
         }
@@ -509,6 +613,60 @@ pub(crate) fn tick_score_shard_absorb(
             for child in children.iter() {
                 if let Ok(mut child_sprite) = child_sprite_q.get_mut(child) {
                     child_sprite.color = child_sprite.color.with_alpha(alpha * 0.55);
+                }
+            }
+        }
+
+        if absorb.timer.is_finished() {
+            if let Some(children) = children {
+                for child in children.iter() {
+                    commands.entity(child).try_despawn();
+                }
+            }
+            commands.entity(e).try_despawn();
+        }
+    }
+}
+
+/// Same animation as `tick_score_shard_absorb`, for the subset of `ScoreShardAbsorb` entities
+/// converted mid-flight from a captured `ScoreShard` (see `on_score_drained`) — those render via
+/// `Mesh2d` + `AdditiveMaterial`, not `Sprite`, so they need their own query shape and their
+/// `base_size` baked into `Transform::scale` instead of a bare 0..1 factor.
+pub(crate) fn tick_score_shard_absorb_glow(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut materials: ResMut<Assets<AdditiveMaterial>>,
+    mut q: Query<(
+        Entity,
+        &mut ScoreShardAbsorb,
+        &ScoreShardAbsorbGlow,
+        &mut Transform,
+        &MeshMaterial2d<AdditiveMaterial>,
+        Option<&Children>,
+    )>,
+    child_material_q: Query<&MeshMaterial2d<AdditiveMaterial>, Without<ScoreShardAbsorb>>,
+) {
+    for (e, mut absorb, glow, mut t, material, children) in &mut q {
+        absorb.timer.tick(time.delta());
+        let frac = absorb.timer.fraction();
+        let eased = 1.0 - (1.0 - frac).powi(3);
+        t.translation = quad_bezier(absorb.from, absorb.ctrl, absorb.to, eased);
+        t.scale = Vec3::splat(glow.base_size * (1.0 - 0.82 * frac));
+
+        let alpha = if frac < 0.78 {
+            1.0
+        } else {
+            (1.0 - frac) / 0.22
+        };
+        if let Some(mut mat) = materials.get_mut(&material.0) {
+            mat.color.alpha = alpha;
+        }
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(child_material) = child_material_q.get(child)
+                    && let Some(mut mat) = materials.get_mut(&child_material.0)
+                {
+                    mat.color.alpha = alpha * 0.55;
                 }
             }
         }

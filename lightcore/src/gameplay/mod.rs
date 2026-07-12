@@ -80,6 +80,8 @@ impl Plugin for GameplayPlugin {
                     shop::shop_targeting,
                     input::handle_input,
                     input::board_cursor_input,
+                    input::on_light_selected,
+                    input::tick_select_jelly,
                     input::highlight_selected,
                 )
                     .chain()

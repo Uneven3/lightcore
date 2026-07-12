@@ -26,6 +26,11 @@ const SCORE_NEON_BASE: f32 = 1.7;
 const SCORE_NEON_PULSE: f32 = 2.6;
 const SCORE_PULSE_FREQ: f32 = 22.0;
 const SCORE_PULSE_DECAY: f32 = 2.2;
+/// Jelly squash/stretch: shares `ScoreGlow::pulse` (the same envelope driving the neon color kick)
+/// as its amplitude, oscillating on a faster/springier frequency so an arriving shard reads as a
+/// squishy little bounce, not just a size pulse. Volume-preserving (x and y move opposite).
+const SCORE_JELLY_FREQ: f32 = 16.0;
+const SCORE_JELLY_AMOUNT: f32 = 0.16;
 
 pub(crate) struct UiPlugin;
 
@@ -647,6 +652,15 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
         ))
         .with_children(|row| {
             row.spawn((
+                // Versión del juego (Cargo.toml), para poder ubicar en qué build ocurrió un bug reportado.
+                Text::new(concat!("v", env!("CARGO_PKG_VERSION"))),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(cyan),
+            ));
+            row.spawn((
                 ImageNode {
                     image: bird,
                     color: cyan,
@@ -1057,18 +1071,24 @@ fn update_score_text(score: Res<DisplayedScore>, mut text: Single<&mut Text2d, W
 fn update_score_glow(
     time: Res<Time>,
     mut glow: ResMut<ScoreGlow>,
-    mut color: Single<&mut TextColor, With<ScoreText>>,
+    mut q: Single<(&mut TextColor, &mut Transform), With<ScoreText>>,
 ) {
     glow.pulse = (glow.pulse - SCORE_PULSE_DECAY * time.delta_secs()).max(0.0);
     let osc = (time.elapsed_secs() * SCORE_PULSE_FREQ).sin() * 0.5 + 0.5; // 0..1, fast
     let brightness = SCORE_NEON_BASE + glow.pulse * SCORE_NEON_PULSE * osc;
     let c = glow.rgb * brightness;
     let max_val = c.x.max(c.y).max(c.z);
+    let (color, transform) = &mut *q;
     if max_val > 1.0 {
         color.0 = Color::srgb(c.x / max_val, c.y / max_val, c.z / max_val);
     } else {
         color.0 = Color::srgb(c.x, c.y, c.z);
     }
+
+    // Jelly: a squishy squash/stretch bounce every time a shard lands, sharing `pulse` as its
+    // decaying amplitude — x and y move opposite so it reads as compressible jelly, not a resize.
+    let jelly = glow.pulse * (time.elapsed_secs() * SCORE_JELLY_FREQ).sin() * SCORE_JELLY_AMOUNT;
+    transform.scale = Vec3::new(1.0 + jelly, 1.0 - jelly, 1.0);
 }
 
 /// Parks the world-space score anchor at `SCORE_ANCHOR_SCREEN` projected through the camera,
