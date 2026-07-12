@@ -1,14 +1,15 @@
 use bevy::prelude::*;
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
-use crate::core::campaign::CampaignProgress;
 use crate::core::locale::TrKey;
-use crate::core::run::RunState;
-use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
 use crate::menu::options::{DeviceMode, WindowSettings};
 use crate::state::GameState;
 
-/// Title screen — the app boots here. "Jugar" → `LevelMenu`, "Opciones" → `Options`.
+/// Title screen — the app boots here. Only "Jugar" and "Opciones". Persistence (continuing an
+/// active run, seeing it dynamically labeled "Continuar run", or abandoning/restarting it) lives
+/// entirely inside `LevelMenu` — the ONE unified map — not duplicated here. This screen used to
+/// also offer "Continuar"/"Nuevo run"/"Modo Debug" as separate buttons, which just meant several
+/// different ways to reach the same place instead of one clear entry point.
 pub(crate) struct MainMenuPlugin;
 
 impl Plugin for MainMenuPlugin {
@@ -19,7 +20,6 @@ impl Plugin for MainMenuPlugin {
                 Update,
                 (
                     button_hover_system,
-                    run_button_system,
                     nav_button_system,
                     quit_button_system,
                     main_menu_tutorial_button_system,
@@ -36,25 +36,23 @@ struct MainMenuRoot;
 #[derive(Component, Clone)]
 struct NavButton(GameState);
 
-#[derive(Component, Clone, Copy)]
-enum RunMenuButton {
-    Continue,
-    New,
-    Debug,
-}
-
 #[derive(Component)]
 struct QuitButton;
 
-fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<WindowSettings>) {
+fn spawn_main_menu(mut commands: Commands, settings: Res<WindowSettings>) {
     let lang = settings.language;
     let compact = settings.device_mode == DeviceMode::Mobile;
+    let desktop = settings.device_mode == DeviceMode::Desktop;
     let row_gap = if compact { 10.0 } else { 26.0 };
     let title_font = if compact { 52.0 } else { 64.0 };
     let button_width = if compact { 260.0 } else { 280.0 };
     let button_height = if compact { 54.0 } else { 66.0 };
     let button_font = if compact { 24.0 } else { 30.0 };
-    let tutorial_font = if compact { 22.0 } else { 28.0 };
+    // The tutorial toggle is a small chip, not a full nav button — it's a minor settings flip,
+    // not a primary menu action, and shouldn't compete visually with Jugar/Opciones.
+    let tutorial_width = button_width * 0.6;
+    let tutorial_height = button_height * 0.6;
+    let tutorial_font = if compact { 15.0 } else { 17.0 };
     commands
         .spawn((
             MainMenuRoot,
@@ -78,42 +76,8 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 TextColor(Color::srgb(1.6, 1.8, 2.6)), // HDR → blooms
             ));
             let mut index = 0;
-            if run.active {
-                spawn_run_button(
-                    root,
-                    index,
-                    lang.tr(TrKey::Continue),
-                    RunMenuButton::Continue,
-                    button_width,
-                    button_height,
-                    button_font,
-                );
-                index += 1;
-            }
-            spawn_run_button(
-                root,
-                index,
-                lang.tr(TrKey::NewRun),
-                RunMenuButton::New,
-                button_width,
-                button_height,
-                button_font,
-            );
-            index += 1;
-
-            spawn_run_button(
-                root,
-                index,
-                lang.tr(TrKey::DebugMode),
-                RunMenuButton::Debug,
-                button_width,
-                button_height,
-                button_font,
-            );
-            index += 1;
-
             for (label, target) in [
-                (lang.tr(TrKey::Levels), GameState::LevelMenu),
+                (lang.tr(TrKey::Play), GameState::LevelMenu),
                 (lang.tr(TrKey::Options), GameState::Options),
             ] {
                 root.spawn((
@@ -141,14 +105,15 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
                 });
                 index += 1;
             }
-            // Botón de Tutorial en el Main Menu (Checkbox / Toggle)
+
+            // Tutorial toggle — compact chip, see `tutorial_width`/`tutorial_height` above.
             root.spawn((
                 Button,
                 MainMenuTutorialButton,
                 MenuButton { index },
                 Node {
-                    width: Val::Px(button_width),
-                    height: Val::Px(button_height),
+                    width: Val::Px(tutorial_width),
+                    height: Val::Px(tutorial_height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
@@ -168,64 +133,34 @@ fn spawn_main_menu(mut commands: Commands, run: Res<RunState>, settings: Res<Win
             });
             index += 1;
 
-            root.spawn((
-                Button,
-                QuitButton,
-                MenuButton { index },
-                Node {
-                    width: Val::Px(button_width),
-                    height: Val::Px(button_height),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BackgroundColor(BTN_IDLE),
-            ))
-            .with_children(|b| {
-                b.spawn((
-                    Text::new(lang.tr(TrKey::Quit)),
-                    TextFont {
-                        font_size: FontSize::Px(button_font),
+            // Desktop only — quitting isn't a meaningful action on mobile (there's no "close the
+            // app" gesture players expect from inside it; the OS/home-button owns that).
+            if desktop {
+                root.spawn((
+                    Button,
+                    QuitButton,
+                    MenuButton { index },
+                    Node {
+                        width: Val::Px(button_width),
+                        height: Val::Px(button_height),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
-                ));
-            });
+                    BackgroundColor(BTN_IDLE),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new(lang.tr(TrKey::Quit)),
+                        TextFont {
+                            font_size: FontSize::Px(button_font),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            }
         });
-}
-
-fn spawn_run_button(
-    root: &mut ChildSpawnerCommands,
-    index: usize,
-    label: &str,
-    action: RunMenuButton,
-    button_width: f32,
-    button_height: f32,
-    button_font: f32,
-) {
-    root.spawn((
-        Button,
-        action,
-        MenuButton { index },
-        Node {
-            width: Val::Px(button_width),
-            height: Val::Px(button_height),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(BTN_IDLE),
-    ))
-    .with_children(|b| {
-        b.spawn((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(button_font),
-                ..default()
-            },
-            TextColor(Color::WHITE),
-        ));
-    });
 }
 
 fn nav_button_system(
@@ -241,45 +176,6 @@ fn nav_button_system(
                 options_return.0 = GameState::MainMenu;
             }
             next.set(btn.0.clone());
-        }
-    }
-}
-
-fn run_button_system(
-    interactions: Query<(Entity, Ref<Interaction>, &RunMenuButton)>,
-    menu_activated: Res<MenuActivated>,
-    mut run: ResMut<RunState>,
-    mut reserve: ResMut<CoreReserve>,
-    mut spent: ResMut<CoresSpent>,
-    mut mode: ResMut<GameMode>,
-    mut progress: ResMut<CampaignProgress>,
-    mut next: ResMut<NextState<GameState>>,
-) {
-    for (entity, interaction, action) in &interactions {
-        if !activated(&interaction, entity, &menu_activated) {
-            continue;
-        }
-        match action {
-            RunMenuButton::Continue if run.active => {
-                *mode = GameMode::Run(run.depth);
-                next.set(GameState::Loading);
-            }
-            RunMenuButton::New => {
-                run.abandon();
-                reserve.0 = 0;
-                spent.0 = 0;
-                *progress = CampaignProgress::default();
-                *mode = GameMode::Run(1);
-                next.set(GameState::Loading);
-            }
-            RunMenuButton::Debug => {
-                run.abandon();
-                reserve.0 = 0;
-                spent.0 = 0;
-                progress.unlock_all();
-                next.set(GameState::LevelMenu);
-            }
-            RunMenuButton::Continue => {}
         }
     }
 }

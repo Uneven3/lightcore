@@ -1,5 +1,6 @@
 pub(crate) mod campaign;
 pub(crate) mod components;
+pub(crate) mod easing;
 pub(crate) mod grid;
 pub(crate) mod level;
 pub(crate) mod light;

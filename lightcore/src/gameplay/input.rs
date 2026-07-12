@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use super::shop::Shop;
 use super::{DragState, PendingSwap, RevertingSwap, SwapData, SwapHappened};
+use crate::core::easing::damped_squash;
 use crate::core::prelude::*;
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
@@ -225,12 +226,10 @@ pub(crate) fn tick_select_jelly(
         }
         jelly.timer.tick(time.delta());
         let frac = jelly.timer.fraction();
-        // Damped cosine: starts at full amplitude (t=0 ⇒ cos(0)=1, matching a grab impact) and
-        // rings through `SELECT_JELLY_CYCLES` full squash↔stretch swings, each one smaller than
-        // the last as `decay` falls off toward 0 by the time the timer finishes.
-        let decay = (1.0 - frac).powi(2);
-        let wobble = (frac * SELECT_JELLY_CYCLES * std::f32::consts::TAU).cos() * decay;
-        let squash = SELECT_JELLY_AMOUNT * wobble;
+        // Same damped-spring shape as `visuals::bounce`'s landing bounce, via the shared
+        // `damped_squash` — starts at full amplitude (matching a grab impact) and rings through
+        // `SELECT_JELLY_CYCLES` squash↔stretch swings, each smaller than the last.
+        let squash = damped_squash(frac, SELECT_JELLY_AMOUNT, SELECT_JELLY_CYCLES);
         t.scale = Vec3::new(SELECTED_SCALE + squash, SELECTED_SCALE - squash, 1.0);
         if jelly.timer.is_finished() {
             t.scale = Vec3::splat(SELECTED_SCALE);

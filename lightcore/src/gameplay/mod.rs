@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::core::prelude::*;
+pub(crate) use crate::core::run::CoreReserve;
 use crate::core::run::RunState;
 use crate::state::GameState;
 use crate::visuals::motion::lerp_visual_pos;
@@ -12,6 +13,7 @@ pub(crate) mod falling;
 pub(crate) mod input;
 pub(crate) mod lifecycle;
 pub(crate) mod popping;
+mod rewards;
 pub(crate) mod shop;
 pub(crate) mod spawning;
 pub(crate) mod swap;
@@ -26,7 +28,6 @@ impl Plugin for GameplayPlugin {
             .init_resource::<GameMode>()
             .insert_resource(Score(0))
             .insert_resource(DisplayedScore(0))
-            .insert_resource(CoreReserve(0))
             .insert_resource(CoresSpent(0))
             .init_resource::<CollectedCores>()
             .init_resource::<DisplayedCollectedCores>()
@@ -176,6 +177,14 @@ pub(crate) enum GameMode {
     /// `ConsumeAll` (infinite moves, Esc returns to the menu); unlike `ConsumeAll` it has no
     /// clear-the-board win — it's purely a place to watch interactions.
     Sandbox,
+    /// One specific combo interaction, isolated and guaranteed on the very first move: the board is
+    /// a fixed (not random) layout — every cell is `Normal` except one adjacent pair of `LightKind`s
+    /// placed at a known spot, positioned so swapping them immediately fires the intended
+    /// `ComboKind` (see `gameplay::lifecycle::DEBUG_SCENARIOS`). Where `Sandbox` is "watch whatever
+    /// combo happens to come up", this is "watch THIS exact combo, right now" — for tuning the feel
+    /// of one interaction at a time instead of hunting for it on a random board. Same unbounded,
+    /// no-win/lose loop as `Sandbox`/`ConsumeAll`.
+    Debug(u8),
 }
 
 impl Default for GameMode {
@@ -190,7 +199,10 @@ impl GameMode {
     /// `Sandbox`. Note: the clear-the-board *win* is still `ConsumeAll`-only (see
     /// `lifecycle::check_board_consumed`).
     pub(crate) fn is_sandbox(self) -> bool {
-        matches!(self, GameMode::ConsumeAll | GameMode::Sandbox)
+        matches!(
+            self,
+            GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_)
+        )
     }
 
     pub(crate) fn is_run(self) -> bool {
@@ -218,11 +230,6 @@ pub(crate) struct CollectedCores(pub(crate) [u32; 5]);
 
 #[derive(Resource, Default, Clone, Copy)]
 pub(crate) struct DisplayedCollectedCores(pub(crate) [u32; 5]);
-
-/// Lightcores currently available to bend the rules with boosters. This is the spendable reserve:
-/// it grows when lights are captured, but unlike `Score` it goes down when the player buys help.
-#[derive(Resource, Default)]
-pub(crate) struct CoreReserve(pub(crate) u32);
 
 #[derive(Resource, Default, Clone, Copy)]
 pub(crate) struct StatsBook {

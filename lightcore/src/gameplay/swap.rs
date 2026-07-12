@@ -2,16 +2,17 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use super::popping::{accumulate_pop_delays, apply_pop_delay};
-use super::vfx;
+use super::popping::accumulate_pop_delays;
 use super::{
     CascadeDepth, ChainPop, CollectedCores, CoreReserve, DisplayedScore, MovesLeft, PendingSwap,
-    PowerComboParams, PowerCreated, RevertingSwap, Score, ScoreDrained, ShadowCount, StatsBook,
-    SwapFailed, SwapHappened,
+    PowerComboParams, PowerCreated, RevertingSwap, Score, ShadowCount, StatsBook, SwapFailed,
+    SwapHappened,
 };
+use super::{rewards, vfx};
 use crate::board::clear_shadow_at;
 use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
+use crate::core::run::RunState;
 use crate::state::GameState;
 
 #[derive(SystemParam)]
@@ -21,6 +22,7 @@ pub(crate) struct SwapScoreParams<'w> {
     reserve: ResMut<'w, CoreReserve>,
     collected_cores: ResMut<'w, CollectedCores>,
     stats: ResMut<'w, StatsBook>,
+    run: ResMut<'w, RunState>,
 }
 
 #[allow(clippy::collapsible_if)]
@@ -185,56 +187,28 @@ pub(crate) fn on_swap_happened(
                     &entity_info,
                     &ray_settings,
                 );
-                let points = compound
-                    .iter()
-                    .filter(|e| {
-                        entity_info
-                            .get(e)
-                            .is_some_and(|(_, _, kind)| !kind.is_hollow())
-                    })
-                    .count() as u32
-                    * cascade.0;
-
-                score_res.score.0 += points;
-                score_res.reserve.0 += points;
-                for e in &compound {
-                    if let Some((_, color, kind)) = entity_info.get(e) {
-                        if kind.is_hollow() {
-                            continue;
-                        }
-                        score_res.collected_cores.0[color.index()] += cascade.0;
-                        let add = cascade.0;
-                        match color {
-                            LightColor::Red => score_res.stats.reds += add,
-                            LightColor::Green => score_res.stats.greens += add,
-                            LightColor::Blue => score_res.stats.blues += add,
-                            LightColor::Yellow => score_res.stats.yellows += add,
-                            LightColor::Purple => score_res.stats.purples += add,
-                        }
-                        if kind.is_power() {
-                            score_res.stats.lightkinds += add;
-                        }
-                    }
-                }
-                score_res.stats.max_cascade = score_res.stats.max_cascade.max(cascade.0);
-                if cascade.0 >= 2 {
-                    score_res.stats.total_chains += 1;
-                }
-                let mut pops: Vec<(Vec3, LightColor, f32)> = Vec::new();
-                for e in &compound {
-                    commands.entity(*e).insert(PopAnim(Timer::from_seconds(
-                        ray_settings.pop_duration,
-                        TimerMode::Once,
-                    )));
-                    apply_pop_delay(&mut commands, *e, &pop_delays);
-                    if let Some((pos, color, kind)) = entity_info.get(e)
-                        && !kind.is_hollow()
-                    {
-                        let w = to_world(*pos);
-                        let delay = pop_delays.get(e).copied().unwrap_or(0.0);
-                        pops.push((w, *color, delay));
-                    }
-                }
+                let points = rewards::apply_removal_rewards(
+                    &mut commands,
+                    &compound,
+                    &entity_info,
+                    cascade.0,
+                    false,
+                    0,
+                    &mut score_res.score,
+                    &mut score_res.displayed,
+                    &mut score_res.reserve,
+                    &mut score_res.collected_cores,
+                    &mut score_res.stats,
+                    &mut moves,
+                    &mut score_res.run,
+                );
+                let pops = rewards::spawn_pops(
+                    &mut commands,
+                    &compound,
+                    &entity_info,
+                    &pop_delays,
+                    ray_settings.pop_duration,
+                );
                 commands.trigger(ChainPop {
                     removed: compound.len() as u32,
                     points,
@@ -403,82 +377,36 @@ pub(crate) fn on_swap_happened(
         &mut shadow_count.0,
     );
 
-    let points = if result.score_reset {
-        0
-    } else {
-        to_remove
-            .iter()
-            .filter(|e| {
-                entity_info
-                    .get(e)
-                    .is_some_and(|(_, _, kind)| !kind.is_hollow())
-            })
-            .count() as u32
-            * cascade.0
-    };
-
-    if result.score_reset {
-        score_res.score.0 = 0;
-        score_res.displayed.0 = 0;
-        commands.trigger(ScoreDrained {
-            origins: to_remove
-                .iter()
-                .filter_map(|e| {
-                    entity_info.get(e).and_then(|(pos, _, kind)| {
-                        kind.is_hollow().then(|| to_world(*pos).with_z(6.0))
-                    })
-                })
-                .collect(),
-        });
-    } else {
-        score_res.score.0 += points;
-        score_res.reserve.0 += points;
-    }
-    for e in &to_remove {
-        if let Some((_, color, kind)) = entity_info.get(e) {
-            if kind.is_hollow() {
-                continue;
-            }
-            score_res.collected_cores.0[color.index()] += cascade.0;
-            let add = cascade.0;
-            match color {
-                LightColor::Red => score_res.stats.reds += add,
-                LightColor::Green => score_res.stats.greens += add,
-                LightColor::Blue => score_res.stats.blues += add,
-                LightColor::Yellow => score_res.stats.yellows += add,
-                LightColor::Purple => score_res.stats.purples += add,
-            }
-            if kind.is_power() {
-                score_res.stats.lightkinds += add;
-            }
-        }
-    }
-    score_res.stats.max_cascade = score_res.stats.max_cascade.max(cascade.0);
-    if cascade.0 >= 2 {
-        score_res.stats.total_chains += 1;
-    }
+    let power_bonus = score_res.run.power_bonus(upgrades.len() as u32);
+    let points = rewards::apply_removal_rewards(
+        &mut commands,
+        &to_remove,
+        &entity_info,
+        cascade.0,
+        result.score_reset,
+        power_bonus,
+        &mut score_res.score,
+        &mut score_res.displayed,
+        &mut score_res.reserve,
+        &mut score_res.collected_cores,
+        &mut score_res.stats,
+        &mut moves,
+        &mut score_res.run,
+    );
     for _ in &upgrades {
         commands.trigger(PowerCreated);
     }
 
-    let mut pops: Vec<(Vec3, LightColor, f32)> = Vec::new();
-    for e in &to_remove {
-        commands.entity(*e).insert(PopAnim(Timer::from_seconds(
-            ray_settings.pop_duration,
-            TimerMode::Once,
-        )));
-        apply_pop_delay(&mut commands, *e, &pop_delays);
-        if let Some((pos, color, kind)) = entity_info.get(e)
-            && !kind.is_hollow()
-        {
-            let w = to_world(*pos);
-            let delay = pop_delays.get(e).copied().unwrap_or(0.0);
-            pops.push((w, *color, delay));
-        }
-    }
+    let pops = rewards::spawn_pops(
+        &mut commands,
+        &to_remove,
+        &entity_info,
+        &pop_delays,
+        ray_settings.pop_duration,
+    );
     commands.trigger(ChainPop {
         removed: to_remove.len() as u32,
-        points: if result.score_reset { 0 } else { points },
+        points,
         hollow: result.score_reset,
         pops,
     });

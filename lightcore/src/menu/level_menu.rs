@@ -115,6 +115,9 @@ enum MenuEntryKind {
     Campaign(u32),
     ConsumeAll,
     Sandbox,
+    /// Indexes `gameplay::lifecycle::DEBUG_SCENARIOS` — one isolated combo interaction per node,
+    /// guaranteed to fire on the first swap. See `GameMode::Debug`.
+    Debug(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -172,8 +175,17 @@ const ENTRY_CONNECTIONS: &[(usize, usize)] = &[
     (11, 12),
     (0, 14),
     (2, 13),
+    // Debug branch: its own chain off to one side, hanging off the campaign's start node.
+    (0, 15),
+    (15, 16),
+    (16, 17),
+    (17, 18),
+    (18, 19),
+    (19, 20),
+    (20, 21),
+    (21, 22),
 ];
-const MENU_ENTRIES: [MenuEntry; 15] = [
+const MENU_ENTRIES: [MenuEntry; 23] = [
     MenuEntry {
         title: "Puntaje Basico",
         blurb: "Consigue el puntaje objetivo.",
@@ -278,6 +290,64 @@ const MENU_ENTRIES: [MenuEntry; 15] = [
         pos: Vec2::new(328.0, -452.0),
         accent: [0.48, 1.12, 1.16],
         kind: MenuEntryKind::Sandbox,
+    },
+    // Debug branch (indices 15-22): one node per `gameplay::lifecycle::DEBUG_SCENARIOS` entry —
+    // same order, so `MenuEntryKind::Debug(n)` always points at the matching scenario.
+    MenuEntry {
+        title: "Debug: Lineas Cruzadas",
+        blurb: "RayH + RayV adyacentes — combo DoubleLine.",
+        pos: Vec2::new(-380.0, -700.0),
+        accent: [0.55, 0.70, 1.15],
+        kind: MenuEntryKind::Debug(0),
+    },
+    MenuEntry {
+        title: "Debug: Linea + Supernova",
+        blurb: "RayH + Supernova adyacentes — combo LineSupernova.",
+        pos: Vec2::new(-380.0, -480.0),
+        accent: [1.10, 0.62, 0.30],
+        kind: MenuEntryKind::Debug(1),
+    },
+    MenuEntry {
+        title: "Debug: Doble Supernova",
+        blurb: "Supernova + Supernova adyacentes — combo DoubleSupernova.",
+        pos: Vec2::new(-380.0, -260.0),
+        accent: [0.85, 0.40, 0.92],
+        kind: MenuEntryKind::Debug(2),
+    },
+    MenuEntry {
+        title: "Debug: Estrella + Linea",
+        blurb: "Starburst + RayH adyacentes — combo StarLine.",
+        pos: Vec2::new(-380.0, -40.0),
+        accent: [0.50, 1.05, 0.62],
+        kind: MenuEntryKind::Debug(3),
+    },
+    MenuEntry {
+        title: "Debug: Estrella + Supernova",
+        blurb: "Starburst + Supernova adyacentes — combo StarSupernova.",
+        pos: Vec2::new(-380.0, 180.0),
+        accent: [0.88, 0.52, 1.05],
+        kind: MenuEntryKind::Debug(4),
+    },
+    MenuEntry {
+        title: "Debug: Doble Estrella",
+        blurb: "Starburst + Starburst adyacentes — combo StarStar.",
+        pos: Vec2::new(-380.0, 400.0),
+        accent: [0.95, 0.50, 0.90],
+        kind: MenuEntryKind::Debug(5),
+    },
+    MenuEntry {
+        title: "Debug: Estrella + Color",
+        blurb: "Starburst + Normal adyacentes — combo StarColor.",
+        pos: Vec2::new(-380.0, 620.0),
+        accent: [0.95, 0.98, 0.52],
+        kind: MenuEntryKind::Debug(6),
+    },
+    MenuEntry {
+        title: "Debug: Agujero Negro",
+        blurb: "Blackhole + cualquiera adyacente — limpia todo el tablero.",
+        pos: Vec2::new(-380.0, 840.0),
+        accent: [0.40, 0.28, 0.48],
+        kind: MenuEntryKind::Debug(7),
     },
 ];
 
@@ -1264,6 +1334,16 @@ fn node_icon_text(index: usize) -> &'static str {
         MenuEntryKind::Campaign(9) => "GR",
         MenuEntryKind::ConsumeAll => "CA",
         MenuEntryKind::Sandbox => "SB",
+        MenuEntryKind::Debug(n) => match n {
+            0 => "D1",
+            1 => "D2",
+            2 => "D3",
+            3 => "D4",
+            4 => "D5",
+            5 => "D6",
+            6 => "D7",
+            _ => "D8",
+        },
         _ => "LV",
     }
 }
@@ -1284,7 +1364,7 @@ fn node_badge_text(level: usize, best: u32, unlocked: bool) -> String {
 fn entry_level(index: usize) -> Option<u32> {
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => Some(level),
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox => None,
+        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => None,
     }
 }
 
@@ -1299,6 +1379,7 @@ fn entry_mode(index: usize, run: &RunState) -> GameMode {
         }
         MenuEntryKind::ConsumeAll => GameMode::ConsumeAll,
         MenuEntryKind::Sandbox => GameMode::Sandbox,
+        MenuEntryKind::Debug(scenario) => GameMode::Debug(scenario),
     }
 }
 
@@ -1321,7 +1402,7 @@ fn entry_is_completed(index: usize, progress: &CampaignProgress) -> bool {
 fn entry_is_unlocked(index: usize, progress: &CampaignProgress) -> bool {
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => progress.is_unlocked(level),
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox => true,
+        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => true,
     }
 }
 
@@ -1380,6 +1461,38 @@ fn entry_localized_title_blurb(index: usize, lang: Language) -> (&'static str, S
             "Sandbox",
             "Free mode. Board pre-loaded with powers to test interactions and VFX.".to_string(),
         ),
+        15 => (
+            "Debug: Crossed Lines",
+            "RayH + RayV adjacent — DoubleLine combo.".to_string(),
+        ),
+        16 => (
+            "Debug: Line + Supernova",
+            "RayH + Supernova adjacent — LineSupernova combo.".to_string(),
+        ),
+        17 => (
+            "Debug: Double Supernova",
+            "Supernova + Supernova adjacent — DoubleSupernova combo.".to_string(),
+        ),
+        18 => (
+            "Debug: Star + Line",
+            "Starburst + RayH adjacent — StarLine combo.".to_string(),
+        ),
+        19 => (
+            "Debug: Star + Supernova",
+            "Starburst + Supernova adjacent — StarSupernova combo.".to_string(),
+        ),
+        20 => (
+            "Debug: Double Star",
+            "Starburst + Starburst adjacent — StarStar combo.".to_string(),
+        ),
+        21 => (
+            "Debug: Star + Color",
+            "Starburst + Normal adjacent — StarColor combo.".to_string(),
+        ),
+        22 => (
+            "Debug: Blackhole",
+            "Blackhole + anything adjacent — clears the whole board.".to_string(),
+        ),
         _ => (entry.title, entry.blurb.to_string()),
     }
 }
@@ -1395,7 +1508,9 @@ fn info_title_text(index: usize, lang: Language) -> String {
             };
             format!("{} {:02} · {}", label, level, title)
         }
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox => title.to_string(),
+        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => {
+            title.to_string()
+        }
     }
 }
 

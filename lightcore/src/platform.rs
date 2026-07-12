@@ -30,6 +30,55 @@ pub(crate) struct PlatformPlugin;
 impl Plugin for PlatformPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (detect_platform, apply_platform_defaults).chain());
+        // App icon (taskbar/alt-tab on Windows, window-manager icon on X11 — see
+        // `set_desktop_window_icon`'s doc comment for why it's scoped to these two platforms only).
+        // Android's icon comes from `res/mipmap-*` (Cargo.toml's `[package.metadata.android]`); the
+        // web build's favicon comes from `index.html`'s `data-trunk rel="icon"` tag.
+        #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+        app.add_systems(Update, set_desktop_window_icon);
+    }
+}
+
+/// Sets the OS window icon from the app's own icon (`assets/icon_64.rgba`, a raw 64×64 RGBA8 blob
+/// pre-baked from the source PNG — avoids pulling in a PNG decoder just for this one icon). Runs in
+/// `Update` (not `Startup`) and gates itself on a `Local<bool>` because the underlying winit window
+/// isn't necessarily created yet the first time a `Startup` system would run; this just waits until
+/// it exists, sets the icon once, and goes idle forever after.
+///
+/// `WinitWindows` isn't a regular `NonSend` *resource* in this Bevy version — it's the thread-local
+/// `bevy::winit::WINIT_WINDOWS` (see its own doc comment: temporary until upstream issue #17667
+/// lands proper `!Send` resource storage), so accessing it needs `.with_borrow(...)` plus a
+/// `NonSendMarker` parameter to force this system onto the main thread (the same pattern
+/// `bevy_winit`'s own internal systems use, e.g. `changed_windows`).
+///
+/// winit only supports this on Windows and X11 (its own docs: "iOS / Android / Web / Wayland /
+/// macOS / Orbital: Unsupported" — a no-op there, not a crash) — matches the `not(android, wasm32)`
+/// gate above, which still includes macOS; that's fine, `set_window_icon` simply does nothing there.
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+fn set_desktop_window_icon(
+    primary: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut done: Local<bool>,
+    _non_send_marker: bevy::ecs::system::NonSendMarker,
+) {
+    if *done {
+        return;
+    }
+    let Ok(entity) = primary.single() else {
+        return;
+    };
+    let applied = bevy::winit::WINIT_WINDOWS.with_borrow(|windows| {
+        let Some(window) = windows.get_window(entity) else {
+            return false;
+        };
+        const ICON_SIZE: u32 = 64;
+        static ICON_RGBA: &[u8] = include_bytes!("../assets/icon_64.rgba");
+        if let Ok(icon) = winit::window::Icon::from_rgba(ICON_RGBA.to_vec(), ICON_SIZE, ICON_SIZE) {
+            window.set_window_icon(Some(icon));
+        }
+        true
+    });
+    if applied {
+        *done = true;
     }
 }
 

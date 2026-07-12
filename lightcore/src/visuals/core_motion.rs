@@ -202,6 +202,17 @@ pub(crate) fn rebuild_cores(
             } else {
                 core_size * 2.0
             };
+            // The void nucleus is a dim eye, not "this light's color" — it stays the plain circular
+            // `core_image`. Every other core is shaped like the light's own color (circle/triangle/
+            // square/diamond/pentagon, see `assets::shaped_core_image`), matching the app icon's
+            // per-color shape language — even for the kind-shaped powers (Cross/Starburst/Blackhole),
+            // whose RING silhouette shows the power instead, but whose core dots still read as
+            // "this light's color".
+            let core_image = if is_void_nucleus {
+                cache.core_image.clone()
+            } else {
+                cache.light_core_image(*color)
+            };
             let core = commands
                 .spawn((
                     LightCore,
@@ -217,11 +228,11 @@ pub(crate) fn rebuild_cores(
                         base: spec.base,
                         radius: spec.radius,
                     },
-                    // A tinted SPRITE (shared `core_image`) instead of a per-core ColorMaterial mesh, so
-                    // all cores batch into one draw call; `breathe` mutates `Sprite::color` (a cheap
-                    // component change), not a per-entity material asset.
+                    // A tinted SPRITE (shared per-shape texture) instead of a per-core ColorMaterial
+                    // mesh, so all cores of the same shape still batch into one draw call; `breathe`
+                    // mutates `Sprite::color` (a cheap component change), not a per-entity material.
                     Sprite {
-                        image: cache.core_image.clone(),
+                        image: core_image,
                         color: base_color,
                         custom_size: Some(Vec2::splat(size)),
                         ..default()

@@ -4,8 +4,7 @@ use rand::{Rng, SeedableRng};
 
 use super::light::LightColor;
 use super::locale::{Language, TrKey};
-use super::storage::save_file_path;
-use crate::gameplay::CoreReserve;
+use super::storage;
 
 pub(crate) const RUN_LEVELS: u32 = 13;
 const MAX_BOON_LEVEL: u8 = 3;
@@ -16,6 +15,7 @@ pub(crate) struct RunPlugin;
 impl Plugin for RunPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RunState>()
+            .init_resource::<CoreReserve>()
             .add_systems(Startup, load_run_progress)
             .add_systems(Update, save_run_progress);
     }
@@ -86,6 +86,13 @@ impl BoonKind {
         }
     }
 }
+
+/// Lightcores currently available to bend the rules with boosters. This is the spendable reserve:
+/// it grows when lights are captured, but unlike `Score` it goes down when the player buys help.
+/// Owned here (not in `gameplay`) because it's part of the persisted run save — `load_run_progress`
+/// / `save_run_progress` below read and write it alongside `RunState` in the same save file.
+#[derive(Resource, Default)]
+pub(crate) struct CoreReserve(pub(crate) u32);
 
 #[derive(Resource, Clone)]
 pub(crate) struct RunState {
@@ -290,7 +297,8 @@ impl RunState {
 }
 
 fn load_run_progress(mut run: ResMut<RunState>, mut reserve: ResMut<CoreReserve>) {
-    let Some((saved_run, saved_reserve)) = load_run_text().and_then(|raw| RunState::decode(&raw))
+    let Some((saved_run, saved_reserve)) =
+        storage::load_save_file("run.txt").and_then(|raw| RunState::decode(&raw))
     else {
         return;
     };
@@ -303,38 +311,9 @@ fn save_run_progress(run: Res<RunState>, reserve: Res<CoreReserve>) {
         return;
     }
     let reserve_value = if run.active { reserve.0 } else { 0 };
-    if let Err(err) = save_run_text(&run.encode(reserve_value)) {
+    if let Err(err) = storage::write_save_file("run.txt", &run.encode(reserve_value)) {
         bevy::log::warn!("No se pudo guardar el run: {err}");
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_run_text() -> Option<String> {
-    None
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_run_text(_raw: &str) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_run_text() -> Option<String> {
-    std::fs::read_to_string(run_save_path()).ok()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_run_text(raw: &str) -> Result<(), String> {
-    let path = run_save_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    std::fs::write(path, raw).map_err(|err| err.to_string())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn run_save_path() -> std::path::PathBuf {
-    save_file_path("run.txt")
 }
 
 #[cfg(test)]

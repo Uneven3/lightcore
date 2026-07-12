@@ -117,6 +117,31 @@ fn quad_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
     p0 * (u * u) + p1 * (2.0 * u * t) + p2 * (t * t)
 }
 
+/// Shared ease/alpha curve for a `ScoreShardAbsorb`'s flight, whether it's rendered via `Sprite`
+/// (`tick_score_shard_absorb`) or `Mesh2d` + `AdditiveMaterial` (`tick_score_shard_absorb_glow`) —
+/// ease-out cubic toward the target, full opacity for the first 78% of the trip then a quick fade.
+/// Returns `(eased_t, alpha)`.
+fn absorb_ease_and_alpha(frac: f32) -> (f32, f32) {
+    let eased = 1.0 - (1.0 - frac).powi(3);
+    let alpha = if frac < 0.78 {
+        1.0
+    } else {
+        (1.0 - frac) / 0.22
+    };
+    (eased, alpha)
+}
+
+/// Despawns `e` and every one of its `children` — the "pop is finished, clean up" pattern shared by
+/// every score-shard tick system.
+fn despawn_with_children(commands: &mut Commands, e: Entity, children: Option<&Children>) {
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).try_despawn();
+        }
+    }
+    commands.entity(e).try_despawn();
+}
+
 fn tint_of(color: LightColor) -> Vec3 {
     let lin = color.bevy_color().to_linear();
     Vec3::new(lin.red, lin.green, lin.blue)
@@ -532,12 +557,7 @@ pub(crate) fn tick_score_light(
             displayed_cores.0[shard.color.index()] += shard.points;
             glow.rgb = glow.rgb.lerp(shard.tint, GLOW_BLEND); // score drifts toward collected colors
             glow.pulse = (glow.pulse + 0.5).min(1.0); // each arrival re-triggers the rapid pulse
-            if let Some(children) = children {
-                for child in children.iter() {
-                    commands.entity(child).try_despawn();
-                }
-            }
-            commands.entity(e).try_despawn();
+            despawn_with_children(&mut commands, e, children);
         }
     }
 }
@@ -574,12 +594,7 @@ pub(crate) fn tick_score_shard_scatter(
         }
 
         if scatter.timer.is_finished() {
-            if let Some(children) = children {
-                for child in children.iter() {
-                    commands.entity(child).try_despawn();
-                }
-            }
-            commands.entity(e).try_despawn();
+            despawn_with_children(&mut commands, e, children);
         }
     }
 }
@@ -599,15 +614,10 @@ pub(crate) fn tick_score_shard_absorb(
     for (e, mut absorb, mut t, mut sprite, children) in &mut q {
         absorb.timer.tick(time.delta());
         let frac = absorb.timer.fraction();
-        let eased = 1.0 - (1.0 - frac).powi(3);
+        let (eased, alpha) = absorb_ease_and_alpha(frac);
         t.translation = quad_bezier(absorb.from, absorb.ctrl, absorb.to, eased);
         t.scale = Vec3::splat(1.0 - 0.82 * frac);
 
-        let alpha = if frac < 0.78 {
-            1.0
-        } else {
-            (1.0 - frac) / 0.22
-        };
         sprite.color = sprite.color.with_alpha(alpha);
         if let Some(children) = children {
             for child in children.iter() {
@@ -618,12 +628,7 @@ pub(crate) fn tick_score_shard_absorb(
         }
 
         if absorb.timer.is_finished() {
-            if let Some(children) = children {
-                for child in children.iter() {
-                    commands.entity(child).try_despawn();
-                }
-            }
-            commands.entity(e).try_despawn();
+            despawn_with_children(&mut commands, e, children);
         }
     }
 }
@@ -649,15 +654,10 @@ pub(crate) fn tick_score_shard_absorb_glow(
     for (e, mut absorb, glow, mut t, material, children) in &mut q {
         absorb.timer.tick(time.delta());
         let frac = absorb.timer.fraction();
-        let eased = 1.0 - (1.0 - frac).powi(3);
+        let (eased, alpha) = absorb_ease_and_alpha(frac);
         t.translation = quad_bezier(absorb.from, absorb.ctrl, absorb.to, eased);
         t.scale = Vec3::splat(glow.base_size * (1.0 - 0.82 * frac));
 
-        let alpha = if frac < 0.78 {
-            1.0
-        } else {
-            (1.0 - frac) / 0.22
-        };
         if let Some(mut mat) = materials.get_mut(&material.0) {
             mat.color.alpha = alpha;
         }
@@ -672,12 +672,7 @@ pub(crate) fn tick_score_shard_absorb_glow(
         }
 
         if absorb.timer.is_finished() {
-            if let Some(children) = children {
-                for child in children.iter() {
-                    commands.entity(child).try_despawn();
-                }
-            }
-            commands.entity(e).try_despawn();
+            despawn_with_children(&mut commands, e, children);
         }
     }
 }

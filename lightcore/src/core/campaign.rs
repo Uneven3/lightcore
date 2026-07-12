@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::storage::save_file_path;
+use super::storage;
 
 pub(crate) const CAMPAIGN_LEVELS: usize = 13;
 const SAVE_VERSION: &str = "lightcore-progress-v2";
@@ -148,15 +148,6 @@ pub(crate) struct CampaignUnlockResult {
 }
 
 impl CampaignProgress {
-    pub(crate) fn unlock_all(&mut self) {
-        for record in &mut self.best_scores {
-            record.completed = true;
-            if record.best_score == 0 {
-                record.best_score = 1;
-            }
-        }
-    }
-
     pub(crate) fn best_score(&self, level: u32) -> u32 {
         level_index(level)
             .map(|idx| self.best_scores[idx].best_score)
@@ -237,45 +228,18 @@ pub(crate) fn level_index(level: u32) -> Option<usize> {
 }
 
 fn load_campaign_progress(mut progress: ResMut<CampaignProgress>) {
-    let Some(saved) = load_progress_text().and_then(|raw| CampaignProgress::decode(&raw)) else {
+    let Some(saved) =
+        storage::load_save_file("campaign.txt").and_then(|raw| CampaignProgress::decode(&raw))
+    else {
         return;
     };
     *progress = saved;
 }
 
 fn save_campaign_progress(progress: Res<CampaignProgress>) {
-    if let Err(err) = save_progress_text(&progress.encode()) {
+    if let Err(err) = storage::write_save_file("campaign.txt", &progress.encode()) {
         bevy::log::warn!("No se pudo guardar el progreso de campaña: {err}");
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_progress_text() -> Option<String> {
-    None
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_progress_text(_raw: &str) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_progress_text() -> Option<String> {
-    std::fs::read_to_string(progress_save_path()).ok()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_progress_text(raw: &str) -> Result<(), String> {
-    let path = progress_save_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    std::fs::write(path, raw).map_err(|err| err.to_string())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn progress_save_path() -> std::path::PathBuf {
-    save_file_path("campaign.txt")
 }
 
 #[cfg(test)]

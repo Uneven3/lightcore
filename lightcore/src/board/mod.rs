@@ -85,9 +85,15 @@ pub(crate) fn generate_board(
     }
 }
 
+/// Spawns a light's SIMULATION components only (`Light`, `FallPhysics`, `color`, `kind`, `pos`,
+/// grid/visual position) — no `Mesh2d`/`MeshMaterial2d`. Those are attached reactively by
+/// `visuals::core_motion::rebuild_cores`, which fires on `Changed<LightKind>` and therefore also
+/// catches this entity's very first frame (a freshly-inserted component satisfies `Changed`), same
+/// as the cores it builds alongside them. The glow halo is attached the same way, off `Added<Light>`
+/// in `visuals::glow::attach_glow_pools`. This keeps board setup free of `VisualCache` — the
+/// simulation layer doesn't need to know which mesh/material a light's kind maps to.
 pub(crate) fn spawn_light(
     commands: &mut Commands,
-    cache: &VisualCache,
     pos: GridPos,
     color: LightColor,
     kind: LightKind,
@@ -95,10 +101,6 @@ pub(crate) fn spawn_light(
 ) -> Entity {
     let mut rng = rand::rng();
     let phase = rng.random_range(0.0..std::f32::consts::TAU);
-    // The cores (1 for a normal light, more for a power) are built reactively by
-    // `visuals::core_motion::rebuild_cores` off `Changed<LightKind>`, and the glow halo by
-    // `visuals::glow::attach_glow_pools` off `Added<Light>` — both keyed on this entity.
-    // The ring mesh/material are shared per color (the ring is never recolored per-light).
     commands
         .spawn((
             Light,
@@ -108,8 +110,6 @@ pub(crate) fn spawn_light(
             pos,
             VisualPos(visual_start),
             BreathPhase(phase), // shared by the cores and the glow halo so they breathe in lockstep
-            Mesh2d(cache.light_mesh(kind, color)),
-            MeshMaterial2d(cache.light_mat(kind, color)),
             Transform::from_translation(visual_start),
         ))
         .id()
@@ -244,7 +244,6 @@ pub(crate) fn spawn_sparks(commands: &mut Commands, cache: &VisualCache, columns
 
 pub(crate) fn shuffle_board(
     commands: &mut Commands,
-    cache: &VisualCache,
     light_entities: &[(Entity, GridPos)],
     hollow_chance: f32,
 ) {
@@ -256,7 +255,7 @@ pub(crate) fn shuffle_board(
     let new_board = generate_board(&mut rng, &HashSet::new(), hollow_chance);
     for (pos, color, kind) in new_board {
         if positions.contains(&pos) {
-            spawn_light(commands, cache, pos, color, kind, to_world(pos));
+            spawn_light(commands, pos, color, kind, to_world(pos));
         }
     }
 }

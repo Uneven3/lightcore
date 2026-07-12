@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::core::components::Light;
 use crate::core::grid::RaySettings;
 use crate::state::GameState;
 
@@ -56,10 +57,11 @@ impl Plugin for VisualsPlugin {
                         .run_if(any_with_component::<score_light::ScoreShardAbsorb>),
                     score_light::tick_score_shard_absorb_glow
                         .run_if(any_with_component::<score_light::ScoreShardAbsorbGlow>),
-                    glow::attach_glow_pools,
-                    glow::flicker,
-                    core_motion::rebuild_cores,
-                    core_motion::animate_cores,
+                    glow::attach_glow_pools.run_if(any_with_component::<Light>),
+                    glow::flicker.run_if(any_with_component::<glow::GlowPool>),
+                    core_motion::rebuild_cores.run_if(any_with_component::<Light>),
+                    core_motion::animate_cores
+                        .run_if(any_with_component::<core_motion::CoreMotion>),
                     core_motion::animate_hollow_flow
                         .run_if(any_with_component::<core_motion::HollowFlowParticle>),
                     core_motion::animate_hollow_material

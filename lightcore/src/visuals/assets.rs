@@ -3,7 +3,7 @@ use bevy::color::Srgba;
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use super::effects::build_effect_mesh;
 use super::particles::ParticleSettings;
@@ -47,6 +47,10 @@ pub(crate) struct VisualCache {
     /// center, fading to the light's own hue toward the rim, so a captured light reads as a real
     /// emitter instead of a flat tinted dot.
     shard_core_image: [Handle<Image>; 5],
+    /// Per-`LightColor` shaped core disc for a light's own `LightCore` nucleus dots (see
+    /// `shaped_core_image`) — circle/triangle/square/diamond/pentagon matching that color's ring,
+    /// instead of a plain circular dot.
+    light_core_image: [Handle<Image>; 5],
     /// Plain 1×1 quad, UVs 0..1: the `Mesh2d` counterpart of a `Sprite`'s implicit quad, for
     /// entities that need a custom `Material2d` (e.g. `AdditiveMaterial`) instead of `Sprite`'s
     /// hardcoded alpha blend. Scale the `Transform` to size it, same as `Sprite::custom_size` did.
@@ -82,6 +86,9 @@ impl VisualCache {
     }
     pub(crate) fn shard_core_image(&self, c: LightColor) -> Handle<Image> {
         self.shard_core_image[c.index()].clone()
+    }
+    pub(crate) fn light_core_image(&self, c: LightColor) -> Handle<Image> {
+        self.light_core_image[c.index()].clone()
     }
     pub(crate) fn light_mat(&self, kind: LightKind, color: LightColor) -> Handle<ColorMaterial> {
         if kind.is_hollow() {
@@ -276,6 +283,66 @@ fn radial_hot_core_image(
     ))
 }
 
+/// Distance-ratio from center to a regular N-gon's boundary at `angle`, normalized so a vertex
+/// sits exactly at `1.0` (matching the circumradius) and the middle of an edge dips to
+/// `cos(π/sides)` (the apothem/circumradius ratio) — the standard shape of a regular polygon's
+/// radius as a function of angle. Dividing a plain circle-normalized radius by this factor "cuts
+/// in" the flat edges between vertices, turning a circular falloff into a polygon one with the
+/// same vertex count/orientation as [`LightColor::mesh`]'s ring — see `shaped_core_image`.
+fn polygon_shape_factor(angle: f32, sides: u32, start_angle: f32) -> f32 {
+    let step = TAU / sides as f32;
+    let rel = (angle - start_angle).rem_euclid(step) - step * 0.5;
+    (step * 0.5).cos() / rel.cos()
+}
+
+/// Per-`LightColor` SHAPE alpha mask — white RGB, like `radial_image`, but polygon-shaped instead
+/// of circular (matching `sides`/`start_angle` from [`LightColor::ring_sides`]/
+/// [`LightColor::shape_start_angle`]) — so a light's own glowing `LightCore` nucleus dots read as
+/// "this light's shape" (circle/triangle/square/diamond/pentagon), matching the game's app icon,
+/// which uses the same per-color shape language. White RGB deliberately: hue/brightness stays
+/// driven entirely by `Sprite::color` (see `visuals::breathing::breathe`, which overwrites it every
+/// frame from `Breathing::base`), exactly like the old plain-circle `core_image` did — baking a hue
+/// into this texture too would double-tint against `breathe`'s own color.
+fn shaped_core_image(
+    images: &mut Assets<Image>,
+    size: u32,
+    sides: u32,
+    start_angle: f32,
+) -> Handle<Image> {
+    let r = size as f32 / 2.0;
+    let mut data = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - r;
+            let dy = y as f32 + 0.5 - r;
+            let raw = (dx * dx + dy * dy).sqrt() / r;
+            // Negate dy: texture data is row-major top-down (row 0 = top), but `start_angle`/
+            // `ring_polygon_points` use the math convention (+Y = up) the mesh's own vertices are
+            // built in — without the flip, every shape rendered upside-down relative to the ring.
+            let shape = polygon_shape_factor((-dy).atan2(dx), sides, start_angle);
+            // A little headroom above 1.0 so the anti-aliased rim isn't clipped right at a vertex.
+            let d = (raw / shape).min(1.2);
+            let a = (1.0 - smoothstep(0.80, 1.0, d)).clamp(0.0, 1.0);
+            let i = ((y * size + x) * 4) as usize;
+            data[i] = 255;
+            data[i + 1] = 255;
+            data[i + 2] = 255;
+            data[i + 3] = (a * 255.0) as u8;
+        }
+    }
+    images.add(Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    ))
+}
+
 pub(crate) fn build_cache(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -340,6 +407,15 @@ pub(crate) fn build_cache(
                 32,
                 LightColor::from_index(i).bevy_color(),
                 0.45,
+            )
+        }),
+        light_core_image: std::array::from_fn(|i| {
+            let color = LightColor::from_index(i);
+            shaped_core_image(
+                &mut images,
+                32,
+                color.ring_sides(),
+                color.shape_start_angle(),
             )
         }),
         unit_quad_mesh: meshes.add(Rectangle::new(1.0, 1.0)),

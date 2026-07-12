@@ -64,32 +64,46 @@ impl LightColor {
     /// core reads as a sharp emitter floating in real empty space, not a fog-filled disc.
     pub(crate) fn mesh(self, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
         let r = TILE * 0.40;
+        let angle = self.shape_start_angle();
         let outer = match self {
-            Self::Red => ring_polygon_points(32, r, FRAC_PI_2),
+            Self::Red => ring_polygon_points(32, r, angle),
             Self::Green => transformed_polygon_points(
                 3,
                 r,
-                FRAC_PI_2,
+                angle,
                 Vec2::new(1.08, 1.06),
                 Vec2::new(0.0, -TILE * 0.02),
             ),
             // A square is just a regular 4-gon rotated 45° from the diamond (`Yellow`) — using
             // the same circumradius `r` (not `r`-as-half-extent, which used to make this shape
             // stick out ~41% farther than the other 4) keeps every shape's reach identical.
-            Self::Blue => ring_polygon_points(4, r, FRAC_PI_4),
-            Self::Yellow => ring_polygon_points(4, r, FRAC_PI_2),
-            Self::Purple => ring_polygon_points(5, r, FRAC_PI_2),
+            Self::Blue => ring_polygon_points(4, r, angle),
+            Self::Yellow => ring_polygon_points(4, r, angle),
+            Self::Purple => ring_polygon_points(5, r, angle),
         };
         let inset = ring_inset_for_sides(self.ring_sides(), r);
         meshes.add(build_ring_mesh(&outer, inset))
     }
 
-    fn ring_sides(self) -> u32 {
+    /// Number of sides of this color's membrane polygon (a "32-gon" for Red reads as a circle).
+    /// Also drives the shape of the light's core dots (see `visuals::assets::shaped_core_image`),
+    /// so ring and core silhouettes always agree — same as this game's app icon.
+    pub(crate) fn ring_sides(self) -> u32 {
         match self {
             Self::Red => 32,
             Self::Green => 3,
             Self::Blue | Self::Yellow => 4,
             Self::Purple => 5,
+        }
+    }
+
+    /// First-vertex angle of this color's membrane polygon (see `mesh`, `ring_polygon_points`) —
+    /// e.g. `Blue` and `Yellow` are both 4-gons, but a 45°-rotated first vertex reads as an upright
+    /// square vs. a diamond.
+    pub(crate) fn shape_start_angle(self) -> f32 {
+        match self {
+            Self::Blue => FRAC_PI_4,
+            _ => FRAC_PI_2,
         }
     }
 

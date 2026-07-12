@@ -6,7 +6,6 @@ use crate::board::{HOLLOW_BASE_CHANCE, random_basic_kind, spawn_light};
 use crate::core::prelude::*;
 use crate::core::run::RunState;
 use crate::state::GameState;
-use crate::visuals::assets::VisualCache;
 
 /// Tiles above the grid's top edge that new lights enter from — shared by every light in
 /// a column's refill, so they all come from near the visible top, never from deep inside
@@ -21,7 +20,6 @@ const SPAWN_FALL_DURATION: f32 = 0.25;
 
 pub(crate) fn spawn_new_lights(
     mut commands: Commands,
-    cache: Res<VisualCache>,
     mut super_combo: ResMut<SuperComboPending>,
     mode: Res<GameMode>,
     run: Res<RunState>,
@@ -67,7 +65,7 @@ pub(crate) fn spawn_new_lights(
             } else {
                 random_basic_kind(&mut rng, hollow_chance)
             };
-            let e = spawn_light(&mut commands, &cache, pos, color, kind, above);
+            let e = spawn_light(&mut commands, pos, color, kind, above);
             commands.entity(e).insert(FallSpeed(fall_speed));
             // The power's cores are built by `visuals::core_motion::rebuild_cores` (off the
             // `LightKind` `spawn_light` set) — no explicit indicator needed.

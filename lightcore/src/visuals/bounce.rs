@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::core::easing::damped_squash;
 use crate::core::prelude::*;
 use crate::gameplay::PendingSwap;
 
@@ -55,12 +56,10 @@ pub(crate) fn tick_land_bounce(
     for (e, mut t, mut b) in &mut q {
         b.timer.tick(time.delta());
         let frac = b.timer.fraction();
-        // Damped cosine: full amplitude at the instant of impact (t=0 ⇒ cos(0)=1), ringing through
-        // `BOUNCE_CYCLES` squash↔stretch swings that shrink as `decay` falls off — same shape as
-        // the select-jelly punch, so landing and grabbing share one consistent "juice" language.
-        let decay = (1.0 - frac).powi(2);
-        let wobble = (frac * BOUNCE_CYCLES * std::f32::consts::TAU).cos() * decay;
-        let squash = BOUNCE_AMOUNT * wobble;
+        // Same damped-spring shape as the select-jelly punch (`gameplay::input::SelectJelly`),
+        // via the shared `damped_squash` — full amplitude at the instant of impact, ringing
+        // through `BOUNCE_CYCLES` squash↔stretch swings that shrink to 0.
+        let squash = damped_squash(frac, BOUNCE_AMOUNT, BOUNCE_CYCLES);
         t.scale = Vec3::new(1.0 + squash, 1.0 - squash, 1.0);
         if b.timer.is_finished() {
             t.scale = Vec3::ONE;

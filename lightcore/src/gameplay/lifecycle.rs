@@ -21,7 +21,29 @@ use crate::visuals::EffectAnim;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::light_trail::{LaserBolt, TravelingLight};
 use crate::visuals::particles::Particle;
-use crate::visuals::score_light::ScoreShard;
+use crate::visuals::score_light::{ScoreShard, ScoreShardAbsorb, ScoreShardScatter};
+
+/// Every transient entity kind spawned during a match — board pieces, shadows, VFX, score shards
+/// in every phase (capture flight, drain flight, drain scatter), and the end-of-match overlays.
+/// One shared definition so `teardown_match` and `handle_restart` can't drift the way they used to
+/// (a prior version had `teardown_match` never clearing `LaserBolt`, and NEITHER clearing
+/// `ScoreShardAbsorb`/`ScoreShardScatter` — the shards `visuals::score_light::on_score_drained`
+/// spawns when the shop drains the reserve — leaving orphaned shards on screen after a
+/// restart/menu-exit mid-drain).
+type TransientMatchEntity = Or<(
+    With<FallPhysics>,
+    With<Shadow>,
+    With<Particle>,
+    With<TravelingLight>,
+    With<EffectAnim>,
+    With<ScoreShard>,
+    With<ScoreShardAbsorb>,
+    With<ScoreShardScatter>,
+    With<LaserBolt>,
+    With<GameOverOverlay>,
+    With<LevelCompleteOverlay>,
+    With<IngredientExit>,
+)>;
 
 /// `LevelTimer` value a level should start with, derived from its goal — `Some` (ticking down)
 /// only for timed-score levels, `None` (inert) for everything else.
@@ -147,7 +169,7 @@ fn populate_board(
     let mut rng = rand::rng();
     for (pos, color, kind) in generate_board(&mut rng, &blocked_positions, hollow_chance) {
         if !spark_positions.contains(&pos) && !blocker_positions.contains(&pos) {
-            spawn_light(commands, cache, pos, color, kind, to_world(pos));
+            spawn_light(commands, pos, color, kind, to_world(pos));
         }
     }
 
@@ -185,10 +207,10 @@ fn spark_columns(count: u32) -> Vec<i32> {
 
 /// A Blackhole board: just normal lights, no sparks/shadow. Power lights are forged and detonated
 /// by the shared Classic pipeline (`gameplay::chain`/`swap`) during play.
-fn populate_blackhole_board(commands: &mut Commands, cache: &VisualCache) {
+fn populate_blackhole_board(commands: &mut Commands) {
     let mut rng = rand::rng();
     for (pos, color, kind) in generate_board(&mut rng, &HashSet::new(), HOLLOW_BASE_CHANCE) {
-        spawn_light(commands, cache, pos, color, kind, to_world(pos));
+        spawn_light(commands, pos, color, kind, to_world(pos));
     }
 }
 
@@ -197,7 +219,7 @@ fn populate_blackhole_board(commands: &mut Commands, cache: &VisualCache) {
 /// 3-runs, so nothing pops on entry); the kind is rolled per cell, biased toward powers since the
 /// whole point is to watch interactions. Normals are still seeded in so ordinary matches remain
 /// possible.
-fn populate_sandbox_board(commands: &mut Commands, cache: &VisualCache) {
+fn populate_sandbox_board(commands: &mut Commands) {
     // Weighted roll: Normal kept common enough that plain matches still happen, the rest spread
     // across every power so all of them are reachable on a fresh board.
     const KINDS: [(LightKind, u32); 7] = [
@@ -225,7 +247,96 @@ fn populate_sandbox_board(commands: &mut Commands, cache: &VisualCache) {
                 }
             })
             .unwrap_or(LightKind::Normal);
-        spawn_light(commands, cache, pos, color, kind, to_world(pos));
+        spawn_light(commands, pos, color, kind, to_world(pos));
+    }
+}
+
+/// One combo interaction to isolate per `GameMode::Debug(index)` — `(a_kind, a_color, b_kind,
+/// b_color)`, placed at `DEBUG_ANCHOR_A`/`DEBUG_ANCHOR_B` (adjacent) so swapping them fires exactly
+/// this interaction on the player's first move. Mirrors `core::matching::resolve_swap_activation`'s
+/// arms one-to-one (see there for why each pairing produces the effect named in the comment) —
+/// order matches `menu::level_menu`'s `MenuEntryKind::Debug` node order, so keep the two in sync.
+/// `StarLine`/`StarSupernova`/`StarColor` name a partner color deliberately present in
+/// `populate_debug_board`'s filler pattern, so the "clear every light of this color" effect has
+/// several targets scattered around the board to actually demonstrate against, not just itself.
+pub(crate) const DEBUG_SCENARIOS: [(LightKind, LightColor, LightKind, LightColor); 8] = [
+    (
+        LightKind::RayH,
+        LightColor::Blue,
+        LightKind::RayV,
+        LightColor::Yellow,
+    ), // DoubleLine
+    (
+        LightKind::RayH,
+        LightColor::Yellow,
+        LightKind::Supernova,
+        LightColor::Red,
+    ), // LineSupernova
+    (
+        LightKind::Supernova,
+        LightColor::Red,
+        LightKind::Supernova,
+        LightColor::Blue,
+    ), // DoubleSupernova
+    (
+        LightKind::Starburst,
+        LightColor::Green,
+        LightKind::RayH,
+        LightColor::Green,
+    ), // StarLine
+    (
+        LightKind::Starburst,
+        LightColor::Purple,
+        LightKind::Supernova,
+        LightColor::Purple,
+    ), // StarSupernova
+    (
+        LightKind::Starburst,
+        LightColor::Red,
+        LightKind::Starburst,
+        LightColor::Blue,
+    ), // StarStar
+    (
+        LightKind::Starburst,
+        LightColor::Yellow,
+        LightKind::Normal,
+        LightColor::Green,
+    ), // StarColor
+    (
+        LightKind::Blackhole,
+        LightColor::Red,
+        LightKind::RayH,
+        LightColor::Blue,
+    ), // Blackhole
+];
+
+const DEBUG_ANCHOR_A: GridPos = GridPos { x: 3, y: 4 };
+const DEBUG_ANCHOR_B: GridPos = GridPos { x: 4, y: 4 };
+
+/// A single isolated combo (`DEBUG_SCENARIOS[scenario]`) on an otherwise inert board. Every cell is
+/// `Normal`, colored by `(x + y) % 5` — two orthogonally adjacent cells always land on different
+/// colors under that pattern (moving one step always changes `x + y` by 1), so the filler can never
+/// 3-match on its own — except `DEBUG_ANCHOR_A`/`_B`, which get the scenario's own kind/color pair.
+/// The result: the only thing that can possibly happen on this board is the one interaction the
+/// player came here to test, and it's guaranteed to fire the instant those two tiles are swapped.
+fn populate_debug_board(commands: &mut Commands, scenario: u8) {
+    let (a_kind, a_color, b_kind, b_color) =
+        DEBUG_SCENARIOS[scenario as usize % DEBUG_SCENARIOS.len()];
+    for x in 0..GRID_W {
+        for y in 0..GRID_H {
+            let pos = GridPos { x, y };
+            let (kind, color) = if pos == DEBUG_ANCHOR_A {
+                (a_kind, a_color)
+            } else if pos == DEBUG_ANCHOR_B {
+                (b_kind, b_color)
+            } else {
+                (
+                    LightKind::Normal,
+                    LightColor::from_index((x + y).rem_euclid(5) as usize),
+                )
+            };
+            spawn_light(commands, pos, color, kind, to_world(pos));
+        }
     }
 }
 
@@ -283,7 +394,7 @@ pub(crate) fn setup_match(
                 hollow_chance,
             );
         }
-        GameMode::ConsumeAll | GameMode::Sandbox => {
+        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) => {
             // Sandbox modes: run the Classic detonation pipeline with no win/lose yet. An
             // unreachable goal + infinite moves means `check_chain_matches` FASE 3 never completes
             // nor game-overs (it just reshuffles if the player gets stuck). Esc returns to the menu.
@@ -303,10 +414,10 @@ pub(crate) fn setup_match(
             spent.0 = 0;
             *level_timer = LevelTimer(None);
             shadow_count.0 = 0;
-            if *mode == GameMode::Sandbox {
-                populate_sandbox_board(&mut commands, &cache);
-            } else {
-                populate_blackhole_board(&mut commands, &cache);
+            match *mode {
+                GameMode::Sandbox => populate_sandbox_board(&mut commands),
+                GameMode::Debug(scenario) => populate_debug_board(&mut commands, scenario),
+                _ => populate_blackhole_board(&mut commands),
             }
         }
     }
@@ -322,20 +433,7 @@ pub(crate) fn teardown_match(
     run: Res<RunState>,
     mut level: ResMut<LevelConfig>,
     mut res: ResetParams,
-    match_entities: Query<
-        Entity,
-        Or<(
-            With<FallPhysics>,
-            With<Shadow>,
-            With<Particle>,
-            With<TravelingLight>,
-            With<EffectAnim>,
-            With<ScoreShard>,
-            With<GameOverOverlay>,
-            With<LevelCompleteOverlay>,
-            With<IngredientExit>,
-        )>,
-    >,
+    match_entities: Query<Entity, TransientMatchEntity>,
 ) {
     for e in &match_entities {
         commands.entity(e).try_despawn();
@@ -746,13 +844,25 @@ pub(crate) fn level_reward_button_system(
 
 /// Resetea todos los recursos de partida para el nivel dado. Compartido por
 /// `handle_level_advance` y `handle_restart` — evita que los dos bloques diverjan.
-fn reset_for_replay(replay_level: LevelConfig, level: &mut LevelConfig, res: &mut ResetParams) {
+fn reset_for_replay(
+    replay_level: LevelConfig,
+    level: &mut LevelConfig,
+    res: &mut ResetParams,
+    mode: &GameMode,
+    run: &RunState,
+) {
     *level = replay_level;
     *res.level_timer = level_timer_for(&level.goal);
     res.score.0 = 0;
     res.displayed.0 = 0;
-    res.reserve.0 = 0;
-    res.spent.0 = 0;
+    // Same rule as `teardown_match`: the run's booster wallet only survives a retry while the run
+    // is still active — retrying a level with lives left must NOT wipe it (previously did,
+    // unconditionally, contradicting both that invariant and the "puedes reintentar" UI copy in
+    // `show_game_over`, which never warns about losing the reserve on a plain retry).
+    if !(mode.is_run() && run.active) {
+        res.reserve.0 = 0;
+        res.spent.0 = 0;
+    }
     res.moves.0 = level.total_moves;
     res.pending.0 = None;
     res.reverting.0.clear();
@@ -949,20 +1059,7 @@ pub(crate) fn handle_restart(
     mut res: ResetParams,
     mut next_state: ResMut<NextState<GameState>>,
     cache: Res<VisualCache>,
-    physics_entities: Query<Entity, With<FallPhysics>>,
-    shadow_entities: Query<Entity, With<Shadow>>,
-    exit_entities: Query<Entity, With<IngredientExit>>,
-    overlay: Query<Entity, With<GameOverOverlay>>,
-    vfx_entities: Query<
-        Entity,
-        Or<(
-            With<Particle>,
-            With<TravelingLight>,
-            With<EffectAnim>,
-            With<ScoreShard>,
-            With<LaserBolt>,
-        )>,
-    >,
+    match_entities: Query<Entity, TransientMatchEntity>,
 ) {
     if !actions.confirm {
         return;
@@ -981,28 +1078,16 @@ pub(crate) fn handle_restart(
         }
     }
 
-    for e in &physics_entities {
-        commands.entity(e).try_despawn();
-    }
-    for e in &shadow_entities {
-        commands.entity(e).try_despawn();
-    }
-    for e in &exit_entities {
-        commands.entity(e).try_despawn();
-    }
-    for e in &overlay {
-        commands.entity(e).try_despawn();
-    }
-    for e in &vfx_entities {
+    for e in &match_entities {
         commands.entity(e).try_despawn();
     }
 
     let replay_level = match *mode {
         GameMode::Classic(level_num) => make_level(level_num),
         GameMode::Run(depth) => make_generated_level(depth, run.seed),
-        GameMode::ConsumeAll | GameMode::Sandbox => make_level(level.level),
+        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) => make_level(level.level),
     };
-    reset_for_replay(replay_level, &mut level, &mut res);
+    reset_for_replay(replay_level, &mut level, &mut res, &mode, &run);
     let hollow_chance = if mode.is_run() {
         run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
     } else {

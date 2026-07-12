@@ -39,10 +39,6 @@ impl Language {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TrKey {
     // ── Main Menu ─────────────────────────────────────────────────────────────
-    Continue,
-    NewRun,
-    DebugMode,
-    Levels,
     Options,
     TutorialOn,
     TutorialOff,
@@ -230,10 +226,6 @@ impl Language {
 fn tr_es(key: TrKey) -> &'static str {
     match key {
         // Main menu
-        TrKey::Continue => "Continuar",
-        TrKey::NewRun => "Nuevo run",
-        TrKey::DebugMode => "Modo Debug",
-        TrKey::Levels => "Niveles",
         TrKey::Options => "Opciones",
         TrKey::TutorialOn => "Tutorial: ON",
         TrKey::TutorialOff => "Tutorial: OFF",
@@ -399,10 +391,6 @@ fn tr_es(key: TrKey) -> &'static str {
 fn tr_en(key: TrKey) -> &'static str {
     match key {
         // Main menu
-        TrKey::Continue => "Continue",
-        TrKey::NewRun => "New Run",
-        TrKey::DebugMode => "Debug Mode",
-        TrKey::Levels => "Levels",
         TrKey::Options => "Options",
         TrKey::TutorialOn => "Tutorial: ON",
         TrKey::TutorialOff => "Tutorial: OFF",

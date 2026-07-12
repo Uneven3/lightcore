@@ -412,6 +412,14 @@ pub(crate) fn scan_runs(
         .filter_map(|(&e, &hi)| entity_in_v.get(&e).map(|&vi| (e, hi, vi)))
         .filter(|(_, hi, vi)| h_runs[*hi].len() >= 3 && v_runs[*vi].len() >= 3)
         .collect();
+    // A run can cross more than one perpendicular run (e.g. a "U": one horizontal run crossing
+    // two verticals, one at each end). Without this, processing the first intersection sweeps the
+    // WHOLE horizontal run into `to_remove` — including the second intersection cell — and vice
+    // versa, so both end up mutually removing each other and neither survives the
+    // `!to_remove.contains(e)` filter below: two valid corner/T upgrades silently cancel into a
+    // plain clear. Protecting every intersection entity from a SIBLING intersection's run-sweep
+    // fixes it without changing the single-intersection case (there `re != e` already excludes it).
+    let intersection_entities: HashSet<Entity> = intersections.iter().map(|&(e, _, _)| e).collect();
 
     for (e, hi, vi) in intersections {
         if entity_info
@@ -426,12 +434,12 @@ pub(crate) fn scan_runs(
             continue;
         }
         for &re in &h_runs[hi] {
-            if re != e {
+            if re != e && !intersection_entities.contains(&re) {
                 to_remove.insert(re);
             }
         }
         for &re in &v_runs[vi] {
-            if re != e {
+            if re != e && !intersection_entities.contains(&re) {
                 to_remove.insert(re);
             }
         }
@@ -961,6 +969,53 @@ mod tests {
             .find(|(ent, _)| *ent == shared)
             .map(|(_, k)| *k);
         assert_eq!(upgrade_kind, Some(LightKind::Cross));
+    }
+
+    #[test]
+    fn scan_runs_u_shape_both_corners_forge_upgrades() {
+        // A single horizontal 3-run at y=0 (x: 0,1,2) crossed by TWO vertical 3-runs, one at each
+        // end (x=0 and x=2) — a "U". Regression test for a bug where processing the first corner
+        // swept the WHOLE horizontal run (including the second corner cell) into `to_remove`, and
+        // vice versa, so each corner ended up removing the OTHER and both upgrades were filtered
+        // out by `!to_remove.contains(e)` — the U cleared as a plain match with zero power-ups.
+        let mut grid: Grid = HashMap::new();
+        let mut entity_info: EntityInfo = HashMap::new();
+        let cells = [
+            (GridPos { x: 0, y: 0 }, 1u32), // corner: end of h-run AND end of left v-run
+            (GridPos { x: 1, y: 0 }, 2),
+            (GridPos { x: 2, y: 0 }, 3), // corner: end of h-run AND end of right v-run
+            (GridPos { x: 0, y: 1 }, 4),
+            (GridPos { x: 0, y: 2 }, 5),
+            (GridPos { x: 2, y: 1 }, 6),
+            (GridPos { x: 2, y: 2 }, 7),
+        ];
+        for (pos, n) in cells {
+            let ent = e(n);
+            grid.insert(pos, (ent, LightColor::Red, LightKind::Normal));
+            entity_info.insert(ent, (pos, LightColor::Red, LightKind::Normal));
+        }
+        let left_corner = e(1);
+        let right_corner = e(3);
+
+        let result = scan_runs(&grid, &entity_info, None);
+
+        let kind_of = |ent: Entity| {
+            result
+                .to_upgrade
+                .iter()
+                .find(|(e, _)| *e == ent)
+                .map(|(_, k)| *k)
+        };
+        assert_eq!(
+            kind_of(left_corner),
+            Some(LightKind::Cross),
+            "left corner should forge a Cross, not get swallowed by the right corner's sweep"
+        );
+        assert_eq!(
+            kind_of(right_corner),
+            Some(LightKind::Cross),
+            "right corner should forge a Cross, not get swallowed by the left corner's sweep"
+        );
     }
 
     #[test]
