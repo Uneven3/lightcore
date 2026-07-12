@@ -2,6 +2,8 @@
 
 Este documento explica el *por qué* detrás de la estructura del código, no el *qué* (eso lo explica el código mismo). Sirve como referencia para decisiones futuras: cuando agregues una feature nueva y no sepas dónde ponerla, volvé a este documento antes de improvisar.
 
+Para el *estado* de features concretas (qué funciona hoy vs. qué falta pulir, con su historial de intentos/decisiones), ver `ROADMAP.md`.
+
 ## 1. El patrón Plugin
 
 Bevy organiza absolutamente todo — desde el renderer hasta tu propio juego — como **Plugins**: unidades que registran systems, resources y events en el `App`. La consecuencia práctica para este proyecto:
@@ -20,11 +22,11 @@ Ejemplo real de este proyecto: `core::matching::scan_runs` no toca el `App` para
 
 ## 3. Events para desacoplar — con cautela
 
-Cuando dos partes del juego necesitan comunicarse sin conocerse directamente, se usa un Event + Observer en vez de una llamada de función directa. Ejemplo real: cuando se resuelve un match o una power light se activa, el código de `gameplay` dispara `commands.trigger(ChainPop { removed })` / `commands.trigger(PowerConsumed { kind, pos, color })` — y `gameplay` nunca se entera de que del otro lado hay una cámara temblando o un efecto visual apareciendo. Eso vive en `visuals`, suscripto vía `add_observer`.
+Cuando dos partes del juego necesitan comunicarse sin conocerse directamente, se usa un Event + Observer en vez de una llamada de función directa. Ejemplo real: cuando se resuelve un match o una power light se activa, el código de `gameplay` dispara `commands.trigger(ChainPop { removed })` / `commands.trigger(PowerConsumed { kind, pos, color })` / `commands.trigger(PowerCombo { kind, .. })` — y `gameplay` nunca se entera de que del otro lado hay un flash, un beam viajando o un combo entero animándose. Eso vive en `visuals` (`effects.rs`, `light_trail.rs`), suscripto vía `add_observer`.
 
 Esto es deliberado: permite que `gameplay` (las reglas del juego) y `visuals` (cómo se ve/siente) crezcan en direcciones distintas sin pisarse. Cuando agregues animaciones, luces o VFX nuevos, en general solo tocarás `visuals` — no `gameplay`.
 
-**Pero esto no es gratis.** No se usa Event+Observer para cualquier comunicación entre sistemas — solo cuando hay una razón real para desacoplar (como evitar que un módulo dependa del otro, o esquivar el límite de 16 parámetros de Bevy). Para una mutación local simple (ej. `apply_camera_shake` escribiendo directamente su propio `CameraShake.trauma`), una asignación directa alcanza. Reservá Events para fronteras reales entre Plugins, no para todo.
+**Pero esto no es gratis.** No se usa Event+Observer para cualquier comunicación entre sistemas — solo cuando hay una razón real para desacoplar (como evitar que un módulo dependa del otro, o esquivar el límite de 16 parámetros de Bevy). Para una mutación local simple (ej. `visuals::bounce::tick_land_bounce` escribiendo directamente su propio componente `LandBounce`, o `gameplay::vfx::tick_pending_light_transform` escribiendo `LightKind` en el lugar), una asignación directa alcanza. Reservá Events para fronteras reales entre Plugins, no para todo.
 
 ## 4. SOLID / DRY / KISS traducidos a ECS
 
@@ -54,23 +56,39 @@ Este es un solo crate binario (no una librería publicada), así que no hay cons
 ```
 src/
   main.rs       // bootstrap: App::new().add_plugins((DefaultPlugins, GamePlugin)).run()
-  lib.rs        // mod core; mod board; mod audio; mod state; mod gameplay; mod visuals; mod ui; + GamePlugin
+  lib.rs        // mod core; mod board; mod audio; mod state; mod gameplay; mod visuals; mod ui; ... + GamePlugin
   state.rs      // GameState — la máquina de estados central del juego
-  core/         // lógica pura, cero parámetros de Bevy. NO es un Plugin.
-    grid.rs       // GridPos, to_world, to_grid, GRID_W/GRID_H/TILE
+  core/         // lógica pura, cero parámetros de Bevy salvo donde el propio dato es un Resource/Component.
+                //   NO es un Plugin.
+    grid.rs       // GridPos, to_world, to_grid, GRID_W/GRID_H/TILE, RaySettings
     components.rs // Light, Selected, SpecialMarker, Spark, Shadow (marcadores cruzados por varios módulos)
     light.rs      // LightColor, LightKind
     level.rs      // LevelGoal, LevelConfig, make_level, MOVES
     matching.rs   // Grid, EntityInfo, MatchResult, scan_runs, resolve_swap_activation, find_valid_swap...
+    campaign.rs   // CampaignProgress (desbloqueo de niveles) + su persistencia
+    run.rs        // RunState/CoreReserve (progreso de un run) + su persistencia
+    storage.rs    // load_save_file/write_save_file — backend nativo (fs) vs WASM (localStorage)
+    locale.rs     // Language, TrKey — localización es→en
+    easing.rs     // damped_squash y otras funciones de easing puras, sin dependencias
   board/        // helpers de spawn/generación de tablero. NO es un Plugin (sin systems propios).
   audio/        // AudioPlugin — síntesis de sonido, SoundAssets, reproducción, volumen.
+  input/        // InputPlugin — capa de input agnóstica de dispositivo (teclado/gamepad/mouse → InputActions).
+  platform/     // PlatformPlugin — detección de plataforma/perf tier, ícono de ventana en desktop.
+  menu/         // MenuPlugin — MainMenu → LevelMenu (selector unificado de mapas) → Options/Pause,
+                //   cada pantalla es su propio Plugin sub-agregado.
   gameplay/     // GameplayPlugin — TODO el pipeline swap→pop→fall→spawn→chain, como un solo Plugin
                 //   (las fases comparten demasiados Resources entre sí para separarlas con beneficio real;
                 //   el GameState ya es el seam que las ordena).
-  visuals/      // VisualsPlugin — posición/animación visual, efectos de power lights, shake de cámara.
+    swap.rs, chain.rs, falling.rs, spawning.rs, popping.rs  // las fases del pipeline
+    vfx.rs        // traduce una resolución de `core::matching` a Events para `visuals` (PowerCombo, etc.)
+    rewards.rs    // economía compartida (score/reserve/stats) entre el swap directo y las cascadas
+    lifecycle.rs  // setup/reset/restart de partida, niveles de debug (`DEBUG_SCENARIOS`)
+  visuals/      // VisualsPlugin — posición/animación visual, efectos de power lights.
                 //   Separado de gameplay a propósito: es el lugar donde entran animación/luces/VFX futuros
                 //   sin tocar las reglas del juego.
   ui/           // UiPlugin — HUD (score, moves, nivel, objetivo, volumen).
+  debug/        // DebugOverlayPlugin — overlay de rendimiento (F3): FPS, entidades, assets, memoria.
+  embedded/     // rutas de assets embebidos en el binario (ej. el logo de Bevy del watermark).
 ```
 
 Cuando agregues algo nuevo, preguntate: ¿es lógica pura sin Bevy? → `core/` o un módulo plano nuevo. ¿Registra systems/events/resources? → un Plugin nuevo, agregado a la lista de `GamePlugin`. ¿Es sobre cómo se ve/siente el juego sin cambiar sus reglas? → probablemente `visuals/`.

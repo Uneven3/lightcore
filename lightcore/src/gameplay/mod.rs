@@ -118,6 +118,10 @@ impl Plugin for GameplayPlugin {
             )
             .add_systems(
                 Update,
+                vfx::tick_pending_light_transform.run_if(in_state(GameState::Popping)),
+            )
+            .add_systems(
+                Update,
                 falling::apply_gravity
                     .run_if(in_state(GameState::Falling))
                     .after(lerp_visual_pos),

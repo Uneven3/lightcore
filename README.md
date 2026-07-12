@@ -14,6 +14,7 @@
     *   **Web:** Compilación optimizada a WebAssembly (WASM).
     *   **Móvil:** Integración nativa con Android (orientación vertical por defecto).
 *   **Localización integrada:** Traducción dinámica entre español e inglés.
+*   **Persistencia multiplataforma:** El progreso de campaña y de cada run se guarda de forma nativa (sistema de archivos) en escritorio/Android y vía `localStorage` en la versión web.
 
 ---
 

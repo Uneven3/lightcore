@@ -10,6 +10,15 @@ use crate::state::GameState;
 /// so lights consume as the beam touches them, not all at once. Ray/Supernova: by distance from
 /// the source. Starburst: by each target's seeking-beam arrival (stagger by distance rank +
 /// travel). Merged with `min` across activations, so the earliest-arriving effect wins.
+/// Records `d` as entity `e`'s pop delay, keeping the smallest value seen — so when a light is
+/// reachable by more than one effect (e.g. two swept lines crossing), the earliest arrival wins.
+pub(super) fn merge_pop_delay(delays: &mut HashMap<Entity, f32>, e: Entity, d: f32) {
+    let slot = delays.entry(e).or_insert(f32::INFINITY);
+    if d < *slot {
+        *slot = d;
+    }
+}
+
 pub(crate) fn accumulate_pop_delays(
     delays: &mut HashMap<Entity, f32>,
     activation: &PowerActivation,
@@ -17,12 +26,7 @@ pub(crate) fn accumulate_pop_delays(
     entity_info: &EntityInfo,
     settings: &RaySettings,
 ) {
-    let mut put = |e: Entity, d: f32| {
-        let slot = delays.entry(e).or_insert(f32::INFINITY);
-        if d < *slot {
-            *slot = d;
-        }
-    };
+    let mut put = |e: Entity, d: f32| merge_pop_delay(delays, e, d);
     match activation.kind {
         LightKind::Normal | LightKind::Hollow => {}
         LightKind::Starburst => {

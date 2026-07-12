@@ -184,8 +184,9 @@ const ENTRY_CONNECTIONS: &[(usize, usize)] = &[
     (19, 20),
     (20, 21),
     (21, 22),
+    (22, 23),
 ];
-const MENU_ENTRIES: [MenuEntry; 23] = [
+const MENU_ENTRIES: [MenuEntry; 24] = [
     MenuEntry {
         title: "Puntaje Basico",
         blurb: "Consigue el puntaje objetivo.",
@@ -291,7 +292,7 @@ const MENU_ENTRIES: [MenuEntry; 23] = [
         accent: [0.48, 1.12, 1.16],
         kind: MenuEntryKind::Sandbox,
     },
-    // Debug branch (indices 15-22): one node per `gameplay::lifecycle::DEBUG_SCENARIOS` entry —
+    // Debug branch (indices 15-23): one node per `gameplay::lifecycle::DEBUG_SCENARIOS` entry —
     // same order, so `MenuEntryKind::Debug(n)` always points at the matching scenario.
     MenuEntry {
         title: "Debug: Lineas Cruzadas",
@@ -348,6 +349,13 @@ const MENU_ENTRIES: [MenuEntry; 23] = [
         pos: Vec2::new(-380.0, 840.0),
         accent: [0.40, 0.28, 0.48],
         kind: MenuEntryKind::Debug(7),
+    },
+    MenuEntry {
+        title: "Debug: Estrella + Shuriken",
+        blurb: "Starburst + Cross adyacentes — combo StarLine, barre fila y columna a la vez.",
+        pos: Vec2::new(-380.0, 1060.0),
+        accent: [0.55, 0.80, 1.20],
+        kind: MenuEntryKind::Debug(8),
     },
 ];
 
@@ -1342,7 +1350,8 @@ fn node_icon_text(index: usize) -> &'static str {
             4 => "D5",
             5 => "D6",
             6 => "D7",
-            _ => "D8",
+            7 => "D8",
+            _ => "D9",
         },
         _ => "LV",
     }
@@ -1492,6 +1501,11 @@ fn entry_localized_title_blurb(index: usize, lang: Language) -> (&'static str, S
         22 => (
             "Debug: Blackhole",
             "Blackhole + anything adjacent — clears the whole board.".to_string(),
+        ),
+        23 => (
+            "Debug: Star + Shuriken",
+            "Starburst + Cross adjacent — StarLine combo, sweeps its row and column at once."
+                .to_string(),
         ),
         _ => (entry.title, entry.blurb.to_string()),
     }

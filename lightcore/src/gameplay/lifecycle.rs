@@ -259,7 +259,7 @@ fn populate_sandbox_board(commands: &mut Commands) {
 /// `StarLine`/`StarSupernova`/`StarColor` name a partner color deliberately present in
 /// `populate_debug_board`'s filler pattern, so the "clear every light of this color" effect has
 /// several targets scattered around the board to actually demonstrate against, not just itself.
-pub(crate) const DEBUG_SCENARIOS: [(LightKind, LightColor, LightKind, LightColor); 8] = [
+pub(crate) const DEBUG_SCENARIOS: [(LightKind, LightColor, LightKind, LightColor); 9] = [
     (
         LightKind::RayH,
         LightColor::Blue,
@@ -308,6 +308,12 @@ pub(crate) const DEBUG_SCENARIOS: [(LightKind, LightColor, LightKind, LightColor
         LightKind::RayH,
         LightColor::Blue,
     ), // Blackhole
+    (
+        LightKind::Starburst,
+        LightColor::Blue,
+        LightKind::Cross,
+        LightColor::Blue,
+    ), // StarLine (shuriken partner — sweeps its row *and* column)
 ];
 
 const DEBUG_ANCHOR_A: GridPos = GridPos { x: 3, y: 4 };

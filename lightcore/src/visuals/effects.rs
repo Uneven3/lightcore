@@ -229,12 +229,11 @@ fn spawn_combo_effect(
             );
             spawn_cross_flourish(commands, cache, materials, mid);
         }
-        // Star core flash tinted to the cleared color + a cross sweep where the partner sat.
+        // Star core flash tinted to the cleared color — every affected light gets its own
+        // priming flash + synchronized detonation via `PowerTransformPulse`/`PowerBlastTrail`
+        // (see `gameplay::vfx::trigger_star_line`), so no static flash at `b` here.
         ComboKind::StarLine => {
             spawn_power_effect(commands, cache, materials, LightKind::Starburst, a, color);
-            spawn_power_effect(commands, cache, materials, LightKind::RayH, b, None);
-            spawn_power_effect(commands, cache, materials, LightKind::RayV, b, None);
-            spawn_cross_flourish(commands, cache, materials, b);
         }
         // Star core flash tinted to the cleared color + a gold burst at the partner.
         ComboKind::StarSupernova => {

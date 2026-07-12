@@ -162,7 +162,8 @@ pub(crate) fn on_swap_happened(
                         None
                     },
                 };
-                if let Some(combo) = classify_combo(a_kind, b_kind) {
+                let combo = classify_combo(a_kind, b_kind);
+                if let Some(combo) = combo {
                     vfx::trigger_combo(
                         &mut commands,
                         &grid,
@@ -171,22 +172,31 @@ pub(crate) fn on_swap_happened(
                         &b_activation,
                         combo,
                         &ray_settings,
+                        &mut pop_delays,
                     );
                 }
-                accumulate_pop_delays(
-                    &mut pop_delays,
-                    &a_activation,
-                    &grid,
-                    &entity_info,
-                    &ray_settings,
-                );
-                accumulate_pop_delays(
-                    &mut pop_delays,
-                    &b_activation,
-                    &grid,
-                    &entity_info,
-                    &ray_settings,
-                );
+                // StarLine/StarSupernova compute their own pop delays inside `trigger_combo` (see
+                // `vfx::trigger_star_transform_combo`) — the generic per-kind delays below would
+                // race them.
+                if !matches!(
+                    combo,
+                    Some(ComboKind::StarLine) | Some(ComboKind::StarSupernova)
+                ) {
+                    accumulate_pop_delays(
+                        &mut pop_delays,
+                        &a_activation,
+                        &grid,
+                        &entity_info,
+                        &ray_settings,
+                    );
+                    accumulate_pop_delays(
+                        &mut pop_delays,
+                        &b_activation,
+                        &grid,
+                        &entity_info,
+                        &ray_settings,
+                    );
+                }
                 let points = rewards::apply_removal_rewards(
                     &mut commands,
                     &compound,

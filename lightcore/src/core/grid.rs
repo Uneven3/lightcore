@@ -25,6 +25,10 @@ pub(crate) struct RaySettings {
     pub stagger_max: f32,
     /// × TILE — perpendicular glow halo width of the bolt sprite.
     pub bolt_width_frac: f32,
+    /// seconds — held beat between the last star orb landing and the synchronized combo
+    /// detonation (`StarLine`'s Candy-Crush-style "transform every same-color light, then explode
+    /// them all together" choreography — see `gameplay::vfx::trigger_star_line`).
+    pub combo_hold_secs: f32,
 }
 
 impl Default for RaySettings {
@@ -37,6 +41,7 @@ impl Default for RaySettings {
             stagger_secs: 0.035,
             stagger_max: 0.5,
             bolt_width_frac: 0.55,
+            combo_hold_secs: 0.22,
         }
     }
 }
