@@ -339,7 +339,7 @@ fn make_sweep(start_hz: f32, end_hz: f32, duration_secs: f32, amplitude: f32) ->
 
 /// Bad-event cue: a short downward void pull with a faint dissonant beating tone.
 fn make_score_drain() -> AudioSource {
-    let duration_secs = 0.46;
+    let duration_secs = 1.35;
     let n = (SR as f32 * duration_secs) as usize;
     let mut bytes = wav_header((n * 2) as u32);
     let mut phase_low = 0.0f32;
@@ -347,15 +347,15 @@ fn make_score_drain() -> AudioSource {
     for i in 0..n {
         let t = i as f32 / SR as f32;
         let progress = t / duration_secs;
-        let env = ((duration_secs - t) / duration_secs).max(0.0).powf(0.35);
-        let wobble = 0.55 + 0.45 * f32::sin(std::f32::consts::TAU * 18.0 * t);
-        let low_freq = 170.0 + (42.0 - 170.0) * progress.powf(0.65);
-        let grit_freq = 245.0 + (118.0 - 245.0) * progress;
+        let env = ((duration_secs - t) / duration_secs).max(0.0).powf(0.45);
+        let wobble = 0.55 + 0.45 * f32::sin(std::f32::consts::TAU * 12.0 * t);
+        let low_freq = 130.0 + (28.0 - 130.0) * progress.powf(0.75);
+        let grit_freq = 195.0 + (60.0 - 195.0) * progress;
         phase_low = (phase_low + low_freq / SR as f32).fract();
         phase_grit = (phase_grit + grit_freq / SR as f32).fract();
-        let low = f32::sin(std::f32::consts::TAU * phase_low) * 0.72;
-        let grit = f32::sin(std::f32::consts::TAU * phase_grit) * 0.28 * wobble;
-        let s = ((low + grit) * env * 0.55 * i16::MAX as f32) as i16;
+        let low = f32::sin(std::f32::consts::TAU * phase_low) * 0.75;
+        let grit = f32::sin(std::f32::consts::TAU * phase_grit) * 0.25 * wobble;
+        let s = ((low + grit) * env * 0.52 * i16::MAX as f32) as i16;
         bytes.extend_from_slice(&s.to_le_bytes());
     }
     AudioSource {

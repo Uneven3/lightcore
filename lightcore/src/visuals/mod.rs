@@ -52,6 +52,7 @@ impl Plugin for VisualsPlugin {
             .add_systems(
                 Update,
                 (
+                    score_light::tick_score_drain,
                     score_light::tick_score_light
                         .run_if(any_with_component::<score_light::ScoreShard>),
                     score_light::tick_score_shard_scatter

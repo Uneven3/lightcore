@@ -115,6 +115,7 @@ enum MenuEntryKind {
     Campaign(u32),
     ConsumeAll,
     Sandbox,
+    TeleportTest,
     /// Indexes `gameplay::lifecycle::DEBUG_SCENARIOS` — one isolated combo interaction per node,
     /// guaranteed to fire on the first swap. See `GameMode::Debug`.
     Debug(u8),
@@ -185,8 +186,9 @@ const ENTRY_CONNECTIONS: &[(usize, usize)] = &[
     (20, 21),
     (21, 22),
     (22, 23),
+    (0, 24),
 ];
-const MENU_ENTRIES: [MenuEntry; 24] = [
+const MENU_ENTRIES: [MenuEntry; 25] = [
     MenuEntry {
         title: "Puntaje Basico",
         blurb: "Consigue el puntaje objetivo.",
@@ -357,6 +359,13 @@ const MENU_ENTRIES: [MenuEntry; 24] = [
         accent: [0.55, 0.80, 1.20],
         kind: MenuEntryKind::Debug(8),
     },
+    MenuEntry {
+        title: "Laboratorio: Dos Grids",
+        blurb: "El grid izquierdo cae por teletransporte hacia el derecho.",
+        pos: Vec2::new(390.0, 210.0),
+        accent: [0.30, 0.92, 1.18],
+        kind: MenuEntryKind::TeleportTest,
+    },
 ];
 
 fn spawn_level_menu(
@@ -365,6 +374,7 @@ fn spawn_level_menu(
     run: Res<RunState>,
     settings: Res<WindowSettings>,
     cache: Res<VisualCache>,
+    asset_server: Res<AssetServer>,
     mut focus: ResMut<MenuFocus>,
     mut map_state: ResMut<LevelMapState>,
 ) {
@@ -498,11 +508,11 @@ fn spawn_level_menu(
         DeviceMode::Mobile => Val::Percent(4.0),
         DeviceMode::Desktop => Val::Px(24.0),
     };
-    let (back_size, back_font, back_right, back_top, back_bottom, back_label) =
-        match settings.device_mode {
-            DeviceMode::Mobile => (52.0, 26.0, Val::Px(18.0), Val::Px(18.0), Val::Auto, "<"),
-            DeviceMode::Desktop => (92.0, 32.0, Val::Px(22.0), Val::Auto, Val::Px(20.0), "<-"),
-        };
+    let (back_size, back_right, back_top, back_bottom) = match settings.device_mode {
+        DeviceMode::Mobile => (52.0, Val::Px(18.0), Val::Px(18.0), Val::Auto),
+        DeviceMode::Desktop => (92.0, Val::Px(22.0), Val::Auto, Val::Px(20.0)),
+    };
+    let back_icon = asset_server.load("icons/back.png");
 
     commands
         .spawn((
@@ -571,12 +581,13 @@ fn spawn_level_menu(
                             height: Val::Px(46.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.0)),
+                            border: UiRect::all(Val::Px(1.5)),
                             margin: UiRect::top(Val::Px(8.0)),
+                            border_radius: BorderRadius::all(Val::Px(6.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.11, 0.18, 0.28, 0.96)),
-                        BorderColor::all(Color::srgb(0.42, 0.58, 0.88)),
+                        BackgroundColor(Color::srgba(0.08, 0.15, 0.28, 0.90)),
+                        BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
                     ))
                     .with_children(|button| {
                         button.spawn((
@@ -599,13 +610,14 @@ fn spawn_level_menu(
                             height: Val::Px(46.0),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.0)),
+                            border: UiRect::all(Val::Px(1.5)),
                             margin: UiRect::top(Val::Px(8.0)),
                             display: Display::None,
+                            border_radius: BorderRadius::all(Val::Px(6.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.28, 0.11, 0.11, 0.96)),
-                        BorderColor::all(Color::srgb(0.88, 0.42, 0.42)),
+                        BackgroundColor(Color::srgba(0.25, 0.08, 0.08, 0.90)),
+                        BorderColor::all(Color::srgba(1.0, 0.35, 0.35, 0.45)),
                     ))
                     .with_children(|button| {
                         button.spawn((
@@ -630,22 +642,27 @@ fn spawn_level_menu(
                     bottom: back_bottom,
                     width: Val::Px(back_size),
                     height: Val::Px(back_size),
-                    border: UiRect::all(Val::Px(1.0)),
+                    border: UiRect::all(Val::Px(1.5)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.72, 0.72, 0.76, 0.80)),
-                BorderColor::all(Color::srgb(0.94, 0.94, 0.98)),
+                BackgroundColor(Color::srgba(0.08, 0.12, 0.20, 0.85)),
+                BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
             ))
             .with_children(|button| {
                 button.spawn((
-                    Text::new(back_label),
-                    TextFont {
-                        font_size: FontSize::Px(back_font),
+                    ImageNode {
+                        image: back_icon,
+                        color: Color::srgb(0.78, 0.92, 1.0),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.22, 0.22, 0.26)),
+                    Node {
+                        width: Val::Percent(52.0),
+                        height: Val::Percent(52.0),
+                        ..default()
+                    },
                 ));
             });
 
@@ -1034,12 +1051,7 @@ fn update_info_panel_system(
             format!("Bloqueado · completa Nivel {:02} para desbloquear", prev)
         }
     };
-    if run.active
-        && matches!(
-            MENU_ENTRIES[map_state.selected].kind,
-            MenuEntryKind::Campaign(_)
-        )
-    {
+    if run.active && entry_level(map_state.selected) == Some(run.depth.clamp(1, RUN_LEVELS)) {
         if lang == Language::English {
             progress_line = format!(
                 "{progress_line}\nActive run: Level {:02}",
@@ -1117,11 +1129,7 @@ fn update_play_button_text_system(
         return;
     };
     let lang = settings.language;
-    text.0 = if run.active
-        && matches!(
-            MENU_ENTRIES[map_state.selected].kind,
-            MenuEntryKind::Campaign(_)
-        ) {
+    text.0 = if run.active && entry_level(map_state.selected) == Some(run.depth.clamp(1, RUN_LEVELS)) {
         if lang == Language::English {
             "Continue Run".to_string()
         } else {
@@ -1373,22 +1381,28 @@ fn node_badge_text(level: usize, best: u32, unlocked: bool) -> String {
 fn entry_level(index: usize) -> Option<u32> {
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => Some(level),
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => None,
+        MenuEntryKind::ConsumeAll
+        | MenuEntryKind::Sandbox
+        | MenuEntryKind::Debug(_)
+        | MenuEntryKind::TeleportTest => None,
     }
 }
 
 fn entry_mode(index: usize, run: &RunState) -> GameMode {
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => {
-            if run.active {
-                GameMode::Run(run.depth.clamp(1, RUN_LEVELS))
-            } else {
+            // Only the node for the active depth resumes the run. Selecting any other campaign
+            // node must honour that choice instead of silently replacing it with Continue Run.
+            if run.active && level == run.depth.clamp(1, RUN_LEVELS) {
                 GameMode::Run(level)
+            } else {
+                GameMode::Classic(level)
             }
         }
         MenuEntryKind::ConsumeAll => GameMode::ConsumeAll,
         MenuEntryKind::Sandbox => GameMode::Sandbox,
         MenuEntryKind::Debug(scenario) => GameMode::Debug(scenario),
+        MenuEntryKind::TeleportTest => GameMode::TeleportTest,
     }
 }
 
@@ -1411,7 +1425,10 @@ fn entry_is_completed(index: usize, progress: &CampaignProgress) -> bool {
 fn entry_is_unlocked(index: usize, progress: &CampaignProgress) -> bool {
     match MENU_ENTRIES[index].kind {
         MenuEntryKind::Campaign(level) => progress.is_unlocked(level),
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => true,
+        MenuEntryKind::ConsumeAll
+        | MenuEntryKind::Sandbox
+        | MenuEntryKind::Debug(_)
+        | MenuEntryKind::TeleportTest => true,
     }
 }
 
@@ -1522,7 +1539,10 @@ fn info_title_text(index: usize, lang: Language) -> String {
             };
             format!("{} {:02} · {}", label, level, title)
         }
-        MenuEntryKind::ConsumeAll | MenuEntryKind::Sandbox | MenuEntryKind::Debug(_) => {
+        MenuEntryKind::ConsumeAll
+        | MenuEntryKind::Sandbox
+        | MenuEntryKind::Debug(_)
+        | MenuEntryKind::TeleportTest => {
             title.to_string()
         }
     }

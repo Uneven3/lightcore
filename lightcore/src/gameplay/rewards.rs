@@ -12,7 +12,7 @@ use super::{
     CollectedCores, CoreReserve, DisplayedScore, MovesLeft, Score, ScoreDrained, StatsBook,
     PowerActivation, PowerCreated, ChainPop, PowerActivationQueue, SuperComboPending,
 };
-use crate::core::components::{PopAnim, Light, Shadow, Spark, Blocker, HardShadow};
+use crate::core::components::{AdjacentMatchDamage, HardShadow, Light, PopAnim, Spark};
 use crate::core::grid::{to_world, GridPos};
 use crate::core::light::{LightColor, LightKind};
 use crate::core::matching::{EntityInfo, Grid, MatchResult, fire_single_activation, resolve_wave};
@@ -26,6 +26,7 @@ use crate::visuals::RaySettings;
 /// parameter explosion in [`apply_removal_rewards`].
 pub(crate) struct EconomyState<'a> {
     pub(crate) score: &'a mut Score,
+    #[allow(dead_code)]
     pub(crate) displayed: &'a mut DisplayedScore,
     pub(crate) reserve: &'a mut CoreReserve,
     pub(crate) collected_cores: &'a mut CollectedCores,
@@ -102,7 +103,7 @@ pub(super) fn apply_removal_rewards(
 
     if score_reset {
         economy.score.0 = 0;
-        economy.displayed.0 = 0;
+        // economy.displayed.0 is NOT set to 0 here; let visuals::score_light::tick_score_drain handle it!
         commands.trigger(ScoreDrained {
             origins: to_remove
                 .iter()
@@ -172,16 +173,11 @@ pub(crate) fn resolve_match_sequence(
     ray_settings: &RaySettings,
     lights: &mut Query<
         (Entity, &mut GridPos, &LightColor, &mut LightKind),
-        (With<Light>, Without<Shadow>),
+        (With<Light>, Without<AdjacentMatchDamage>, Without<Spark>),
     >,
     shadow_q: &mut Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     shadow_count: &mut u32,
     queue: &mut PowerActivationQueue,

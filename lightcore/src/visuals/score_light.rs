@@ -8,7 +8,7 @@ use super::particles::{ParticleSettings, spawn_membrane_pop};
 use crate::core::grid::TILE;
 use crate::core::prelude::LightColor;
 use crate::gameplay::{
-    ChainPop, DisplayedCollectedCores, DisplayedScore, LightPopped, ScoreAnchor, ScoreDrained,
+    ChainPop, DisplayedCollectedCores, DisplayedScore, LightPopped, Score, ScoreAnchor, ScoreDrained,
     ScoreGlow,
 };
 
@@ -230,7 +230,7 @@ pub(crate) fn on_chain_pop_score_light(
                     points: base + if (i as u32) < rem { 1 } else { 0 },
                     tint: tint_of(c),
                     timer: Timer::from_seconds(
-                        rng.random_range(shards.min_secs..shards.max_secs),
+                        rng.random_range(shards.min_secs..shards.max_secs) * if c == LightColor::Green { 0.55 } else { 1.0 },
                         TimerMode::Once,
                     ),
                     pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
@@ -320,7 +320,7 @@ pub(crate) fn on_score_drained(
                 from,
                 ctrl,
                 to,
-                timer: Timer::from_seconds(rng.random_range(0.42..0.68), TimerMode::Once),
+                timer: Timer::from_seconds(rng.random_range(0.42..0.68) * 2.2, TimerMode::Once),
             },
             ScoreShardAbsorbGlow {
                 base_size: shard.base_size,
@@ -359,7 +359,7 @@ pub(crate) fn on_score_drained(
                     from,
                     ctrl: drain_ctrl(from, to, &mut rng),
                     to,
-                    timer: Timer::from_seconds(rng.random_range(0.46..0.76), TimerMode::Once),
+                    timer: Timer::from_seconds(rng.random_range(0.46..0.76) * 2.2, TimerMode::Once),
                 },
                 Sprite {
                     image: cache.core_image.clone(),
@@ -400,7 +400,7 @@ pub(crate) fn on_score_drained(
                         from: start,
                         ctrl,
                         to: origin,
-                        timer: Timer::from_seconds(rng.random_range(0.50..0.85), TimerMode::Once),
+                        timer: Timer::from_seconds(rng.random_range(0.50..0.85) * 2.2, TimerMode::Once),
                     },
                     Sprite {
                         image: cache.core_image.clone(),
@@ -508,10 +508,36 @@ pub(crate) fn tick_score_light(
 
         shard.timer.tick(time.delta());
         let frac = shard.timer.fraction();
-        // ease-in (t³): a strong hang-then-snap — the shard barely creeps for the first half of
-        // the trip, then accelerates hard into the score, instead of the gentler t² curve.
-        let eased = frac * frac * frac;
-        t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
+
+        let eased = match shard.color {
+            LightColor::Green => {
+                // Green: high-speed straight ray
+                let eased = frac * frac;
+                t.translation = shard.from.lerp(shard.to, eased);
+                eased
+            }
+            LightColor::Yellow | LightColor::Purple => {
+                // Yellow/Purple: revolves on grid first, then flies to score
+                if frac < 0.4 {
+                    let t_orbit = frac / 0.4;
+                    let orbit_radius = TILE * 0.42 * (1.0 - t_orbit);
+                    let angle = t_orbit * 8.0 + shard.glow_phase;
+                    t.translation = shard.from + Vec3::new(angle.cos() * orbit_radius, angle.sin() * orbit_radius, 0.0);
+                    0.0 // no progress on main path during orbit
+                } else {
+                    let t_fly = (frac - 0.4) / 0.6;
+                    let eased = t_fly * t_fly * t_fly;
+                    t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
+                    eased
+                }
+            }
+            _ => {
+                // Standard curved flight path
+                let eased = frac * frac * frac;
+                t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
+                eased
+            }
+        };
         // Shrink as it's absorbed, so arrival reads as the score "drinking" the light.
         t.scale = Vec3::splat(shard.base_size * (1.0 - 0.6 * frac));
         // Full brightness for the whole flight — the light disappears ABRUPTLY on arrival (the
@@ -693,4 +719,16 @@ pub(crate) fn on_light_popped(
         trigger.kind.visual_ring_color(trigger.color),
         particles.membrane_radius,
     );
+}
+
+pub(crate) fn tick_score_drain(
+    mut displayed: ResMut<DisplayedScore>,
+    score: Res<Score>,
+    time: Res<Time>,
+) {
+    if displayed.0 > score.0 {
+        let diff = displayed.0 - score.0;
+        let step = ((diff as f32 * 3.5 * time.delta_secs()) as u32).max(1);
+        displayed.0 = displayed.0.saturating_sub(step);
+    }
 }

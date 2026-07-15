@@ -37,18 +37,16 @@ pub(crate) fn on_swap_happened(
     mut shadow_count: ResMut<ShadowCount>,
     mut shadow_q: Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     mut lights: Query<
         (Entity, &mut GridPos, &LightColor, &mut LightKind),
-        (With<Light>, Without<Shadow>),
+        (With<Light>, Without<AdjacentMatchDamage>, Without<Spark>),
     >,
-    mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    mut sparks: Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<AdjacentMatchDamage>),
+    >,
     mut reverting: ResMut<RevertingSwap>,
     mut power: PowerComboParams,
     ray_settings: Res<RaySettings>,
@@ -145,12 +143,7 @@ fn handle_power_combo_swap(
     shadow_count: &mut ShadowCount,
     shadow_q: &mut Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     grid: &Grid,
     entity_info: &EntityInfo,
@@ -298,18 +291,16 @@ fn handle_normal_match_swap(
     shadow_count: &mut ShadowCount,
     shadow_q: &mut Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     lights: &mut Query<
         (Entity, &mut GridPos, &LightColor, &mut LightKind),
-        (With<Light>, Without<Shadow>),
+        (With<Light>, Without<AdjacentMatchDamage>, Without<Spark>),
     >,
-    sparks: &mut Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    sparks: &mut Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<AdjacentMatchDamage>),
+    >,
     reverting: &mut RevertingSwap,
     power: &mut PowerComboParams,
     grid: &Grid,
@@ -387,4 +378,3 @@ fn handle_normal_match_swap(
     );
     next_state.set(GameState::Popping);
 }
-

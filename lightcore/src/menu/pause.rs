@@ -48,7 +48,11 @@ fn close_pause(actions: Res<InputActions>, mut next: ResMut<NextState<GameState>
     }
 }
 
-fn spawn_pause(mut commands: Commands, settings: Res<WindowSettings>) {
+fn spawn_pause(
+    mut commands: Commands,
+    settings: Res<WindowSettings>,
+    asset_server: Res<AssetServer>,
+) {
     let lang = settings.language;
     commands
         .spawn((
@@ -74,38 +78,55 @@ fn spawn_pause(mut commands: Commands, settings: Res<WindowSettings>) {
                 },
                 TextColor(Color::srgb(1.5, 1.7, 2.4)), // HDR → blooms
             ));
-            for (index, (label, action)) in [
-                (lang.tr(TrKey::Resume), PauseButton::Resume),
-                (lang.tr(TrKey::Options), PauseButton::Options),
-                (lang.tr(TrKey::ExitToMenu), PauseButton::Quit),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                root.spawn((
-                    Button,
-                    action,
-                    MenuButton { index },
-                    Node {
-                        width: Val::Px(260.0),
-                        height: Val::Px(56.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(BTN_IDLE),
-                ))
-                .with_children(|b| {
-                    b.spawn((
-                        Text::new(label),
-                        TextFont {
-                            font_size: FontSize::Px(26.0),
+            root.spawn((Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(24.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },))
+            .with_children(|row| {
+                for (index, (icon_path, action, tint)) in [
+                    ("icons/play.png", PauseButton::Resume, Color::srgb(0.78, 0.92, 1.0)),
+                    ("icons/settings.png", PauseButton::Options, Color::srgb(0.78, 0.92, 1.0)),
+                    ("icons/power.png", PauseButton::Quit, Color::srgb(1.0, 0.72, 0.76)),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    row.spawn((
+                        Button,
+                        action,
+                        MenuButton { index },
+                        Node {
+                            width: Val::Px(78.0),
+                            height: Val::Px(78.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.5)),
+                            border_radius: BorderRadius::all(Val::Px(8.0)),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
-                    ));
-                });
-            }
+                        BackgroundColor(BTN_IDLE),
+                        BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
+                    ))
+                    .with_children(|b| {
+                        let icon = asset_server.load(icon_path);
+                        b.spawn((
+                            ImageNode {
+                                image: icon,
+                                color: tint,
+                                ..default()
+                            },
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(40.0),
+                                ..default()
+                            },
+                        ));
+                    });
+                }
+            });
         });
 }
 

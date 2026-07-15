@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::core::prelude::*;
-use crate::core::grid::ShadowSet;
+use crate::core::grid::GravityBlockSet;
 pub(crate) use crate::core::run::CoreReserve;
 use crate::core::run::RunState;
 use crate::state::GameState;
@@ -45,9 +45,15 @@ impl Plugin for GameplayPlugin {
             .init_resource::<CascadeDepth>()
             .init_resource::<SparksCollected>()
             .init_resource::<ShadowCount>()
-            .init_resource::<ShadowSet>()
+            .init_resource::<GravityBlockSet>()
+            .init_resource::<GridLayout>()
             .init_resource::<lifecycle::LevelRewardOffer>()
-            .add_systems(Update, falling::update_shadow_set)
+            .add_systems(
+                Update,
+                falling::update_gravity_block_set.before(falling::apply_gravity),
+            )
+            .add_systems(Update, lifecycle::account_removed_stasis)
+            .add_systems(Update, lifecycle::despawn_orphan_stasis_covers)
             .init_resource::<LevelTimer>()
             .init_resource::<PowerActivationQueue>()
             .init_resource::<SuperComboPending>()
@@ -190,6 +196,7 @@ pub(crate) enum GameMode {
     /// of one interaction at a time instead of hunting for it on a random board. Same unbounded,
     /// no-win/lose loop as `Sandbox`/`ConsumeAll`.
     Debug(u8),
+    TeleportTest,
 }
 
 impl Default for GameMode {
@@ -206,7 +213,7 @@ impl GameMode {
     pub(crate) fn is_sandbox(self) -> bool {
         matches!(
             self,
-            GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_)
+            GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) | GameMode::TeleportTest
         )
     }
 

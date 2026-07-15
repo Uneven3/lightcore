@@ -97,9 +97,6 @@ struct LanguageLabel;
 struct OptionsTitleLabel;
 
 #[derive(Component)]
-struct BackButtonLabel;
-
-#[derive(Component)]
 struct SliderLabel(SliderTarget);
 
 #[derive(Component)]
@@ -206,7 +203,9 @@ fn spawn_options(
     ray: Res<RaySettings>,
     shards: Res<ShardSettings>,
     profile: Res<PlatformProfile>,
+    asset_server: Res<AssetServer>,
 ) {
+    let back_icon = asset_server.load("icons/back.png");
     commands
         .spawn((
             OptionsRoot,
@@ -245,19 +244,25 @@ fn spawn_options(
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     margin: UiRect::bottom(Val::Px(10.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
                     ..default()
                 },
                 BackgroundColor(BTN_IDLE),
+                BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
             ))
             .with_children(|b| {
                 b.spawn((
-                    BackButtonLabel,
-                    Text::new("Volver"),
-                    TextFont {
-                        font_size: FontSize::Px(22.0),
+                    ImageNode {
+                        image: back_icon,
+                        color: Color::srgb(0.78, 0.92, 1.0),
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    Node {
+                        width: Val::Px(26.0),
+                        height: Val::Px(26.0),
+                        ..default()
+                    },
                 ));
             });
 
@@ -676,9 +681,12 @@ fn spawn_text_button<B: Component, L: Component>(
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 margin: UiRect::top(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(BTN_IDLE),
+            BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
         ))
         .with_children(|b| {
             b.spawn((
@@ -958,18 +966,11 @@ fn get_slider_label_text(target: SliderTarget, lang: Language) -> &'static str {
 fn update_options_static_labels(
     settings: Res<WindowSettings>,
     mut title: Query<&mut Text, With<OptionsTitleLabel>>,
-    mut back: Query<&mut Text, (With<BackButtonLabel>, Without<OptionsTitleLabel>)>,
-    mut sliders: Query<
-        (&SliderLabel, &mut Text),
-        (Without<OptionsTitleLabel>, Without<BackButtonLabel>),
-    >,
+    mut sliders: Query<(&SliderLabel, &mut Text), Without<OptionsTitleLabel>>,
 ) {
     let lang = settings.language;
     for mut t in &mut title {
         **t = lang.tr(TrKey::OptionsTitle).to_string();
-    }
-    for mut t in &mut back {
-        **t = lang.tr(TrKey::Back).to_string();
     }
     for (slider, mut t) in &mut sliders {
         **t = get_slider_label_text(slider.0, lang).to_string();

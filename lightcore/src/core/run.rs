@@ -29,16 +29,26 @@ pub(crate) enum BoonKind {
     SparkBounty,
     PowerBounty,
     HollowWard,
+    RedSpawn,
+    GreenSpawn,
+    BlueSpawn,
+    YellowSpawn,
+    PurpleSpawn,
 }
 
 impl BoonKind {
-    pub(crate) const ALL: [BoonKind; 6] = [
+    pub(crate) const ALL: [BoonKind; 11] = [
         BoonKind::RedValue,
         BoonKind::GreenReserve,
         BoonKind::BlueMoves,
         BoonKind::SparkBounty,
         BoonKind::PowerBounty,
         BoonKind::HollowWard,
+        BoonKind::RedSpawn,
+        BoonKind::GreenSpawn,
+        BoonKind::BlueSpawn,
+        BoonKind::YellowSpawn,
+        BoonKind::PurpleSpawn,
     ];
 
     pub(crate) fn index(self) -> usize {
@@ -49,6 +59,11 @@ impl BoonKind {
             BoonKind::SparkBounty => 3,
             BoonKind::PowerBounty => 4,
             BoonKind::HollowWard => 5,
+            BoonKind::RedSpawn => 6,
+            BoonKind::GreenSpawn => 7,
+            BoonKind::BlueSpawn => 8,
+            BoonKind::YellowSpawn => 9,
+            BoonKind::PurpleSpawn => 10,
         }
     }
 
@@ -60,6 +75,7 @@ impl BoonKind {
             BoonKind::SparkBounty => 65,
             BoonKind::PowerBounty => 75,
             BoonKind::HollowWard => 70,
+            BoonKind::RedSpawn | BoonKind::GreenSpawn | BoonKind::BlueSpawn | BoonKind::YellowSpawn | BoonKind::PurpleSpawn => 50,
         };
         base + level as u32 * 45
     }
@@ -72,6 +88,11 @@ impl BoonKind {
             BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBounty),
             BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBounty),
             BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWard),
+            BoonKind::RedSpawn => lang.tr(TrKey::BoonRedSpawn),
+            BoonKind::GreenSpawn => lang.tr(TrKey::BoonGreenSpawn),
+            BoonKind::BlueSpawn => lang.tr(TrKey::BoonBlueSpawn),
+            BoonKind::YellowSpawn => lang.tr(TrKey::BoonYellowSpawn),
+            BoonKind::PurpleSpawn => lang.tr(TrKey::BoonPurpleSpawn),
         }
     }
 
@@ -83,6 +104,11 @@ impl BoonKind {
             BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBountyStatus),
             BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBountyStatus),
             BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWardStatus),
+            BoonKind::RedSpawn => lang.tr(TrKey::BoonRedSpawnStatus),
+            BoonKind::GreenSpawn => lang.tr(TrKey::BoonGreenSpawnStatus),
+            BoonKind::BlueSpawn => lang.tr(TrKey::BoonBlueSpawnStatus),
+            BoonKind::YellowSpawn => lang.tr(TrKey::BoonYellowSpawnStatus),
+            BoonKind::PurpleSpawn => lang.tr(TrKey::BoonPurpleSpawnStatus),
         }
     }
 }
@@ -238,6 +264,16 @@ impl RunState {
     pub(crate) fn hollow_spawn_chance(&self, base_chance: f32) -> f32 {
         let reduction = 0.28 * self.level(BoonKind::HollowWard) as f32;
         base_chance * (1.0 - reduction).max(0.16)
+    }
+
+    pub(crate) fn color_weights(&self) -> [f32; 5] {
+        let mut weights = [1.0f32; 5];
+        weights[0] += self.level(BoonKind::RedSpawn) as f32 * 0.45;
+        weights[1] += self.level(BoonKind::GreenSpawn) as f32 * 0.45;
+        weights[2] += self.level(BoonKind::BlueSpawn) as f32 * 0.45;
+        weights[3] += self.level(BoonKind::YellowSpawn) as f32 * 0.45;
+        weights[4] += self.level(BoonKind::PurpleSpawn) as f32 * 0.45;
+        weights
     }
 
     fn encode(&self, reserve: u32) -> String {

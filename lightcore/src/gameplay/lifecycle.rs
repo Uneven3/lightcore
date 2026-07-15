@@ -7,8 +7,8 @@ use super::{
     ResetParams, Score, ShadowCount, StatsBook,
 };
 use crate::board::{
-    HOLLOW_BASE_CHANCE, generate_board, spawn_blocker, spawn_hard_shadow, spawn_ingredient_exits,
-    spawn_light, spawn_shadow, spawn_sparks,
+    HOLLOW_BASE_CHANCE, generate_board, spawn_blocker, spawn_ingredient_exits,
+    spawn_light, spawn_shadow, spawn_sparks, spawn_stasis_cover,
 };
 use crate::core::campaign::CampaignProgress;
 use crate::core::locale::{Language, TrKey};
@@ -43,6 +43,7 @@ type TransientMatchEntity = Or<(
     With<GameOverOverlay>,
     With<LevelCompleteOverlay>,
     With<IngredientExit>,
+    With<StasisCover>,
 )>;
 
 /// `LevelTimer` value a level should start with, derived from its goal — `Some` (ticking down)
@@ -151,6 +152,7 @@ fn populate_board(
     level: &LevelConfig,
     shadow_count: &mut u32,
     hollow_chance: f32,
+    weights: [f32; 5],
 ) {
     let spark_positions: HashSet<GridPos> = if level.goal == LevelGoal::Sparks {
         spark_columns(level.sparks_total)
@@ -164,11 +166,18 @@ fn populate_board(
     let blocker_positions: HashSet<GridPos> = level.blocker_positions.iter().copied().collect();
     let mut blocked_positions = spark_positions.clone();
     blocked_positions.extend(blocker_positions.iter().copied());
+    let stasis_positions: HashSet<GridPos> = level.shadow_positions.iter().copied().collect();
 
     let mut rng = rand::rng();
-    for (pos, color, kind) in generate_board(&mut rng, &blocked_positions, hollow_chance) {
+    for (pos, color, kind) in generate_board(&mut rng, &blocked_positions, hollow_chance, weights) {
         if !spark_positions.contains(&pos) && !blocker_positions.contains(&pos) {
-            spawn_light(commands, pos, color, kind, to_world(pos));
+            let light = spawn_light(commands, pos, color, kind, to_world(pos));
+            if stasis_positions.contains(&pos) {
+                commands
+                    .entity(light)
+                    .insert((Stasis, BlocksGravity, BlocksInteraction))
+                    .remove::<Movable>();
+            }
         }
     }
 
@@ -183,12 +192,39 @@ fn populate_board(
     }
 
     if level.goal == LevelGoal::ClearShadow {
+        // Preserve the level's old composition: both covers sit over their existing lightcores.
+        // Only the future `DeepShadow` variant is an empty cell.
         *shadow_count = (level.shadow_positions.len() + level.hard_shadow_positions.len()) as u32;
         for &pos in &level.shadow_positions {
-            spawn_shadow(commands, cache, pos);
+            spawn_stasis_cover(commands, cache, pos);
         }
         for &pos in &level.hard_shadow_positions {
-            spawn_hard_shadow(commands, cache, pos, 3);
+            spawn_shadow(commands, cache, pos);
+        }
+    }
+}
+
+/// Stasis lights are valid match members and disappear through the normal pop pipeline. Keep the
+/// clear-obstacle objective in sync when that happens, just as `clear_shadow_at` does for cells.
+pub(crate) fn account_removed_stasis(
+    mut removed: RemovedComponents<Stasis>,
+    mut shadow_count: ResMut<ShadowCount>,
+) {
+    for _ in removed.read() {
+        shadow_count.0 = shadow_count.0.saturating_sub(1);
+    }
+}
+
+/// The cyan cover is a separate render entity so it must be removed when its owning stasis light
+/// is matched and despawned. Matching by cell keeps the visual layer independent from gameplay.
+pub(crate) fn despawn_orphan_stasis_covers(
+    mut commands: Commands,
+    covers: Query<(Entity, &GridPos), With<StasisCover>>,
+    stasis: Query<&GridPos, With<Stasis>>,
+) {
+    for (entity, pos) in &covers {
+        if !stasis.iter().any(|stasis_pos| stasis_pos == pos) {
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -208,7 +244,7 @@ fn spark_columns(count: u32) -> Vec<i32> {
 /// by the shared Classic pipeline (`gameplay::chain`/`swap`) during play.
 fn populate_blackhole_board(commands: &mut Commands) {
     let mut rng = rand::rng();
-    for (pos, color, kind) in generate_board(&mut rng, &HashSet::new(), HOLLOW_BASE_CHANCE) {
+    for (pos, color, kind) in generate_board(&mut rng, &HashSet::new(), HOLLOW_BASE_CHANCE, [1.0; 5]) {
         spawn_light(commands, pos, color, kind, to_world(pos));
     }
 }
@@ -233,7 +269,7 @@ fn populate_sandbox_board(commands: &mut Commands) {
     let total: u32 = KINDS.iter().map(|(_, w)| w).sum();
 
     let mut rng = rand::rng();
-    for (pos, color, _) in generate_board(&mut rng, &HashSet::new(), 0.0) {
+    for (pos, color, _) in generate_board(&mut rng, &HashSet::new(), 0.0, [1.0; 5]) {
         let mut roll = rng.random_range(0..total);
         let kind = KINDS
             .iter()
@@ -358,8 +394,10 @@ pub(crate) fn setup_match(
     mut reserve: ResMut<CoreReserve>,
     mut spent: ResMut<CoresSpent>,
     mut level_timer: ResMut<LevelTimer>,
+    mut layout: ResMut<GridLayout>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
+    *layout = GridLayout::default();
     match *mode {
         GameMode::Classic(level_n) => {
             *level = make_level(level_n);
@@ -374,6 +412,7 @@ pub(crate) fn setup_match(
                 &level,
                 &mut shadow_count.0,
                 HOLLOW_BASE_CHANCE,
+                [1.0; 5],
             );
         }
         GameMode::Run(depth) => {
@@ -391,15 +430,17 @@ pub(crate) fn setup_match(
             }
             *level_timer = level_timer_for(&level.goal);
             let hollow_chance = run.hollow_spawn_chance(HOLLOW_BASE_CHANCE);
+            let weights = run.color_weights();
             populate_board(
                 &mut commands,
                 &cache,
                 &level,
                 &mut shadow_count.0,
                 hollow_chance,
+                weights,
             );
         }
-        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) => {
+        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) | GameMode::TeleportTest => {
             // Sandbox modes: run the Classic detonation pipeline with no win/lose yet. An
             // unreachable goal + infinite moves means `check_chain_matches` FASE 3 never completes
             // nor game-overs (it just reshuffles if the player gets stuck). Esc returns to the menu.
@@ -422,11 +463,45 @@ pub(crate) fn setup_match(
             match *mode {
                 GameMode::Sandbox => populate_sandbox_board(&mut commands),
                 GameMode::Debug(scenario) => populate_debug_board(&mut commands, scenario),
+                GameMode::TeleportTest => populate_teleport_board(&mut commands, &mut layout),
                 _ => populate_blackhole_board(&mut commands),
             }
         }
     }
     next_state.set(GameState::Playing);
+}
+
+fn populate_teleport_board(commands: &mut Commands, layout: &mut GridLayout) {
+    // Two compact boards fit in the same horizontal footprint as the normal 8×8 grid. The two
+    // empty logical columns between them prevent matches/swaps crossing the teleport gap.
+    const SUBGRID_W: i32 = 3;
+    const SUBGRID_H: i32 = 5;
+    const SUBGRID_Y: i32 = 1;
+    const RIGHT_X: i32 = 5;
+    *layout = GridLayout::rectangles(&[
+        (0, SUBGRID_Y, SUBGRID_W, SUBGRID_H),
+        (RIGHT_X, SUBGRID_Y, SUBGRID_W, SUBGRID_H),
+    ]);
+    for x in 0..SUBGRID_W {
+        layout.link_fall(
+            GridPos { x, y: SUBGRID_Y },
+            GridPos {
+                x: RIGHT_X + x,
+                y: SUBGRID_Y + SUBGRID_H - 1,
+            },
+        );
+    }
+    let mut rng = rand::rng();
+    for offset_x in [0, RIGHT_X] {
+        for (mut pos, color, kind) in generate_board(&mut rng, &HashSet::new(), 0.0, [1.0; 5])
+            .into_iter()
+            .filter(|(pos, _, _)| pos.x < SUBGRID_W && pos.y < SUBGRID_H)
+        {
+            pos.x += offset_x;
+            pos.y += SUBGRID_Y;
+            spawn_light(commands, pos, color, kind, to_world(pos));
+        }
+    }
 }
 
 /// Tears the match down when returning to the menu: despawns every match entity (lights+sparks and
@@ -1053,7 +1128,7 @@ pub(crate) fn handle_restart(
     let replay_level = match *mode {
         GameMode::Classic(level_num) => make_level(level_num),
         GameMode::Run(depth) => make_generated_level(depth, run.seed),
-        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) => make_level(level.level),
+        GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) | GameMode::TeleportTest => make_level(level.level),
     };
     reset_for_replay(replay_level, &mut level, &mut res, &mode, &run);
     let hollow_chance = if mode.is_run() {
@@ -1061,12 +1136,18 @@ pub(crate) fn handle_restart(
     } else {
         HOLLOW_BASE_CHANCE
     };
+    let weights = if mode.is_run() {
+        run.color_weights()
+    } else {
+        [1.0; 5]
+    };
     populate_board(
         &mut commands,
         &cache,
         &level,
         &mut res.shadow.0,
         hollow_chance,
+        weights,
     );
     next_state.set(GameState::Playing);
 }

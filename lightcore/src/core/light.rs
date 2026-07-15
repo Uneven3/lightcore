@@ -13,8 +13,18 @@ pub(crate) enum LightColor {
 }
 
 impl LightColor {
-    pub(crate) fn random(rng: &mut impl Rng) -> Self {
-        Self::from_index(rng.random_range(0..5) as usize)
+    pub(crate) fn random_weighted(rng: &mut impl Rng, weights: [f32; 5]) -> Self {
+        let total_weight: f32 = weights.iter().sum();
+        let mut r = rng.random_range(0.0..total_weight);
+        let mut selected_idx = 0;
+        for (idx, &w) in weights.iter().enumerate() {
+            if r < w {
+                selected_idx = idx;
+                break;
+            }
+            r -= w;
+        }
+        Self::from_index(selected_idx)
     }
 
     pub(crate) fn from_index(i: usize) -> Self {

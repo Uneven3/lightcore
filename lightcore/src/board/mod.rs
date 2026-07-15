@@ -19,6 +19,7 @@ pub(crate) fn random_basic_kind(rng: &mut impl Rng, hollow_chance: f32) -> Light
 fn generate_board_layout(
     rng: &mut impl Rng,
     hollow_chance: f32,
+    weights: [f32; 5],
 ) -> Vec<(GridPos, LightColor, LightKind)> {
     const ALL: [LightColor; 5] = [
         LightColor::Red,
@@ -31,7 +32,16 @@ fn generate_board_layout(
     for x in 0..GRID_W as usize {
         for y in 0..GRID_H as usize {
             loop {
-                let color = ALL[rng.random_range(0..ALL.len())];
+                let mut r = rng.random_range(0.0..weights.iter().sum());
+                let mut selected_idx = 0;
+                for (idx, &w) in weights.iter().enumerate() {
+                    if r < w {
+                        selected_idx = idx;
+                        break;
+                    }
+                    r -= w;
+                }
+                let color = ALL[selected_idx];
                 let kind = random_basic_kind(rng, hollow_chance);
                 let key = match_key(color, kind);
                 let h_match = x >= 2
@@ -76,9 +86,10 @@ pub(crate) fn generate_board(
     rng: &mut impl Rng,
     blocked: &HashSet<GridPos>,
     hollow_chance: f32,
+    weights: [f32; 5],
 ) -> Vec<(GridPos, LightColor, LightKind)> {
     loop {
-        let board = generate_board_layout(rng, hollow_chance);
+        let board = generate_board_layout(rng, hollow_chance, weights);
         if board_has_valid_swap(&board, blocked) {
             return board;
         }
@@ -104,6 +115,7 @@ pub(crate) fn spawn_light(
     commands
         .spawn((
             Light,
+            Movable,
             FallPhysics,
             color,
             kind,
@@ -119,16 +131,31 @@ pub(crate) fn spawn_shadow(commands: &mut Commands, cache: &VisualCache, pos: Gr
     let world = to_world(pos);
     commands.spawn((
         Shadow,
+        BlocksGravity,
+        BlocksInteraction,
+        AdjacentMatchDamage,
         pos,
         Mesh2d(cache.shadow_mesh.clone()),
-        MeshMaterial2d(cache.shadow_mat.clone()),
+        MeshMaterial2d(cache.hard_shadow_mat.clone()),
         Transform::from_translation(world.with_z(-0.5)),
     ));
 }
 
-/// "Jalea ultra dura": same tile as `spawn_shadow` but needing `hits` (direct or orthogonally
-/// adjacent) matches to clear — see `HardShadow` and `clear_shadow_at`. Rendered with its own
-/// material/label so it reads apart from a normal 1-hit `Shadow`.
+/// The former cyan shadow visual, now a non-blocking cover attached conceptually to a stasis
+/// light. It preserves the level's appearance without turning the cell into an opaque obstacle.
+pub(crate) fn spawn_stasis_cover(commands: &mut Commands, cache: &VisualCache, pos: GridPos) {
+    let world = to_world(pos);
+    commands.spawn((
+        StasisCover,
+        pos,
+        Mesh2d(cache.shadow_mesh.clone()),
+        MeshMaterial2d(cache.shadow_mat.clone()),
+        Transform::from_translation(world.with_z(0.35)),
+    ));
+}
+
+/// Future deep shadow: an opaque cell with no lightcore that needs `hits` orthogonally adjacent
+/// matches to clear — see `HardShadow` and `clear_shadow_at`.
 pub(crate) fn spawn_hard_shadow(
     commands: &mut Commands,
     cache: &VisualCache,
@@ -139,7 +166,10 @@ pub(crate) fn spawn_hard_shadow(
     commands
         .spawn((
             Shadow,
-            HardShadow(hits),
+            DeepShadow(hits),
+            BlocksGravity,
+            BlocksInteraction,
+            AdjacentMatchDamage,
             pos,
             Mesh2d(cache.shadow_mesh.clone()),
             MeshMaterial2d(cache.hard_shadow_mat.clone()),
@@ -164,6 +194,8 @@ pub(crate) fn spawn_blocker(commands: &mut Commands, cache: &VisualCache, pos: G
     commands.spawn((
         Shadow,
         Blocker,
+        BlocksGravity,
+        BlocksInteraction,
         pos,
         Mesh2d(cache.blocker_mesh.clone()),
         MeshMaterial2d(cache.blocker_mat.clone()),
@@ -252,7 +284,7 @@ pub(crate) fn shuffle_board(
         commands.entity(*e).try_despawn();
     }
     let mut rng = rand::rng();
-    let new_board = generate_board(&mut rng, &HashSet::new(), hollow_chance);
+    let new_board = generate_board(&mut rng, &HashSet::new(), hollow_chance, [1.0; 5]);
     for (pos, color, kind) in new_board {
         if positions.contains(&pos) {
             spawn_light(commands, pos, color, kind, to_world(pos));
@@ -260,30 +292,21 @@ pub(crate) fn shuffle_board(
     }
 }
 
-/// Clears `Shadow` tiles hit by this pop wave. A plain `Shadow` clears on a direct hit (a match on
-/// its own cell). A `HardShadow` also counts a hit from an orthogonally adjacent match, and chips
-/// one hit off instead of despawning until it reaches 0 — see `core::components::HardShadow`.
+/// Clears any obstacle carrying `AdjacentMatchDamage` when a match lands orthogonally adjacent.
+/// `DeepShadow` chips one durability point per adjacent match.
 pub(crate) fn clear_shadow_at(
     removed_positions: &HashSet<GridPos>,
     commands: &mut Commands,
     shadow_q: &mut Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     shadow_count: &mut u32,
 ) {
     for (e, gp, hard) in shadow_q.iter_mut() {
-        let hit = removed_positions.contains(gp)
-            || hard.as_ref().is_some_and(|_| {
-                orthogonal_neighbors(*gp)
-                    .iter()
-                    .any(|n| removed_positions.contains(n))
-            });
+        let hit = orthogonal_neighbors(*gp)
+            .iter()
+            .any(|n| removed_positions.contains(n));
         if !hit {
             continue;
         }

@@ -54,8 +54,8 @@ impl Default for OptionsReturn {
     }
 }
 
-pub(super) const BTN_IDLE: Color = Color::srgb(0.10, 0.10, 0.18);
-pub(super) const BTN_HOVER: Color = Color::srgb(0.20, 0.26, 0.42);
+pub(super) const BTN_IDLE: Color = Color::srgba(0.06, 0.08, 0.14, 0.88);
+pub(super) const BTN_HOVER: Color = Color::srgba(0.12, 0.22, 0.45, 0.95);
 
 // ─── Keyboard/gamepad menu navigation ────────────────────────────────────────
 //
@@ -136,15 +136,25 @@ fn menu_nav(
 /// press-handling system.
 pub(super) fn button_hover_system(
     mut interactions: Query<
-        (&Interaction, &mut BackgroundColor),
+        (&Interaction, &mut BackgroundColor, Option<&mut BorderColor>),
         (Changed<Interaction>, With<MenuButton>),
     >,
 ) {
-    for (interaction, mut bg) in &mut interactions {
+    for (interaction, mut bg, border) in &mut interactions {
         match interaction {
             Interaction::Pressed => {}
-            Interaction::Hovered => bg.0 = BTN_HOVER,
-            Interaction::None => bg.0 = BTN_IDLE,
+            Interaction::Hovered => {
+                bg.0 = BTN_HOVER;
+                if let Some(mut b) = border {
+                    *b = BorderColor::all(Color::srgb(1.8, 2.6, 4.0)); // glowing cyan-white
+                }
+            }
+            Interaction::None => {
+                bg.0 = BTN_IDLE;
+                if let Some(mut b) = border {
+                    *b = BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)); // glowing cyan
+                }
+            }
         }
     }
 }

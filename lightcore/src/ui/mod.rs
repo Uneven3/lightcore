@@ -14,7 +14,7 @@ use crate::gameplay::{
     CoreReserve, DisplayedCollectedCores, DisplayedScore, GameMode, LevelTimer, MovesLeft,
     ScoreAnchor, ScoreGlow, ShadowCount, SparksCollected, StatsBook, StatsPopupOpen,
 };
-use crate::menu::options::WindowSettings;
+use crate::menu::options::{WindowSettings, DeviceMode};
 use crate::state::GameState;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::render_target::{
@@ -626,7 +626,7 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
             });
     });
 
-    spawn_shop_bar(&mut commands, hud_root_id, settings.language);
+    spawn_shop_bar(&mut commands, hud_root_id, settings.language, settings.device_mode);
     spawn_shop_active_badge(&mut commands, hud_root_id);
     spawn_tutorial_overlay(&mut commands);
 }
@@ -693,7 +693,21 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
+fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language, mode: DeviceMode) {
+    let compact = mode == DeviceMode::Mobile;
+    let bar_padding = if compact { 10.0 } else { 14.0 };
+    let row_gap = if compact { 6.0 } else { 10.0 };
+    let list_gap = if compact { 6.0 } else { 6.0 };
+
+    // Cards layout
+    let card_height = if compact { 44.0 } else { 52.0 };
+    let card_padding = if compact { UiRect::axes(Val::Px(6.0), Val::Px(4.0)) } else { UiRect::axes(Val::Px(8.0), Val::Px(6.0)) };
+
+    // Font sizes
+    let title_font_sz = if compact { 11.5 } else { 14.0 };
+    let cost_font_sz = if compact { 11.5 } else { 13.0 };
+    let status_font_sz = if compact { 8.5 } else { 10.0 };
+
     let bar = commands
         .spawn((
             ShopBar,
@@ -706,8 +720,8 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Stretch,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::all(Val::Px(14.0)),
+                row_gap: Val::Px(row_gap),
+                padding: UiRect::all(Val::Px(bar_padding)),
                 border: UiRect::all(Val::Px(1.5)),
                 ..default()
             },
@@ -729,8 +743,8 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 flex_wrap: FlexWrap::Wrap,
-                column_gap: Val::Px(6.0),
-                row_gap: Val::Px(6.0),
+                column_gap: Val::Px(list_gap),
+                row_gap: Val::Px(list_gap),
                 ..default()
             },))
                 .with_children(|list| {
@@ -742,11 +756,11 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                             get_item_tooltip(item, lang),
                             Node {
                                 width: Val::Percent(48.0),
-                                min_height: Val::Px(52.0),
+                                min_height: Val::Px(card_height),
                                 justify_content: JustifyContent::SpaceBetween,
                                 flex_direction: FlexDirection::Column,
                                 align_items: AlignItems::Stretch,
-                                padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+                                padding: card_padding,
                                 border: UiRect::all(Val::Px(1.5)),
                                 ..default()
                             },
@@ -764,7 +778,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                                     row.spawn((
                                         Text::new(item.label(lang)),
                                         TextFont {
-                                            font_size: FontSize::Px(14.0),
+                                            font_size: FontSize::Px(title_font_sz),
                                             ..default()
                                         },
                                         TextColor(Color::WHITE),
@@ -773,7 +787,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                                         ShopButtonCostText(item),
                                         Text::new(""),
                                         TextFont {
-                                            font_size: FontSize::Px(13.0),
+                                            font_size: FontSize::Px(cost_font_sz),
                                             ..default()
                                         },
                                         TextColor(Color::srgb(1.0, 0.86, 0.48)),
@@ -783,7 +797,7 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language) {
                                 ShopButtonStatusText(item),
                                 Text::new(item.status_label(lang)),
                                 TextFont {
-                                    font_size: FontSize::Px(10.0),
+                                    font_size: FontSize::Px(status_font_sz),
                                     ..default()
                                 },
                                 TextColor(Color::srgb(0.64, 0.81, 0.98)),
@@ -1740,6 +1754,11 @@ fn update_boon_indicators(
                     BoonKind::SparkBounty => ("S", Color::srgba(1.3, 0.7, 0.1, 0.85)),
                     BoonKind::PowerBounty => ("P", Color::srgba(1.1, 0.4, 1.2, 0.85)),
                     BoonKind::HollowWard => ("H", Color::srgba(0.5, 0.5, 0.6, 0.85)),
+                    BoonKind::RedSpawn => ("r", Color::srgba(1.0, 0.2, 0.2, 0.85)),
+                    BoonKind::GreenSpawn => ("g", Color::srgba(0.2, 1.0, 0.2, 0.85)),
+                    BoonKind::BlueSpawn => ("b", Color::srgba(0.2, 0.4, 1.0, 0.85)),
+                    BoonKind::YellowSpawn => ("y", Color::srgba(1.0, 0.9, 0.2, 0.85)),
+                    BoonKind::PurpleSpawn => ("p", Color::srgba(0.8, 0.2, 0.9, 0.85)),
                 };
 
                 parent
@@ -1983,6 +2002,26 @@ pub(crate) fn get_item_tooltip(item: ShopItem, lang: Language) -> TooltipTrigger
             BoonKind::HollowWard => TooltipTrigger {
                 title: lang.tr(TrKey::TooltipBoonHollowTitle).to_string(),
                 description: lang.tr(TrKey::TooltipBoonHollowDesc).to_string(),
+            },
+            BoonKind::RedSpawn => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonRedSpawnTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonRedSpawnDesc).to_string(),
+            },
+            BoonKind::GreenSpawn => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonGreenSpawnTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonGreenSpawnDesc).to_string(),
+            },
+            BoonKind::BlueSpawn => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonBlueSpawnTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonBlueSpawnDesc).to_string(),
+            },
+            BoonKind::YellowSpawn => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonYellowSpawnTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonYellowSpawnDesc).to_string(),
+            },
+            BoonKind::PurpleSpawn => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonPurpleSpawnTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonPurpleSpawnDesc).to_string(),
             },
         },
     }

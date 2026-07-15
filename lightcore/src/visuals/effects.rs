@@ -198,35 +198,18 @@ fn spawn_combo_effect(
                 0.52,
             );
         }
-        // Cada supernova detona por separado (ring pequeño) y se fusionan en un gran shockwave central.
+        // Se fusionan en un gran shockwave central único con una esfera de brillo supernova.
         ComboKind::DoubleSupernova => {
             spawn_combo_ring(
                 commands,
                 cache,
                 materials,
-                to_world(a),
-                Color::srgb(4.0, 2.6, 0.8),
-                2.6,
-                0.4,
-            );
-            spawn_combo_ring(
-                commands,
-                cache,
-                materials,
-                to_world(b),
-                Color::srgb(4.0, 2.6, 0.8),
-                2.6,
-                0.4,
-            );
-            spawn_combo_ring(
-                commands,
-                cache,
-                materials,
                 to_world(mid),
-                Color::srgb(4.0, 2.8, 1.0),
-                5.4,
-                0.63,
+                Color::srgb(5.0, 3.2, 1.0),
+                6.5,
+                0.65,
             );
+            spawn_supernova_glow(commands, cache, to_world(mid));
             spawn_cross_flourish(commands, cache, materials, mid);
         }
         // Star core flash tinted to the cleared color — every affected light gets its own

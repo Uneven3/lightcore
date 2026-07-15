@@ -5,7 +5,7 @@ use super::{
     CoreReserve, DisplayedScore, FallComplete, GameMode, GravitySettled, Score, SparksCollected,
 };
 use crate::core::components::PopAnim;
-use crate::core::grid::ShadowSet;
+use crate::core::grid::GravityBlockSet;
 use crate::core::prelude::*;
 use crate::core::run::RunState;
 use crate::state::GameState;
@@ -16,12 +16,14 @@ use crate::state::GameState;
 #[derive(Component)]
 pub(crate) struct Dropping;
 
-pub(crate) fn reset_gravity(mut settled: ResMut<GravitySettled>) {
-    settled.0 = false;
-}
-
+// Legacy ingredient-only helper below still uses the classic rectangle. Active gravity uses
+// `GridLayout` instead, so flexible boards are not constrained by this compatibility function.
 fn in_bounds(x: i32, y: i32) -> bool {
     (0..GRID_W).contains(&x) && (0..GRID_H).contains(&y)
+}
+
+pub(crate) fn reset_gravity(mut settled: ResMut<GravitySettled>) {
+    settled.0 = false;
 }
 
 #[cfg(test)]
@@ -43,12 +45,24 @@ fn straight_fall_target(
     occupied: &HashSet<(i32, i32)>,
     shadow_set: &HashSet<(i32, i32)>,
 ) -> Option<GridPos> {
-    if shadow_set.contains(&(pos.x, pos.y)) || pos.y <= 0 {
+    straight_fall_target_in(pos, occupied, shadow_set, &GridLayout::default())
+}
+
+fn straight_fall_target_in(
+    pos: GridPos,
+    occupied: &HashSet<(i32, i32)>,
+    shadow_set: &HashSet<(i32, i32)>,
+    layout: &GridLayout,
+) -> Option<GridPos> {
+    if shadow_set.contains(&(pos.x, pos.y)) {
         return None;
     }
 
     let below = (pos.x, pos.y - 1);
-    if !shadow_set.contains(&below) && !occupied.contains(&below) {
+    if layout.contains(GridPos { x: below.0, y: below.1 })
+        && !shadow_set.contains(&below)
+        && !occupied.contains(&below)
+    {
         Some(GridPos {
             x: pos.x,
             y: pos.y - 1,
@@ -63,7 +77,16 @@ fn diagonal_fall_target(
     occupied: &HashSet<(i32, i32)>,
     shadow_set: &HashSet<(i32, i32)>,
 ) -> Option<GridPos> {
-    if shadow_set.contains(&(pos.x, pos.y)) || pos.y <= 0 {
+    diagonal_fall_target_in(pos, occupied, shadow_set, &GridLayout::default())
+}
+
+fn diagonal_fall_target_in(
+    pos: GridPos,
+    occupied: &HashSet<(i32, i32)>,
+    shadow_set: &HashSet<(i32, i32)>,
+    layout: &GridLayout,
+) -> Option<GridPos> {
+    if shadow_set.contains(&(pos.x, pos.y)) {
         return None;
     }
 
@@ -74,7 +97,7 @@ fn diagonal_fall_target(
 
     for dx in [-1, 1] {
         let diag = (pos.x + dx, pos.y - 1);
-        if !in_bounds(diag.0, diag.1) {
+        if !layout.contains(GridPos { x: diag.0, y: diag.1 }) {
             continue;
         }
         if shadow_set.contains(&diag) || occupied.contains(&diag) {
@@ -164,14 +187,17 @@ fn vertical_feed_blocked_for_target(
     false
 }
 
-pub(crate) fn update_shadow_set(
-    shadow_q: Query<&GridPos, With<Shadow>>,
-    added_shadows: Query<(), Added<Shadow>>,
-    mut removed_shadows: RemovedComponents<Shadow>,
-    mut shadow_set: ResMut<ShadowSet>,
+pub(crate) fn update_gravity_block_set(
+    gravity_blockers: Query<&GridPos, With<BlocksGravity>>,
+    added_gravity_blockers: Query<(), Added<BlocksGravity>>,
+    mut removed_gravity_blockers: RemovedComponents<BlocksGravity>,
+    mut gravity_blocks: ResMut<GravityBlockSet>,
 ) {
-    if !added_shadows.is_empty() || removed_shadows.read().next().is_some() {
-        shadow_set.0 = shadow_q.iter().map(|p| (p.x, p.y)).collect();
+    // Every entity that blocks gravity participates, regardless of its gameplay identity.
+    // In particular, a Stasis light cuts vertical feed just like the old cyan shadow did,
+    // so diagonals cannot flow through the column above/below it.
+    if !added_gravity_blockers.is_empty() || removed_gravity_blockers.read().next().is_some() {
+        gravity_blocks.0 = gravity_blockers.iter().map(|p| (p.x, p.y)).collect();
     }
 }
 
@@ -179,19 +205,23 @@ pub(crate) fn apply_gravity(
     mut commands: Commands,
     mut settled: ResMut<GravitySettled>,
     mut entities: Query<
-        (Entity, &mut GridPos, &VisualPos, Has<Spark>),
-        (With<FallPhysics>, Without<PopAnim>),
+        (Entity, &mut GridPos, &mut VisualPos, &mut Transform, Has<Spark>),
+        (With<FallPhysics>, With<Movable>, Without<PopAnim>),
     >,
-    shadow_set: Res<ShadowSet>,
+    gravity_blocks: Res<GravityBlockSet>,
+    layout: Res<GridLayout>,
+    locked_lights: Query<&GridPos, (With<Light>, With<BlocksGravity>, Without<Movable>)>,
 ) {
-    let shadow_set = &shadow_set.0;
+    let shadow_set = &gravity_blocks.0;
 
     let mut sorted: Vec<(Entity, GridPos, Vec3, bool)> = entities
         .iter()
-        .map(|(e, p, v, is_spark)| (e, *p, v.0, is_spark))
+        .map(|(e, p, v, _, is_spark)| (e, *p, v.0, is_spark))
         .collect();
     sorted.sort_by_key(|(_, p, _, _)| p.y);
     let mut occupied: HashSet<(i32, i32)> = sorted.iter().map(|(_, p, _, _)| (p.x, p.y)).collect();
+    // A gravity-locked light does not move but remains solid, so falling lights cannot overlap it.
+    occupied.extend(locked_lights.iter().map(|p| (p.x, p.y)));
     let mut any_moved = false;
     let mut any_unsettled = false;
 
@@ -212,11 +242,27 @@ pub(crate) fn apply_gravity(
             continue;
         }
 
-        if let Some(target) = straight_fall_target(*pos, &occupied, shadow_set) {
+        let portal_target = layout
+            .fall_link(*pos)
+            .filter(|exit| !occupied.contains(&(exit.x, exit.y)));
+        if let Some(target) = portal_target.or_else(|| straight_fall_target_in(*pos, &occupied, shadow_set, &layout))
+        {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            if let Ok((_, mut p, _, _)) = entities.get_mut(*e) {
+            if let Ok((_, mut p, mut visual, mut transform, _)) = entities.get_mut(*e) {
                 p.set_if_neq(target);
+                if portal_target.is_some() {
+                    // Never interpolate across the gap: the light exits below the left board,
+                    // is repositioned above the right board off the visible path, then falls in
+                    // vertically like a normal spawn.
+                    let destination = to_world(target);
+                    let portal_entry = destination + Vec3::Y * TILE * 1.35;
+                    visual.0 = portal_entry;
+                    transform.translation = portal_entry;
+                    commands.entity(*e).insert(FallSpeed(
+                        (portal_entry - destination).length() / 0.18,
+                    ));
+                }
             }
             commands.entity(*e).insert(Dropping);
             any_moved = true;
@@ -226,22 +272,35 @@ pub(crate) fn apply_gravity(
     }
 
     for (e, pos, is_spark) in blocked_for_diagonal {
-        if let Some(target) = straight_fall_target(pos, &occupied, shadow_set) {
+        let portal_target = layout
+            .fall_link(pos)
+            .filter(|exit| !occupied.contains(&(exit.x, exit.y)));
+        if let Some(target) = portal_target.or_else(|| straight_fall_target_in(pos, &occupied, shadow_set, &layout))
+        {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            if let Ok((_, mut p, _, _)) = entities.get_mut(e) {
+            if let Ok((_, mut p, mut visual, mut transform, _)) = entities.get_mut(e) {
                 p.set_if_neq(target);
+                if portal_target.is_some() {
+                    let destination = to_world(target);
+                    let portal_entry = destination + Vec3::Y * TILE * 1.35;
+                    visual.0 = portal_entry;
+                    transform.translation = portal_entry;
+                    commands.entity(e).insert(FallSpeed(
+                        (portal_entry - destination).length() / 0.18,
+                    ));
+                }
             }
             commands.entity(e).insert(Dropping);
             any_moved = true;
         } else if let Some(target) = if is_spark {
             None
         } else {
-            diagonal_fall_target(pos, &occupied, shadow_set)
+            diagonal_fall_target_in(pos, &occupied, shadow_set, &layout)
         } {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            if let Ok((_, mut p, _, _)) = entities.get_mut(e) {
+            if let Ok((_, mut p, _, _, _)) = entities.get_mut(e) {
                 p.set_if_neq(target);
             }
             commands.entity(e).insert(Dropping);
@@ -270,6 +329,76 @@ mod tests {
 
     fn shadows(cells: &[(i32, i32)]) -> HashSet<(i32, i32)> {
         cells.iter().copied().collect()
+    }
+
+    fn validate_match_query_disjointness(
+        mut lights: Query<
+            &mut GridPos,
+            (With<Light>, Without<AdjacentMatchDamage>, Without<Spark>),
+        >,
+        mut sparks: Query<
+            &mut GridPos,
+            (With<Spark>, Without<Light>, Without<AdjacentMatchDamage>),
+        >,
+        obstacles: Query<&GridPos, With<AdjacentMatchDamage>>,
+    ) {
+        // Iteration makes this the same mutable/shared GridPos access pattern used by the
+        // swap and chain systems. Bevy validates the filters when the schedule is initialized.
+        for _ in &mut lights {}
+        for _ in &mut sparks {}
+        for _ in &obstacles {}
+    }
+
+    #[test]
+    fn match_lights_and_adjacent_obstacles_are_ecs_disjoint() {
+        let mut app = App::new();
+        app.add_systems(Update, validate_match_query_disjointness);
+        app.update();
+    }
+
+    fn validate_input_query_disjointness(
+        mut lights: Query<
+            &mut GridPos,
+            (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+        >,
+        mut sparks: Query<
+            &mut GridPos,
+            (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+        >,
+        blockers: Query<&GridPos, With<BlocksInteraction>>,
+    ) {
+        for _ in &mut lights {}
+        for _ in &mut sparks {}
+        for _ in &blockers {}
+    }
+
+    #[test]
+    fn movable_input_pieces_and_interaction_blockers_are_ecs_disjoint() {
+        let mut app = App::new();
+        app.add_systems(Update, validate_input_query_disjointness);
+        app.update();
+    }
+
+    #[test]
+    fn stasis_enables_the_same_diagonal_cascade_as_a_gravity_blocker() {
+        let mut app = App::new();
+        app.init_resource::<GravityBlockSet>()
+            .add_systems(Update, update_gravity_block_set);
+        app.world_mut().spawn((
+            // This is above the diagonal destination (2, 3). Its occupied light alone would
+            // normally make that column look vertically fed, suppressing the diagonal.
+            GridPos { x: 2, y: 4 },
+            Stasis,
+            BlocksGravity,
+        ));
+
+        app.update();
+
+        let gravity_blocks = app.world().resource::<GravityBlockSet>().0.clone();
+        let occupied = occupied(&[(3, 4), (3, 3), (2, 4)]);
+        let next = choose_fall_target(GridPos { x: 3, y: 4 }, &occupied, &gravity_blocks);
+
+        assert_eq!(next, Some(GridPos { x: 2, y: 3 }));
     }
 
     #[test]

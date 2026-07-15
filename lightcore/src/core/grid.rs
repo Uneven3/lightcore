@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) const GRID_W: i32 = 8;
 pub(crate) const GRID_H: i32 = 8;
@@ -12,6 +13,70 @@ pub(crate) struct GridPos {
     pub(crate) y: i32,
 }
 
+/// Declarative geometry for a board. Coordinates are intentionally global: separate subgrids can
+/// leave gaps between their x ranges, which prevents matches/swaps crossing from one grid to the
+/// next while keeping the existing ECS `GridPos` component stable.
+#[derive(Resource, Clone, Debug)]
+pub(crate) struct GridLayout {
+    cells: HashSet<GridPos>,
+    fall_links: HashMap<GridPos, GridPos>,
+    spawn_entries: HashSet<GridPos>,
+}
+
+impl Default for GridLayout {
+    fn default() -> Self {
+        Self::rectangles(&[(0, 0, GRID_W, GRID_H)])
+    }
+}
+
+impl GridLayout {
+    /// Builds any number of rectangular subgrids. `x/y` are global board coordinates; leaving a
+    /// coordinate gap between rectangles keeps them logically disconnected.
+    pub(crate) fn rectangles(rectangles: &[(i32, i32, i32, i32)]) -> Self {
+        let mut cells = HashSet::new();
+        let mut spawn_entries = HashSet::new();
+        for &(x0, y0, width, height) in rectangles {
+            for x in x0..x0 + width {
+                for y in y0..y0 + height {
+                    cells.insert(GridPos { x, y });
+                }
+                if height > 0 {
+                    spawn_entries.insert(GridPos {
+                        x,
+                        y: y0 + height - 1,
+                    });
+                }
+            }
+        }
+        Self {
+            cells,
+            fall_links: HashMap::new(),
+            spawn_entries,
+        }
+    }
+
+    pub(crate) fn contains(&self, pos: GridPos) -> bool {
+        self.cells.contains(&pos)
+    }
+
+    pub(crate) fn link_fall(&mut self, from: GridPos, to: GridPos) {
+        assert!(self.contains(from) && self.contains(to));
+        self.fall_links.insert(from, to);
+    }
+
+    pub(crate) fn fall_link(&self, from: GridPos) -> Option<GridPos> {
+        self.fall_links.get(&from).copied()
+    }
+
+    pub(crate) fn spawn_entries(&self) -> impl Iterator<Item = GridPos> + '_ {
+        self.spawn_entries.iter().copied()
+    }
+
+    pub(crate) fn cells_in_column(&self, x: i32) -> impl Iterator<Item = GridPos> + '_ {
+        self.cells.iter().copied().filter(move |pos| pos.x == x)
+    }
+}
+
 pub(crate) fn to_world(p: GridPos) -> Vec3 {
     let ox = (GRID_W as f32 - 1.0) / 2.0;
     let oy = (GRID_H as f32 - 1.0) / 2.0;
@@ -23,7 +88,7 @@ pub(crate) fn to_grid(world: Vec2) -> Option<GridPos> {
     let oy = (GRID_H as f32 - 1.0) / 2.0;
     let x = (world.x / TILE + ox).round() as i32;
     let y = (world.y / TILE + oy).round() as i32;
-    ((0..GRID_W).contains(&x) && (0..GRID_H).contains(&y)).then_some(GridPos { x, y })
+    Some(GridPos { x, y })
 }
 
 /// The 4 orthogonal neighbors of `p` (may fall outside the board — callers only use these to test
@@ -37,6 +102,7 @@ pub(crate) fn orthogonal_neighbors(p: GridPos) -> [GridPos; 4] {
     ]
 }
 
+/// Snapshot of every cell that blocks gravity.  The snapshot is rebuilt from the
+/// `BlocksGravity` capability and deliberately has no knowledge of obstacle kinds.
 #[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct ShadowSet(pub(crate) std::collections::HashSet<(i32, i32)>);
-
+pub(crate) struct GravityBlockSet(pub(crate) std::collections::HashSet<(i32, i32)>);

@@ -242,14 +242,15 @@ fn trigger_star_transform_combo(
     } else {
         // Area bursts (Supernova): each target detonates on its own — unlike duplicate full-line
         // sweeps, overlapping 3×3 bursts read fine, so no dedup is needed here.
-        for &pos in same_color_cells {
+        for (i, &pos) in same_color_cells.iter().enumerate() {
+            let arrival = (ray.stagger_secs * i as f32).min(ray.stagger_max) + ray.trail_duration;
             commands.trigger(PowerBlastTrail {
                 kind: partner_kind,
                 color: None,
                 path: vec![to_world(pos)],
-                delay_secs: explode_delay,
+                delay_secs: arrival,
             });
-            accumulate_area_burst_pop_delays(pop_delays, pos, grid, ray, explode_delay);
+            accumulate_area_burst_pop_delays(pop_delays, pos, grid, ray, arrival);
         }
     }
 }

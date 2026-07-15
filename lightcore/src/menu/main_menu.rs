@@ -39,20 +39,25 @@ struct NavButton(GameState);
 #[derive(Component)]
 struct QuitButton;
 
-fn spawn_main_menu(mut commands: Commands, settings: Res<WindowSettings>) {
-    let lang = settings.language;
+fn spawn_main_menu(
+    mut commands: Commands,
+    settings: Res<WindowSettings>,
+    asset_server: Res<AssetServer>,
+) {
     let compact = settings.device_mode == DeviceMode::Mobile;
     let desktop = settings.device_mode == DeviceMode::Desktop;
     let row_gap = if compact { 10.0 } else { 26.0 };
     let title_font = if compact { 52.0 } else { 64.0 };
     let button_width = if compact { 260.0 } else { 280.0 };
     let button_height = if compact { 54.0 } else { 66.0 };
-    let button_font = if compact { 24.0 } else { 30.0 };
     // The tutorial toggle is a small chip, not a full nav button — it's a minor settings flip,
     // not a primary menu action, and shouldn't compete visually with Jugar/Opciones.
     let tutorial_width = button_width * 0.6;
     let tutorial_height = button_height * 0.6;
     let tutorial_font = if compact { 15.0 } else { 17.0 };
+    let play_icon = asset_server.load("icons/play.png");
+    let settings_icon = asset_server.load("icons/settings.png");
+    let power_icon = asset_server.load("icons/power.png");
     commands
         .spawn((
             MainMenuRoot,
@@ -76,35 +81,116 @@ fn spawn_main_menu(mut commands: Commands, settings: Res<WindowSettings>) {
                 TextColor(Color::srgb(1.6, 1.8, 2.6)), // HDR → blooms
             ));
             let mut index = 0;
-            for (label, target) in [
-                (lang.tr(TrKey::Play), GameState::LevelMenu),
-                (lang.tr(TrKey::Options), GameState::Options),
-            ] {
-                root.spawn((
+            root.spawn((Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(24.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::bottom(Val::Px(12.0)),
+                ..default()
+            },))
+            .with_children(|row| {
+                // Play Button
+                row.spawn((
                     Button,
-                    NavButton(target),
+                    NavButton(GameState::LevelMenu),
                     MenuButton { index },
                     Node {
-                        width: Val::Px(button_width),
-                        height: Val::Px(button_height),
+                        width: Val::Px(78.0),
+                        height: Val::Px(78.0),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.5)),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
                     BackgroundColor(BTN_IDLE),
+                    BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
                 ))
                 .with_children(|b| {
                     b.spawn((
-                        Text::new(label),
-                        TextFont {
-                            font_size: FontSize::Px(button_font),
+                        ImageNode {
+                            image: play_icon.clone(),
+                            color: Color::srgb(0.78, 0.92, 1.0),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        Node {
+                            width: Val::Px(40.0),
+                            height: Val::Px(40.0),
+                            ..default()
+                        },
                     ));
                 });
                 index += 1;
-            }
+
+                // Options Button
+                row.spawn((
+                    Button,
+                    NavButton(GameState::Options),
+                    MenuButton { index },
+                    Node {
+                        width: Val::Px(78.0),
+                        height: Val::Px(78.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.5)),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(BTN_IDLE),
+                    BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        ImageNode {
+                            image: settings_icon.clone(),
+                            color: Color::srgb(0.78, 0.92, 1.0),
+                            ..default()
+                        },
+                        Node {
+                            width: Val::Px(42.0),
+                            height: Val::Px(42.0),
+                            ..default()
+                        },
+                    ));
+                });
+                index += 1;
+
+                // Quit Button (Desktop only)
+                if desktop {
+                    row.spawn((
+                        Button,
+                        QuitButton,
+                        MenuButton { index },
+                        Node {
+                            width: Val::Px(78.0),
+                            height: Val::Px(78.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.5)),
+                            border_radius: BorderRadius::all(Val::Px(8.0)),
+                            ..default()
+                        },
+                        BackgroundColor(BTN_IDLE),
+                        BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            ImageNode {
+                                image: power_icon.clone(),
+                                color: Color::srgb(1.0, 0.72, 0.76),
+                                ..default()
+                            },
+                            Node {
+                                width: Val::Px(40.0),
+                                height: Val::Px(40.0),
+                                ..default()
+                            },
+                        ));
+                    });
+                    index += 1;
+                }
+            });
 
             // Tutorial toggle — compact chip, see `tutorial_width`/`tutorial_height` above.
             root.spawn((
@@ -116,9 +202,12 @@ fn spawn_main_menu(mut commands: Commands, settings: Res<WindowSettings>) {
                     height: Val::Px(tutorial_height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
                     ..default()
                 },
                 BackgroundColor(BTN_IDLE),
+                BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
             ))
             .with_children(|b| {
                 b.spawn((
@@ -131,35 +220,6 @@ fn spawn_main_menu(mut commands: Commands, settings: Res<WindowSettings>) {
                     TextColor(Color::WHITE),
                 ));
             });
-            index += 1;
-
-            // Desktop only — quitting isn't a meaningful action on mobile (there's no "close the
-            // app" gesture players expect from inside it; the OS/home-button owns that).
-            if desktop {
-                root.spawn((
-                    Button,
-                    QuitButton,
-                    MenuButton { index },
-                    Node {
-                        width: Val::Px(button_width),
-                        height: Val::Px(button_height),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BackgroundColor(BTN_IDLE),
-                ))
-                .with_children(|b| {
-                    b.spawn((
-                        Text::new(lang.tr(TrKey::Quit)),
-                        TextFont {
-                            font_size: FontSize::Px(button_font),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                });
-            }
         });
 }
 

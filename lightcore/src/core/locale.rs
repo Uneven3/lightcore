@@ -98,6 +98,11 @@ pub(crate) enum TrKey {
     BoonSparkBounty,
     BoonPowerBounty,
     BoonHollowWard,
+    BoonRedSpawn,
+    BoonGreenSpawn,
+    BoonBlueSpawn,
+    BoonYellowSpawn,
+    BoonPurpleSpawn,
 
     // ── Shop item status lines ────────────────────────────────────────────────
     ShopSwapStatus,
@@ -110,6 +115,11 @@ pub(crate) enum TrKey {
     BoonSparkBountyStatus,
     BoonPowerBountyStatus,
     BoonHollowWardStatus,
+    BoonRedSpawnStatus,
+    BoonGreenSpawnStatus,
+    BoonBlueSpawnStatus,
+    BoonYellowSpawnStatus,
+    BoonPurpleSpawnStatus,
 
     // ── Active badge / armed booster ─────────────────────────────────────────
     ShopModifiers,
@@ -175,6 +185,11 @@ pub(crate) enum TrKey {
     TooltipBoonSparkTitle,
     TooltipBoonPowerTitle,
     TooltipBoonHollowTitle,
+    TooltipBoonRedSpawnTitle,
+    TooltipBoonGreenSpawnTitle,
+    TooltipBoonBlueSpawnTitle,
+    TooltipBoonYellowSpawnTitle,
+    TooltipBoonPurpleSpawnTitle,
 
     // ── Tooltip descriptions ──────────────────────────────────────────────────
     TooltipSwapDesc,
@@ -187,6 +202,11 @@ pub(crate) enum TrKey {
     TooltipBoonSparkDesc,
     TooltipBoonPowerDesc,
     TooltipBoonHollowDesc,
+    TooltipBoonRedSpawnDesc,
+    TooltipBoonGreenSpawnDesc,
+    TooltipBoonBlueSpawnDesc,
+    TooltipBoonYellowSpawnDesc,
+    TooltipBoonPurpleSpawnDesc,
 
     // ── Level menu ────────────────────────────────────────────────────────────
     Play,
@@ -281,6 +301,11 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::BoonSparkBounty => "Chispa+",
         TrKey::BoonPowerBounty => "Power+",
         TrKey::BoonHollowWard => "Hollow-",
+        TrKey::BoonRedSpawn => "Frec. Roja",
+        TrKey::BoonGreenSpawn => "Frec. Verde",
+        TrKey::BoonBlueSpawn => "Frec. Azul",
+        TrKey::BoonYellowSpawn => "Frec. Amarilla",
+        TrKey::BoonPurpleSpawn => "Frec. Púrpura",
         // Shop status lines
         TrKey::ShopSwapStatus => "Reposiciona 2 luces",
         TrKey::ShopEliminateStatus => "Rompe 1 luz",
@@ -292,6 +317,11 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::BoonSparkBountyStatus => "Chispas dan score",
         TrKey::BoonPowerBountyStatus => "Powers dan score",
         TrKey::BoonHollowWardStatus => "Menos hollows",
+        TrKey::BoonRedSpawnStatus => "+ luces rojas",
+        TrKey::BoonGreenSpawnStatus => "+ luces verdes",
+        TrKey::BoonBlueSpawnStatus => "+ luces azules",
+        TrKey::BoonYellowSpawnStatus => "+ luces amarillas",
+        TrKey::BoonPurpleSpawnStatus => "+ luces púrpuras",
         // Armed badge
         TrKey::ShopModifiers => "ARTÍCULOS DE TIENDA",
         TrKey::ArmedSwap => "Cambiar activo",
@@ -340,6 +370,11 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::TooltipBoonSparkTitle => "Boon: Chispa+",
         TrKey::TooltipBoonPowerTitle => "Boon: Power+",
         TrKey::TooltipBoonHollowTitle => "Boon: Hollow-",
+        TrKey::TooltipBoonRedSpawnTitle => "Boon: Roja+",
+        TrKey::TooltipBoonGreenSpawnTitle => "Boon: Verde+",
+        TrKey::TooltipBoonBlueSpawnTitle => "Boon: Azul+",
+        TrKey::TooltipBoonYellowSpawnTitle => "Boon: Amarilla+",
+        TrKey::TooltipBoonPurpleSpawnTitle => "Boon: Púrpura+",
         // Tooltip descriptions
         TrKey::TooltipSwapDesc => {
             "Intercambia la posición de 2 núcleos cualesquiera en el tablero."
@@ -363,6 +398,11 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::TooltipBoonHollowDesc => {
             "Disminuye la probabilidad de aparición de Hollows en el tablero."
         }
+        TrKey::TooltipBoonRedSpawnDesc => "Incrementa la probabilidad de aparición de núcleos rojos.",
+        TrKey::TooltipBoonGreenSpawnDesc => "Incrementa la probabilidad de aparición de núcleos verdes.",
+        TrKey::TooltipBoonBlueSpawnDesc => "Incrementa la probabilidad de aparición de núcleos azules.",
+        TrKey::TooltipBoonYellowSpawnDesc => "Incrementa la probabilidad de aparición de núcleos amarillos.",
+        TrKey::TooltipBoonPurpleSpawnDesc => "Incrementa la probabilidad de aparición de núcleos púrpuras.",
         // Level menu
         TrKey::Play => "Jugar",
         TrKey::Restart => "Reiniciar Run",
@@ -446,6 +486,11 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::BoonSparkBounty => "Spark+",
         TrKey::BoonPowerBounty => "Power+",
         TrKey::BoonHollowWard => "Hollow-",
+        TrKey::BoonRedSpawn => "Red Freq.",
+        TrKey::BoonGreenSpawn => "Green Freq.",
+        TrKey::BoonBlueSpawn => "Blue Freq.",
+        TrKey::BoonYellowSpawn => "Yellow Freq.",
+        TrKey::BoonPurpleSpawn => "Purple Freq.",
         // Shop status lines
         TrKey::ShopSwapStatus => "Swap 2 lights",
         TrKey::ShopEliminateStatus => "Break 1 light",
@@ -457,6 +502,11 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::BoonSparkBountyStatus => "Sparks give score",
         TrKey::BoonPowerBountyStatus => "Powers give score",
         TrKey::BoonHollowWardStatus => "Fewer hollows",
+        TrKey::BoonRedSpawnStatus => "+ red lights",
+        TrKey::BoonGreenSpawnStatus => "+ green lights",
+        TrKey::BoonBlueSpawnStatus => "+ blue lights",
+        TrKey::BoonYellowSpawnStatus => "+ yellow lights",
+        TrKey::BoonPurpleSpawnStatus => "+ purple lights",
         // Armed badge
         TrKey::ShopModifiers => "SHOP ITEMS",
         TrKey::ArmedSwap => "Swap active",
@@ -505,6 +555,11 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::TooltipBoonSparkTitle => "Boon: Spark+",
         TrKey::TooltipBoonPowerTitle => "Boon: Power+",
         TrKey::TooltipBoonHollowTitle => "Boon: Hollow-",
+        TrKey::TooltipBoonRedSpawnTitle => "Boon: Red Spawn+",
+        TrKey::TooltipBoonGreenSpawnTitle => "Boon: Green Spawn+",
+        TrKey::TooltipBoonBlueSpawnTitle => "Boon: Blue Spawn+",
+        TrKey::TooltipBoonYellowSpawnTitle => "Boon: Yellow Spawn+",
+        TrKey::TooltipBoonPurpleSpawnTitle => "Boon: Purple Spawn+",
         // Tooltip descriptions
         TrKey::TooltipSwapDesc => "Swap the positions of any 2 lights on the board.",
         TrKey::TooltipEliminateDesc => "Destroy a selected light, triggering new cascades.",
@@ -518,6 +573,11 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::TooltipBoonSparkDesc => "Rescued sparks grant +25 bonus points.",
         TrKey::TooltipBoonPowerDesc => "Creating special lights grants +12 points.",
         TrKey::TooltipBoonHollowDesc => "Reduces the chance of Hollows spawning on the board.",
+        TrKey::TooltipBoonRedSpawnDesc => "Increases the probability of Red lights spawning on the board.",
+        TrKey::TooltipBoonGreenSpawnDesc => "Increases the probability of Green lights spawning on the board.",
+        TrKey::TooltipBoonBlueSpawnDesc => "Increases the probability of Blue lights spawning on the board.",
+        TrKey::TooltipBoonYellowSpawnDesc => "Increases the probability of Yellow lights spawning on the board.",
+        TrKey::TooltipBoonPurpleSpawnDesc => "Increases the probability of Purple lights spawning on the board.",
         // Level menu
         TrKey::Play => "Play",
         TrKey::Restart => "Restart Run",

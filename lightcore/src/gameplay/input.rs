@@ -17,9 +17,17 @@ pub(crate) fn handle_input(
     pointer: Res<PointerInput>,
     shop: Res<Shop>,
     tutorial: Res<TutorialState>,
-    mut lights: Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
-    shadow_q: Query<&GridPos, (With<Shadow>, Without<Light>, Without<Spark>)>,
-    mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    layout: Res<GridLayout>,
+    movable: Query<(), With<Movable>>,
+    mut lights: Query<
+        (Entity, &mut GridPos, Has<Selected>),
+        (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+    >,
+    interaction_blockers: Query<&GridPos, With<BlocksInteraction>>,
+    mut sparks: Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+    >,
 ) {
     if tutorial.open {
         return;
@@ -51,16 +59,17 @@ pub(crate) fn handle_input(
         drag.neighbor_entity = None;
         drag.neighbor_grid = None;
         drag.neighbor_is_empty = false;
-        let gp = to_grid(world);
+        let gp = to_grid(world).filter(|pos| layout.contains(*pos));
         drag.start_grid = gp;
         drag.start_entity = gp.and_then(|gp| {
-            if shadow_q.iter().any(|p| *p == gp) {
+            if interaction_blockers.iter().any(|p| *p == gp) {
                 return None;
             }
             lights
                 .iter()
                 .find(|(_, p, _)| **p == gp)
                 .map(|(e, _, _)| e)
+                .filter(|e| movable.get(*e).is_ok())
                 .or_else(|| sparks.iter().find(|(_, p)| **p == gp).map(|(e, _)| e))
         });
         if let Some(e) = drag.start_entity {
@@ -88,7 +97,7 @@ pub(crate) fn handle_input(
                     y: start_gp.y + dir.y,
                 };
                 drag.neighbor_grid = Some(ngp);
-                let blocked = shadow_q.iter().any(|p| *p == ngp);
+                let blocked = interaction_blockers.iter().any(|p| *p == ngp);
                 drag.neighbor_entity = if blocked {
                     None
                 } else {
@@ -96,10 +105,10 @@ pub(crate) fn handle_input(
                         .iter()
                         .find(|(_, p, _)| **p == ngp)
                         .map(|(e, _, _)| e)
+                        .filter(|e| movable.get(*e).is_ok())
                         .or_else(|| sparks.iter().find(|(_, p)| **p == ngp).map(|(e, _)| e))
                 };
-                let in_bounds = ngp.x >= 0 && ngp.x < GRID_W && ngp.y >= 0 && ngp.y < GRID_H;
-                drag.neighbor_is_empty = in_bounds && !blocked && drag.neighbor_entity.is_none();
+                drag.neighbor_is_empty = layout.contains(ngp) && !blocked && drag.neighbor_entity.is_none();
             }
         }
     }
@@ -247,8 +256,14 @@ pub(crate) fn tick_select_jelly(
 pub(crate) fn commit_swap(
     pending: &mut PendingSwap,
     next_state: &mut NextState<GameState>,
-    lights: &mut Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
-    sparks: &mut Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    lights: &mut Query<
+        (Entity, &mut GridPos, Has<Selected>),
+        (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+    >,
+    sparks: &mut Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+    >,
     start_e: Entity,
     start_gp: GridPos,
     neighbor_e: Option<Entity>,
@@ -306,14 +321,34 @@ pub(crate) struct CursorHighlight;
 
 fn entity_at(
     gp: GridPos,
-    lights: &Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
-    sparks: &Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    lights: &Query<
+        (Entity, &mut GridPos, Has<Selected>),
+        (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+    >,
+    sparks: &Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+    >,
 ) -> Option<Entity> {
     lights
         .iter()
         .find(|(_, p, _)| **p == gp)
         .map(|(e, _, _)| e)
         .or_else(|| sparks.iter().find(|(_, p)| **p == gp).map(|(e, _)| e))
+}
+
+/// Lights advertise swappability through `Movable`; sparks are the one non-Light piece that can
+/// be moved by the player. Keeping this check capability-based prevents obstacle subtypes from
+/// leaking into either input path.
+fn is_movable_piece(
+    entity: Entity,
+    movable: &Query<(), With<Movable>>,
+    sparks: &Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+    >,
+) -> bool {
+    movable.get(entity).is_ok() || sparks.get(entity).is_ok()
 }
 
 pub(crate) fn board_cursor_input(
@@ -323,9 +358,17 @@ pub(crate) fn board_cursor_input(
     mut pending: ResMut<PendingSwap>,
     mut next_state: ResMut<NextState<GameState>>,
     tutorial: Res<TutorialState>,
-    mut lights: Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
-    mut sparks: Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
-    shadow_q: Query<&GridPos, (With<Shadow>, Without<Light>, Without<Spark>)>,
+    layout: Res<GridLayout>,
+    movable: Query<(), With<Movable>>,
+    mut lights: Query<
+        (Entity, &mut GridPos, Has<Selected>),
+        (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+    >,
+    mut sparks: Query<
+        (Entity, &mut GridPos),
+        (With<Spark>, Without<Light>, Without<BlocksInteraction>),
+    >,
+    interaction_blockers: Query<&GridPos, With<BlocksInteraction>>,
 ) {
     if tutorial.open {
         return;
@@ -338,8 +381,8 @@ pub(crate) fn board_cursor_input(
         return;
     }
 
-    let in_bounds = |gp: GridPos| gp.x >= 0 && gp.x < GRID_W && gp.y >= 0 && gp.y < GRID_H;
-    let is_shadow = |gp: GridPos| shadow_q.iter().any(|p| *p == gp);
+    let is_valid_cell = |gp: GridPos| layout.contains(gp);
+    let is_blocked = |gp: GridPos| interaction_blockers.iter().any(|p| *p == gp);
 
     // Cancel: drop whatever's picked.
     if actions.cancel && cursor.picked {
@@ -356,29 +399,38 @@ pub(crate) fn board_cursor_input(
                 x: from.x + d.x,
                 y: from.y + d.y,
             };
-            if in_bounds(to)
-                && !is_shadow(from)
-                && !is_shadow(to)
+            if is_valid_cell(to)
+                && !is_blocked(from)
+                && !is_blocked(to)
                 && let Some(start_e) = entity_at(from, &lights, &sparks)
             {
                 let neighbor_e = entity_at(to, &lights, &sparks);
-                clear_selected(&mut commands, &lights);
-                commit_swap(
-                    &mut pending,
-                    &mut next_state,
-                    &mut lights,
-                    &mut sparks,
-                    start_e,
-                    from,
-                    neighbor_e,
-                    to,
-                );
-                cursor.pos = to;
-                cursor.picked = false;
+                if is_movable_piece(start_e, &movable, &sparks)
+                    && neighbor_e.is_none_or(|e| is_movable_piece(e, &movable, &sparks))
+                {
+                    clear_selected(&mut commands, &lights);
+                    commit_swap(
+                        &mut pending,
+                        &mut next_state,
+                        &mut lights,
+                        &mut sparks,
+                        start_e,
+                        from,
+                        neighbor_e,
+                        to,
+                    );
+                    cursor.pos = to;
+                    cursor.picked = false;
+                }
             }
         } else {
-            cursor.pos.x = (cursor.pos.x + d.x).clamp(0, GRID_W - 1);
-            cursor.pos.y = (cursor.pos.y + d.y).clamp(0, GRID_H - 1);
+            let target = GridPos {
+                x: cursor.pos.x + d.x,
+                y: cursor.pos.y + d.y,
+            };
+            if is_valid_cell(target) {
+                cursor.pos = target;
+            }
         }
     }
 
@@ -386,8 +438,9 @@ pub(crate) fn board_cursor_input(
         if cursor.picked {
             clear_selected(&mut commands, &lights);
             cursor.picked = false;
-        } else if !is_shadow(cursor.pos)
+        } else if !is_blocked(cursor.pos)
             && let Some(e) = entity_at(cursor.pos, &lights, &sparks)
+            && is_movable_piece(e, &movable, &sparks)
         {
             clear_selected(&mut commands, &lights);
             commands.entity(e).insert(Selected);
@@ -400,7 +453,10 @@ pub(crate) fn board_cursor_input(
 /// mouse path without leaving a stuck selection when switching devices).
 fn clear_selected(
     commands: &mut Commands,
-    lights: &Query<(Entity, &mut GridPos, Has<Selected>), (With<Light>, Without<Spark>)>,
+    lights: &Query<
+        (Entity, &mut GridPos, Has<Selected>),
+        (With<Light>, Without<Spark>, Without<BlocksInteraction>),
+    >,
 ) {
     for (e, _, sel) in lights.iter() {
         if sel {

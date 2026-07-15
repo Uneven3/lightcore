@@ -38,16 +38,11 @@ pub(crate) fn check_chain_matches(
     mut next_state: ResMut<NextState<GameState>>,
     mut shadow_q: Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
-        (
-            With<Shadow>,
-            Without<Blocker>,
-            Without<Light>,
-            Without<Spark>,
-        ),
+        With<AdjacentMatchDamage>,
     >,
     mut lights: Query<
         (Entity, &mut GridPos, &LightColor, &mut LightKind),
-        (With<Light>, Without<Shadow>),
+        (With<Light>, Without<AdjacentMatchDamage>, Without<Spark>),
     >,
     ray_settings: Res<RaySettings>,
 ) {

@@ -9,6 +9,20 @@ pub(crate) struct Light;
 #[derive(Component)]
 pub(crate) struct Selected;
 
+/// Capability marker consumed by movement systems. Obstacles such as `Stasis` remove this tag
+/// instead of requiring each system to know their concrete type.
+#[derive(Component)]
+pub(crate) struct Movable;
+
+/// Frozen light: it still participates in matches, but cannot be selected, swapped or moved by
+/// gravity. New obstacle types can compose the capability markers below in the same way.
+#[derive(Component)]
+pub(crate) struct Stasis;
+
+/// Visual cover for a stasis light. It deliberately has none of the blocking-cell capabilities.
+#[derive(Component)]
+pub(crate) struct StasisCover;
+
 /// The bright core at the heart of a [`Light`] — the thing the player is actually after.
 /// HDR-overexposed so the camera's Bloom pass makes it glow; child of the light entity,
 /// positioned via the Transform hierarchy. When the surrounding membrane breaks, the core
@@ -20,20 +34,35 @@ pub(crate) struct LightCore;
 #[derive(Component)]
 pub(crate) struct Spark;
 
-/// A dark background tile; illuminated (cleared) when the light above it is matched.
+/// A lilac shadow obstacle. It blocks direct interaction and gravity while its associated
+/// lightcore remains on the board underneath; it is cleared by an adjacent match.
 #[derive(Component)]
 pub(crate) struct Shadow;
+
+/// Marks a cell entity as solid for gravity/refill.
+#[derive(Component)]
+pub(crate) struct BlocksGravity;
+
+/// Marks a cell entity as unavailable for direct player interaction.
+#[derive(Component)]
+pub(crate) struct BlocksInteraction;
+
+/// A cell obstacle damaged only by a match in one of its four orthogonal neighbours.
+#[derive(Component)]
+pub(crate) struct AdjacentMatchDamage;
 
 /// A permanent missing/blocked cell used to sculpt non-rectangular boards. It also carries
 /// `Shadow` so existing movement/gravity blockers see it, but clear-shadow logic ignores it.
 #[derive(Component)]
 pub(crate) struct Blocker;
 
-/// "Jalea ultra dura": a `Shadow` that needs several hits before it clears. A match on its own
-/// cell OR on an orthogonally adjacent cell chips away one hit (see `board::clear_shadow_at`);
-/// it clears like a normal `Shadow` once hits reach 0.
+/// Future opaque obstacle with no lightcore. It needs several orthogonally adjacent matches
+/// before clearing; see `board::clear_shadow_at`.
 #[derive(Component)]
-pub(crate) struct HardShadow(pub(crate) u8);
+pub(crate) struct DeepShadow(pub(crate) u8);
+
+/// Backwards-compatible name while level configuration is migrated to `DeepShadow` terminology.
+pub(crate) type HardShadow = DeepShadow;
 
 /// The world-space hit-counter text child spawned under a `HardShadow` tile.
 #[derive(Component)]
