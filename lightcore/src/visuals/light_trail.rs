@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::EffectAnim;
 use super::assets::VisualCache;
 use super::particles::{ParticleSettings, spawn_burst};
-use crate::core::grid::RaySettings;
+use super::RaySettings;
 use crate::core::prelude::*;
 use crate::gameplay::PowerBlastTrail;
 

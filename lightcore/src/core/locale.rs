@@ -4,9 +4,9 @@
 //! are added by extending the `Language` enum and the `tr` match arms.
 //!
 //! Usage pattern:
-//! ```rust
-//! let locale = Locale::default(); // or from Res<Locale>
-//! Text::new(locale.tr(TrKey::Play))
+//! ```rust,ignore
+//! let lang = Language::default(); // or from Res<Language>
+//! Text2d::new(lang.tr(TrKey::Play))
 //! ```
 
 use bevy::prelude::*;

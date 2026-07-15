@@ -5,6 +5,7 @@ use super::LightPopped;
 use crate::core::components::{PopAnim, PopDelay};
 use crate::core::prelude::*;
 use crate::state::GameState;
+use crate::visuals::RaySettings;
 
 /// Accumulates, per light hit by `activation`, the delay until the power's effect *reaches* it —
 /// so lights consume as the beam touches them, not all at once. Ray/Supernova: by distance from

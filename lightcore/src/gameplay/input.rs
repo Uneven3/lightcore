@@ -131,10 +131,12 @@ pub(crate) fn handle_input(
         };
 
         if should_swap {
-            let start_e = drag.start_entity.unwrap();
+            let (Some(start_e), Some(start_gp), Some(neighbor_gp)) =
+                (drag.start_entity, drag.start_grid, drag.neighbor_grid)
+            else {
+                return;
+            };
             let neighbor_e = drag.neighbor_entity;
-            let start_gp = drag.start_grid.unwrap();
-            let neighbor_gp = drag.neighbor_grid.unwrap();
             commit_swap(
                 &mut pending,
                 &mut next_state,

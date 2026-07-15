@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet};
 use super::popping::accumulate_pop_delays;
 use super::{
     CascadeDepth, ChainPop, CollectedCores, CoreReserve, DisplayedScore, MovesLeft, PendingSwap,
-    PowerComboParams, PowerCreated, RevertingSwap, Score, ShadowCount, StatsBook, SwapFailed,
+    PowerActivationQueue, PowerComboParams, RevertingSwap, Score, ShadowCount, StatsBook, SwapFailed,
     SwapHappened,
 };
 use super::{rewards, vfx};
 use crate::board::clear_shadow_at;
-use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
+use crate::visuals::RaySettings;
 use crate::core::run::RunState;
 use crate::state::GameState;
 
@@ -61,12 +61,14 @@ pub(crate) fn on_swap_happened(
         .iter()
         .map(|(e, p, c, k)| (*p, (e, *c, *k)))
         .collect();
-    let mut entity_info: EntityInfo = lights
+    let entity_info: EntityInfo = lights
         .iter()
         .map(|(e, p, c, k)| (e, (*p, *c, *k)))
         .collect();
 
-    let swap = pending.0.as_ref().unwrap();
+    let Some(swap) = pending.0.as_ref() else {
+        return;
+    };
     let is_spark_swap =
         !entity_info.contains_key(&swap.a) || swap.b.is_some_and(|b| !entity_info.contains_key(&b));
     let (a_pos, _, a_kind) = entity_info.get(&swap.a).copied().unwrap_or((
@@ -80,163 +82,245 @@ pub(crate) fn on_swap_happened(
         .unwrap_or((swap.b_pos, LightColor::Red, LightKind::Normal));
     let a_ent = swap.a;
     let b_ent = swap.b;
-    // A shop "swap" booster: costs no move and never reverts on a non-match (see `SwapData::free`).
     let free = swap.free;
 
-    // Path A: direct power+power swap — compound effect fires immediately;
-    // any OTHER power lights hit by the compound are queued for post-refill activation.
-    // Spark swaps and moves into an empty cell (no b entity) skip Path A entirely —
-    // there's no second power light to combine with.
+    // Path A: direct power+power swap
     if !is_spark_swap {
         if let Some(b_ent) = b_ent {
-            if let Some(compound) = resolve_swap_activation(
+            if handle_power_combo_swap(
+                &mut commands,
+                &mut pending,
+                &mut score_res,
+                &mut moves,
+                &mut next_state,
+                cascade.0,
+                &mut shadow_count,
+                &mut shadow_q,
+                &grid,
+                &entity_info,
                 a_ent,
                 a_pos,
                 a_kind,
                 b_ent,
                 b_pos,
                 b_kind,
-                &grid,
-                &entity_info,
+                free,
+                &mut power.queue,
+                &ray_settings,
             ) {
-                for e in &compound {
-                    if *e == a_ent || *e == b_ent {
-                        continue;
-                    }
-                    if let Some((pos, _, kind)) = entity_info.get(e) {
-                        if kind.is_power() {
-                            power.queue.0.push_back(PowerActivation {
-                                pos: *pos,
-                                kind: *kind,
-                                partner_color: None,
-                            });
-                        }
-                    }
-                }
-                pending.0 = None;
-                if !free {
-                    moves.0 = moves.0.saturating_sub(1);
-                }
-
-                let removed_positions: HashSet<GridPos> = compound
-                    .iter()
-                    .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
-                    .collect();
-                clear_shadow_at(
-                    &removed_positions,
-                    &mut commands,
-                    &mut shadow_q,
-                    &mut shadow_count.0,
-                );
-
-                // The two swapped powers detonate as one interaction — fire a single unified `PowerCombo`
-                // animation instead of two coincidental single-power effects. (`classify_combo` agrees with
-                // `resolve_swap_activation`, which already returned `Some`, so this is always `Some`.) Pop
-                // delays still ripple from each power's own blast (`Normal` accumulates nothing).
-                let mut pop_delays: HashMap<Entity, f32> = HashMap::new();
-                // Para combos de Starburst, partner_color determina qué lights se targetean.
-                // Usar el color real del partner para que accumulate_pop_delays y los beams
-                // del TravelingLight apunten exactamente al mismo set de lights.
-                let star_partner_color = if a_kind == LightKind::Starburst {
-                    grid.get(&b_pos).map(|(_, c, _)| *c)
-                } else if b_kind == LightKind::Starburst {
-                    grid.get(&a_pos).map(|(_, c, _)| *c)
-                } else {
-                    None
-                };
-                let a_activation = PowerActivation {
-                    pos: a_pos,
-                    kind: a_kind,
-                    partner_color: if a_kind == LightKind::Starburst {
-                        star_partner_color
-                    } else {
-                        None
-                    },
-                };
-                let b_activation = PowerActivation {
-                    pos: b_pos,
-                    kind: b_kind,
-                    partner_color: if b_kind == LightKind::Starburst {
-                        star_partner_color
-                    } else {
-                        None
-                    },
-                };
-                let combo = classify_combo(a_kind, b_kind);
-                if let Some(combo) = combo {
-                    vfx::trigger_combo(
-                        &mut commands,
-                        &grid,
-                        &entity_info,
-                        &a_activation,
-                        &b_activation,
-                        combo,
-                        &ray_settings,
-                        &mut pop_delays,
-                    );
-                }
-                // StarLine/StarSupernova compute their own pop delays inside `trigger_combo` (see
-                // `vfx::trigger_star_transform_combo`) — the generic per-kind delays below would
-                // race them.
-                if !matches!(
-                    combo,
-                    Some(ComboKind::StarLine) | Some(ComboKind::StarSupernova)
-                ) {
-                    accumulate_pop_delays(
-                        &mut pop_delays,
-                        &a_activation,
-                        &grid,
-                        &entity_info,
-                        &ray_settings,
-                    );
-                    accumulate_pop_delays(
-                        &mut pop_delays,
-                        &b_activation,
-                        &grid,
-                        &entity_info,
-                        &ray_settings,
-                    );
-                }
-                let points = rewards::apply_removal_rewards(
-                    &mut commands,
-                    &compound,
-                    &entity_info,
-                    cascade.0,
-                    false,
-                    0,
-                    &mut score_res.score,
-                    &mut score_res.displayed,
-                    &mut score_res.reserve,
-                    &mut score_res.collected_cores,
-                    &mut score_res.stats,
-                    &mut moves,
-                    &mut score_res.run,
-                );
-                let pops = rewards::spawn_pops(
-                    &mut commands,
-                    &compound,
-                    &entity_info,
-                    &pop_delays,
-                    ray_settings.pop_duration,
-                );
-                commands.trigger(ChainPop {
-                    removed: compound.len() as u32,
-                    points,
-                    hollow: false,
-                    pops,
-                });
-                next_state.set(GameState::Popping);
                 return;
             }
-        } // end if let Some(b_ent)
-    } // end !is_spark_swap (Path A guard)
+        }
+    }
 
-    // Path B: normal match — scan runs, queue any power light activations
-    let result = scan_runs(&grid, &entity_info, Some(a_ent));
+    // Path B: normal match
+    handle_normal_match_swap(
+        &mut commands,
+        &mut pending,
+        &mut score_res,
+        &mut moves,
+        &mut next_state,
+        cascade.0,
+        &mut shadow_count,
+        &mut shadow_q,
+        &mut lights,
+        &mut sparks,
+        &mut reverting,
+        &mut power,
+        &grid,
+        entity_info,
+        a_ent,
+        free,
+        &ray_settings,
+    );
+}
+
+fn handle_power_combo_swap(
+    commands: &mut Commands,
+    pending: &mut PendingSwap,
+    score_res: &mut SwapScoreParams,
+    moves: &mut MovesLeft,
+    next_state: &mut NextState<GameState>,
+    cascade_depth: u32,
+    shadow_count: &mut ShadowCount,
+    shadow_q: &mut Query<
+        (Entity, &GridPos, Option<&mut HardShadow>),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
+    grid: &Grid,
+    entity_info: &EntityInfo,
+    a_ent: Entity,
+    a_pos: GridPos,
+    a_kind: LightKind,
+    b_ent: Entity,
+    b_pos: GridPos,
+    b_kind: LightKind,
+    free: bool,
+    queue: &mut PowerActivationQueue,
+    ray_settings: &RaySettings,
+) -> bool {
+    let Some(compound) = resolve_swap_activation(
+        a_ent,
+        a_pos,
+        a_kind,
+        b_ent,
+        b_pos,
+        b_kind,
+        grid,
+        entity_info,
+    ) else {
+        return false;
+    };
+
+    // Any OTHER power lights hit by the compound are queued for post-refill activation.
+    for e in &compound {
+        if *e == a_ent || *e == b_ent {
+            continue;
+        }
+        if let Some((pos, _, kind)) = entity_info.get(e) {
+            if kind.is_power() {
+                queue.0.push_back(PowerActivation {
+                    pos: *pos,
+                    kind: *kind,
+                    partner_color: None,
+                });
+            }
+        }
+    }
+
+    pending.0 = None;
+    if !free {
+        moves.0 = moves.0.saturating_sub(1);
+    }
+
+    let removed_positions: HashSet<GridPos> = compound
+        .iter()
+        .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
+        .collect();
+    clear_shadow_at(
+        &removed_positions,
+        commands,
+        shadow_q,
+        &mut shadow_count.0,
+    );
+
+    let mut pop_delays: HashMap<Entity, f32> = HashMap::new();
+    let star_partner_color = if a_kind == LightKind::Starburst {
+        grid.get(&b_pos).map(|(_, c, _)| *c)
+    } else if b_kind == LightKind::Starburst {
+        grid.get(&a_pos).map(|(_, c, _)| *c)
+    } else {
+        None
+    };
+
+    let a_activation = PowerActivation {
+        pos: a_pos,
+        kind: a_kind,
+        partner_color: if a_kind == LightKind::Starburst { star_partner_color } else { None },
+    };
+    let b_activation = PowerActivation {
+        pos: b_pos,
+        kind: b_kind,
+        partner_color: if b_kind == LightKind::Starburst { star_partner_color } else { None },
+    };
+
+    let combo = classify_combo(a_kind, b_kind);
+    if let Some(combo) = combo {
+        vfx::trigger_combo(
+            commands,
+            grid,
+            entity_info,
+            &a_activation,
+            &b_activation,
+            combo,
+            ray_settings,
+            &mut pop_delays,
+        );
+    }
+
+    if !matches!(
+        combo,
+        Some(ComboKind::StarLine) | Some(ComboKind::StarSupernova)
+    ) {
+        accumulate_pop_delays(&mut pop_delays, &a_activation, grid, entity_info, ray_settings);
+        accumulate_pop_delays(&mut pop_delays, &b_activation, grid, entity_info, ray_settings);
+    }
+
+    let points = rewards::apply_removal_rewards(
+        commands,
+        &compound,
+        entity_info,
+        cascade_depth,
+        false,
+        0,
+        &mut rewards::EconomyState {
+            score: &mut score_res.score,
+            displayed: &mut score_res.displayed,
+            reserve: &mut score_res.reserve,
+            collected_cores: &mut score_res.collected_cores,
+            stats: &mut score_res.stats,
+            moves: moves,
+            run: &mut score_res.run,
+        },
+    );
+
+    let pops = rewards::spawn_pops(
+        commands,
+        &compound,
+        entity_info,
+        &pop_delays,
+        ray_settings.pop_duration,
+    );
+
+    commands.trigger(ChainPop {
+        removed: compound.len() as u32,
+        points,
+        hollow: false,
+        pops,
+    });
+
+    next_state.set(GameState::Popping);
+    true
+}
+
+fn handle_normal_match_swap(
+    commands: &mut Commands,
+    pending: &mut PendingSwap,
+    score_res: &mut SwapScoreParams,
+    moves: &mut MovesLeft,
+    next_state: &mut NextState<GameState>,
+    cascade_depth: u32,
+    shadow_count: &mut ShadowCount,
+    shadow_q: &mut Query<
+        (Entity, &GridPos, Option<&mut HardShadow>),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
+    lights: &mut Query<
+        (Entity, &mut GridPos, &LightColor, &mut LightKind),
+        (With<Light>, Without<Shadow>),
+    >,
+    sparks: &mut Query<(Entity, &mut GridPos), (With<Spark>, Without<Light>)>,
+    reverting: &mut RevertingSwap,
+    power: &mut PowerComboParams,
+    grid: &Grid,
+    mut entity_info: EntityInfo,
+    a_ent: Entity,
+    free: bool,
+    ray_settings: &RaySettings,
+) {
+    let result = scan_runs(grid, &entity_info, Some(a_ent));
 
     if result.to_remove.is_empty() && result.to_upgrade.is_empty() {
-        // A free (shop) swap keeps the new arrangement even with no match — the player paid to
-        // break the rules; only a normal swap snaps the two pieces back.
         if !free {
             if let Some(swap) = pending.0.take() {
                 reverting.0.clear();
@@ -278,147 +362,29 @@ pub(crate) fn on_swap_happened(
         moves.0 = moves.0.saturating_sub(1);
     }
 
-    let mut to_remove = result.to_remove;
-
-    let upgrades: Vec<(Entity, LightKind)> = result
-        .to_upgrade
-        .into_iter()
-        .filter(|(e, _)| !to_remove.contains(e))
-        .collect();
-    for (e, kind) in &upgrades {
-        // `visuals::core_motion::rebuild_cores` reacts to the `LightKind` change and rebuilds
-        // this light's cores into the power's signature cluster.
-        if let Ok((_, _, _, mut k)) = lights.get_mut(*e) {
-            *k = *kind;
-        }
-        if let Some(entry) = entity_info.get_mut(e) {
-            entry.2 = *kind;
-        }
-    }
-
-    // A power light that already occupied an upgrade-host cell still fires its own effect —
-    // the host itself is excluded so it survives to receive the new kind. Anything else its
-    // blast hits is merged into `to_remove` here and picked up by `initial_powers` below;
-    // deliberately not re-triggered/queued here too, to avoid firing it twice.
-    let mut pop_delays: HashMap<Entity, f32> = HashMap::new();
-    for replaced in &result.replaced_powers {
-        vfx::trigger_single_vfx(
-            &mut commands,
-            replaced,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        let host = grid.get(&replaced.pos).map(|(e, _, _)| *e);
-        for e in fire_single_activation(replaced, &grid, &entity_info) {
-            if Some(e) != host {
-                to_remove.insert(e);
-            }
-        }
-    }
-
-    // Expand power light effects immediately into the same pop wave.
-    // Any power light HIT by these effects goes into the chain-reaction queue.
-    let initial_powers: Vec<PowerActivation> = to_remove
-        .iter()
-        .filter_map(|e| entity_info.get(e))
-        .filter(|(_, _, k)| k.is_power())
-        .map(|(pos, _, kind)| PowerActivation {
-            pos: *pos,
-            kind: *kind,
-            partner_color: swap_partner_color,
-        })
-        .collect();
-
-    if initial_powers.len() >= 3 {
-        // Super combo: one unified board-clearing animation, save the kinds, then clear the board.
-        power.super_combo.0 = initial_powers.iter().map(|a| a.kind).collect();
-        vfx::trigger_super_combo_vfx(
-            &mut commands,
-            &initial_powers,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        for &e in entity_info.keys() {
-            to_remove.insert(e);
-        }
-    } else {
-        // Combine adjacent powers caught in this match — each pair plays one unified animation,
-        // lone powers fire on their own. Any OTHER power light hit by the blast goes into the
-        // chain-reaction queue (activators themselves excluded).
-        let wave = resolve_wave(&initial_powers, &grid, &entity_info);
-        vfx::trigger_wave_vfx(
-            &mut commands,
-            &wave,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        let activator_positions: HashSet<GridPos> = initial_powers.iter().map(|a| a.pos).collect();
-        for e in wave.to_remove {
-            if to_remove.contains(&e) {
-                continue;
-            }
-            if let Some((pos, _, kind)) = entity_info.get(&e) {
-                if kind.is_power() && !activator_positions.contains(pos) {
-                    power.queue.0.push_back(PowerActivation {
-                        pos: *pos,
-                        kind: *kind,
-                        partner_color: None,
-                    });
-                }
-            }
-            to_remove.insert(e);
-        }
-    }
-
-    let removed_positions: HashSet<GridPos> = to_remove
-        .iter()
-        .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
-        .collect();
-    clear_shadow_at(
-        &removed_positions,
-        &mut commands,
-        &mut shadow_q,
+    rewards::resolve_match_sequence(
+        commands,
+        grid,
+        &mut entity_info,
+        cascade_depth,
+        result,
+        swap_partner_color,
+        ray_settings,
+        lights,
+        shadow_q,
         &mut shadow_count.0,
+        &mut power.queue,
+        &mut power.super_combo,
+        &mut rewards::EconomyState {
+            score: &mut score_res.score,
+            displayed: &mut score_res.displayed,
+            reserve: &mut score_res.reserve,
+            collected_cores: &mut score_res.collected_cores,
+            stats: &mut score_res.stats,
+            moves,
+            run: &mut score_res.run,
+        },
     );
-
-    let power_bonus = score_res.run.power_bonus(upgrades.len() as u32);
-    let points = rewards::apply_removal_rewards(
-        &mut commands,
-        &to_remove,
-        &entity_info,
-        cascade.0,
-        result.score_reset,
-        power_bonus,
-        &mut score_res.score,
-        &mut score_res.displayed,
-        &mut score_res.reserve,
-        &mut score_res.collected_cores,
-        &mut score_res.stats,
-        &mut moves,
-        &mut score_res.run,
-    );
-    for _ in &upgrades {
-        commands.trigger(PowerCreated);
-    }
-
-    let pops = rewards::spawn_pops(
-        &mut commands,
-        &to_remove,
-        &entity_info,
-        &pop_delays,
-        ray_settings.pop_duration,
-    );
-    commands.trigger(ChainPop {
-        removed: to_remove.len() as u32,
-        points,
-        hollow: result.score_reset,
-        pops,
-    });
     next_state.set(GameState::Popping);
 }
+

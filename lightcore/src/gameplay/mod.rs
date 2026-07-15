@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::core::prelude::*;
+use crate::core::grid::ShadowSet;
 pub(crate) use crate::core::run::CoreReserve;
 use crate::core::run::RunState;
 use crate::state::GameState;

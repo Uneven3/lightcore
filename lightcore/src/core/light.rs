@@ -1,11 +1,7 @@
-use bevy::asset::RenderAssetUsages;
 use bevy::color::Srgba;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use rand::Rng;
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
-
-use super::grid::TILE;
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum LightColor {
@@ -18,13 +14,7 @@ pub(crate) enum LightColor {
 
 impl LightColor {
     pub(crate) fn random(rng: &mut impl Rng) -> Self {
-        match rng.random_range(0..5u8) {
-            0 => Self::Red,
-            1 => Self::Green,
-            2 => Self::Blue,
-            3 => Self::Yellow,
-            _ => Self::Purple,
-        }
+        Self::from_index(rng.random_range(0..5) as usize)
     }
 
     pub(crate) fn from_index(i: usize) -> Self {
@@ -57,32 +47,6 @@ impl LightColor {
             Self::Yellow => Color::srgb(0.95, 0.85, 0.25),
             Self::Purple => Color::srgb(0.65, 0.35, 0.85),
         }
-    }
-
-    /// Builds the light's membrane as a real ring/annulus mesh — a thin, neon-like contour
-    /// with a genuine geometric hole in the middle (not simulated via alpha), so the light
-    /// core reads as a sharp emitter floating in real empty space, not a fog-filled disc.
-    pub(crate) fn mesh(self, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
-        let r = TILE * 0.40;
-        let angle = self.shape_start_angle();
-        let outer = match self {
-            Self::Red => ring_polygon_points(32, r, angle),
-            Self::Green => transformed_polygon_points(
-                3,
-                r,
-                angle,
-                Vec2::new(1.08, 1.06),
-                Vec2::new(0.0, -TILE * 0.02),
-            ),
-            // A square is just a regular 4-gon rotated 45° from the diamond (`Yellow`) — using
-            // the same circumradius `r` (not `r`-as-half-extent, which used to make this shape
-            // stick out ~41% farther than the other 4) keeps every shape's reach identical.
-            Self::Blue => ring_polygon_points(4, r, angle),
-            Self::Yellow => ring_polygon_points(4, r, angle),
-            Self::Purple => ring_polygon_points(5, r, angle),
-        };
-        let inset = ring_inset_for_sides(self.ring_sides(), r);
-        meshes.add(build_ring_mesh(&outer, inset))
     }
 
     /// Number of sides of this color's membrane polygon (a "32-gon" for Red reads as a circle).
@@ -136,174 +100,6 @@ impl LightColor {
             blue * Self::RING_BOOST,
         )
     }
-}
-
-/// Target ring wall thickness in pixels, the same for all 5 shapes. The naive approach (one
-/// shared `inset` ratio for every shape) gives wildly different *visible* thickness per shape,
-/// because the perpendicular wall thickness of an N-gon ring scaled by `inset` is
-/// `r * cos(pi/N) * (1 - inset)`, not `r * (1 - inset)` — `cos(pi/N)` ranges from 0.5
-/// (triangle) to ~1.0 (circle), so a triangle's wall ends up roughly half as thick as a
-/// circle's for the same `inset`. `ring_inset_for_sides` below solves for the `inset` that
-/// gives each shape this same absolute thickness instead.
-const RING_THICKNESS_PX: f32 = 3.5;
-
-fn ring_inset_for_sides(n: u32, r: f32) -> f32 {
-    let apothem_factor = (PI / n as f32).cos();
-    1.0 - RING_THICKNESS_PX / (r * apothem_factor)
-}
-
-/// N points around a regular polygon (or a fine-enough approximation of a circle when N is
-/// large) starting at `start_angle`, proceeding counter-clockwise — same convention Bevy's own
-/// EllipseMeshBuilder/RegularPolygonMeshBuilder use when `start_angle == FRAC_PI_2`.
-fn ring_polygon_points(n: u32, r: f32, start_angle: f32) -> Vec<Vec2> {
-    let step = TAU / n as f32;
-    (0..n)
-        .map(|i| {
-            let theta = start_angle + i as f32 * step;
-            Vec2::new(r * theta.cos(), r * theta.sin())
-        })
-        .collect()
-}
-
-fn transformed_polygon_points(
-    n: u32,
-    r: f32,
-    start_angle: f32,
-    scale: Vec2,
-    offset: Vec2,
-) -> Vec<Vec2> {
-    ring_polygon_points(n, r, start_angle)
-        .into_iter()
-        .map(|p| p * scale + offset)
-        .collect()
-}
-
-/// Builds a flat ring/annulus mesh: an outer boundary (`outer`) and an inner boundary scaled
-/// toward the center by `inset`, connected by a strip of quads — a real geometric hole in the
-/// middle, not a simulated one via alpha. Works identically for every convex polygon this
-/// project uses, including the axis-aligned `Rectangle` (whose corners/edges sit at different
-/// distances from center than the regular polygons' fan-vertices do — irrelevant here, since
-/// we scale real vertex positions, not a UV-radius threshold).
-fn build_ring_mesh(outer: &[Vec2], inset: f32) -> Mesh {
-    let n = outer.len();
-    // Normalize UV by the shape's own max extent, not a fixed constant — keeps UV in [0,1]
-    // even though it's currently unused (ColorMaterial has no texture to sample here).
-    let r_norm = outer
-        .iter()
-        .map(|p| p.length())
-        .fold(0.0f32, f32::max)
-        .max(0.0001);
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(n * 2);
-    for &p in outer {
-        positions.push([p.x, p.y, 0.0]);
-        normals.push([0.0, 0.0, 1.0]);
-        uvs.push([0.5 * (p.x / r_norm + 1.0), 1.0 - 0.5 * (p.y / r_norm + 1.0)]);
-    }
-    for &p in outer {
-        let inner = p * inset;
-        positions.push([inner.x, inner.y, 0.0]);
-        normals.push([0.0, 0.0, 1.0]);
-        uvs.push([
-            0.5 * (inner.x / r_norm + 1.0),
-            1.0 - 0.5 * (inner.y / r_norm + 1.0),
-        ]);
-    }
-    let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
-    for i in 0..n as u32 {
-        let (o0, o1) = (i, (i + 1) % n as u32);
-        let (i0, i1) = (n as u32 + i, n as u32 + (i + 1) % n as u32);
-        indices.extend_from_slice(&[o0, o1, i1, o0, i1, i0]);
-    }
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_indices(Indices::U32(indices))
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-}
-
-/// `2*points` vertices alternating between `outer_r` (spike tips) and `inner_r` (valleys) — the
-/// outline of a `points`-pointed star. Powers whose membrane shape encodes their *kind* (not their
-/// color) use this: Starburst (5-pointed star) and Cross (a 4-bladed shuriken, sharp valleys).
-fn star_polygon_points(points: u32, outer_r: f32, inner_r: f32, start_angle: f32) -> Vec<Vec2> {
-    let n = points * 2;
-    let step = TAU / n as f32;
-    (0..n)
-        .map(|i| {
-            let r = if i % 2 == 0 { outer_r } else { inner_r };
-            let theta = start_angle + i as f32 * step;
-            Vec2::new(r * theta.cos(), r * theta.sin())
-        })
-        .collect()
-}
-
-/// A star-shaped ring outline (see [`star_polygon_points`]). `inset` controls wall thickness as a
-/// fraction of each vertex's radius — kept fairly bold so the spiky silhouette reads at a glance.
-pub(crate) fn star_ring_mesh(
-    points: u32,
-    outer_r: f32,
-    inner_r: f32,
-    start_angle: f32,
-    inset: f32,
-) -> Mesh {
-    build_ring_mesh(
-        &star_polygon_points(points, outer_r, inner_r, start_angle),
-        inset,
-    )
-}
-
-/// A smooth circular ring outline — the Blackhole's kind-shape membrane (a clean circle, distinct
-/// from the spiky Cross/Starburst and from the polygonal color-shapes).
-pub(crate) fn circle_ring_mesh(r: f32) -> Mesh {
-    let inset = ring_inset_for_sides(48, r);
-    build_ring_mesh(&ring_polygon_points(48, r, FRAC_PI_2), inset)
-}
-
-/// Filled X mark used by Hollow lights. It intentionally has no central hole/core: Hollow is a
-/// hazard silhouette, not another membrane holding a lightcore.
-pub(crate) fn x_mark_mesh(half_len: f32, thickness: f32) -> Mesh {
-    let half_w = thickness * 0.5;
-    let mut quads = Vec::with_capacity(2);
-    for angle in [FRAC_PI_4, -FRAC_PI_4] {
-        let axis = Vec2::from_angle(angle);
-        let perp = Vec2::new(-axis.y, axis.x);
-        quads.push([
-            axis * -half_len + perp * -half_w,
-            axis * half_len + perp * -half_w,
-            axis * half_len + perp * half_w,
-            axis * -half_len + perp * half_w,
-        ]);
-    }
-
-    let mut positions = Vec::with_capacity(8);
-    let mut normals = Vec::with_capacity(8);
-    let mut uvs = Vec::with_capacity(8);
-    let mut indices = Vec::with_capacity(12);
-    for quad in quads {
-        let base = positions.len() as u32;
-        for p in quad {
-            positions.push([p.x, p.y, 0.0]);
-            normals.push([0.0, 0.0, 1.0]);
-            uvs.push([
-                0.5 * (p.x / half_len + 1.0),
-                1.0 - 0.5 * (p.y / half_len + 1.0),
-            ]);
-        }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_indices(Indices::U32(indices))
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
 }
 
 /// How powerful a [`Light`](crate::core::components::Light) is, read by the player as its number

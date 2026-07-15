@@ -10,13 +10,29 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     CollectedCores, CoreReserve, DisplayedScore, MovesLeft, Score, ScoreDrained, StatsBook,
+    PowerActivation, PowerCreated, ChainPop, PowerActivationQueue, SuperComboPending,
 };
-use crate::core::components::PopAnim;
-use crate::core::grid::to_world;
-use crate::core::light::LightColor;
-use crate::core::matching::EntityInfo;
+use crate::core::components::{PopAnim, Light, Shadow, Spark, Blocker, HardShadow};
+use crate::core::grid::{to_world, GridPos};
+use crate::core::light::{LightColor, LightKind};
+use crate::core::matching::{EntityInfo, Grid, MatchResult, fire_single_activation, resolve_wave};
 use crate::core::run::RunState;
 use crate::gameplay::popping::apply_pop_delay;
+use crate::board::clear_shadow_at;
+use crate::gameplay::vfx;
+use crate::visuals::RaySettings;
+
+/// Bundles the mutable references to the game's economy resources to prevent
+/// parameter explosion in [`apply_removal_rewards`].
+pub(crate) struct EconomyState<'a> {
+    pub(crate) score: &'a mut Score,
+    pub(crate) displayed: &'a mut DisplayedScore,
+    pub(crate) reserve: &'a mut CoreReserve,
+    pub(crate) collected_cores: &'a mut CollectedCores,
+    pub(crate) stats: &'a mut StatsBook,
+    pub(crate) moves: &'a mut MovesLeft,
+    pub(crate) run: &'a mut RunState,
+}
 
 /// Applies the full economy of a removal wave: base points, per-color `RunState` bonuses, the
 /// booster reserve, collected-core stats, and — on a hollow-triggered `score_reset` — draining the
@@ -28,7 +44,6 @@ use crate::gameplay::popping::apply_pop_delay;
 /// only where `upgrades` is actually a fresh set of forged powers.
 ///
 /// Returns the point total to report on the `ChainPop` event (0 when `score_reset`).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_removal_rewards(
     commands: &mut Commands,
     to_remove: &HashSet<Entity>,
@@ -36,13 +51,7 @@ pub(super) fn apply_removal_rewards(
     cascade: u32,
     score_reset: bool,
     power_bonus_for_upgrades: u32,
-    score: &mut Score,
-    displayed: &mut DisplayedScore,
-    reserve: &mut CoreReserve,
-    collected_cores: &mut CollectedCores,
-    stats: &mut StatsBook,
-    moves: &mut MovesLeft,
-    run: &mut RunState,
+    economy: &mut EconomyState,
 ) -> u32 {
     let points = if score_reset {
         0
@@ -70,30 +79,30 @@ pub(super) fn apply_removal_rewards(
             if kind.is_hollow() {
                 continue;
             }
-            collected_cores.0[color.index()] += cascade;
+            economy.collected_cores.0[color.index()] += cascade;
             if !score_reset {
-                score_bonus += run.score_bonus_for_color(*color, cascade);
-                reserve_bonus += run.reserve_bonus_for_color(*color, cascade);
+                score_bonus += economy.run.score_bonus_for_color(*color, cascade);
+                reserve_bonus += economy.run.reserve_bonus_for_color(*color, cascade);
             }
             if *color == LightColor::Blue {
                 blue_count += cascade;
             }
             match color {
-                LightColor::Red => stats.reds += cascade,
-                LightColor::Green => stats.greens += cascade,
-                LightColor::Blue => stats.blues += cascade,
-                LightColor::Yellow => stats.yellows += cascade,
-                LightColor::Purple => stats.purples += cascade,
+                LightColor::Red => economy.stats.reds += cascade,
+                LightColor::Green => economy.stats.greens += cascade,
+                LightColor::Blue => economy.stats.blues += cascade,
+                LightColor::Yellow => economy.stats.yellows += cascade,
+                LightColor::Purple => economy.stats.purples += cascade,
             }
             if kind.is_power() {
-                stats.lightkinds += cascade;
+                economy.stats.lightkinds += cascade;
             }
         }
     }
 
     if score_reset {
-        score.0 = 0;
-        displayed.0 = 0;
+        economy.score.0 = 0;
+        economy.displayed.0 = 0;
         commands.trigger(ScoreDrained {
             origins: to_remove
                 .iter()
@@ -105,18 +114,18 @@ pub(super) fn apply_removal_rewards(
                 .collect(),
         });
     } else {
-        score.0 += points + score_bonus;
-        reserve.0 += points + reserve_bonus;
+        economy.score.0 += points + score_bonus;
+        economy.reserve.0 += points + reserve_bonus;
     }
 
-    stats.max_cascade = stats.max_cascade.max(cascade);
+    economy.stats.max_cascade = economy.stats.max_cascade.max(cascade);
     if cascade >= 2 {
-        stats.total_chains += 1;
+        economy.stats.total_chains += 1;
     }
 
-    let move_bonus = run.blue_move_bonus(blue_count);
-    if move_bonus > 0 && moves.0 != u32::MAX {
-        moves.0 += move_bonus;
+    let move_bonus = economy.run.blue_move_bonus(blue_count);
+    if move_bonus > 0 && economy.moves.0 != u32::MAX {
+        economy.moves.0 += move_bonus;
     }
 
     if score_reset { 0 } else { points + score_bonus }
@@ -147,4 +156,160 @@ pub(super) fn spawn_pops(
         }
     }
     pops
+}
+
+/// Shared match sequence resolution: upgrades matched lights, processes power combos,
+/// triggers combo or wave VFX, cleans shadows, calculates score rewards, and spawns pop animations.
+/// Factored out here to eliminate major duplication between `swap.rs` and `chain.rs`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_match_sequence(
+    commands: &mut Commands,
+    grid: &Grid,
+    entity_info: &mut EntityInfo,
+    cascade_depth: u32,
+    result: MatchResult,
+    partner_color: Option<LightColor>,
+    ray_settings: &RaySettings,
+    lights: &mut Query<
+        (Entity, &mut GridPos, &LightColor, &mut LightKind),
+        (With<Light>, Without<Shadow>),
+    >,
+    shadow_q: &mut Query<
+        (Entity, &GridPos, Option<&mut HardShadow>),
+        (
+            With<Shadow>,
+            Without<Blocker>,
+            Without<Light>,
+            Without<Spark>,
+        ),
+    >,
+    shadow_count: &mut u32,
+    queue: &mut PowerActivationQueue,
+    super_combo: &mut SuperComboPending,
+    economy: &mut EconomyState,
+) {
+    let mut to_remove = result.to_remove;
+
+    let upgrades: Vec<(Entity, LightKind)> = result
+        .to_upgrade
+        .into_iter()
+        .filter(|(e, _)| !to_remove.contains(e))
+        .collect();
+    for (e, kind) in &upgrades {
+        if let Ok((_, _, _, mut k)) = lights.get_mut(*e) {
+            *k = *kind;
+        }
+        if let Some(entry) = entity_info.get_mut(e) {
+            entry.2 = *kind;
+        }
+    }
+
+    let mut pop_delays: HashMap<Entity, f32> = HashMap::new();
+    for replaced in &result.replaced_powers {
+        vfx::trigger_single_vfx(
+            commands,
+            replaced,
+            grid,
+            entity_info,
+            &mut pop_delays,
+            ray_settings,
+        );
+        let host = grid.get(&replaced.pos).map(|(e, _, _)| *e);
+        for e in fire_single_activation(replaced, grid, entity_info) {
+            if Some(e) != host {
+                to_remove.insert(e);
+            }
+        }
+    }
+
+    let initial_powers: Vec<PowerActivation> = to_remove
+        .iter()
+        .filter_map(|e| entity_info.get(e))
+        .filter(|(_, _, k)| k.is_power())
+        .map(|(pos, _, kind)| PowerActivation {
+            pos: *pos,
+            kind: *kind,
+            partner_color,
+        })
+        .collect();
+
+    if initial_powers.len() >= 3 {
+        super_combo.0 = initial_powers.iter().map(|a| a.kind).collect();
+        vfx::trigger_super_combo_vfx(
+            commands,
+            &initial_powers,
+            grid,
+            entity_info,
+            &mut pop_delays,
+            ray_settings,
+        );
+        for &e in entity_info.keys() {
+            to_remove.insert(e);
+        }
+    } else {
+        let wave = resolve_wave(&initial_powers, grid, entity_info);
+        vfx::trigger_wave_vfx(
+            commands,
+            &wave,
+            grid,
+            entity_info,
+            &mut pop_delays,
+            ray_settings,
+        );
+        let activator_positions: HashSet<GridPos> = initial_powers.iter().map(|a| a.pos).collect();
+        for e in wave.to_remove {
+            if to_remove.contains(&e) {
+                continue;
+            }
+            if let Some((pos, _, kind)) = entity_info.get(&e) {
+                if kind.is_power() && !activator_positions.contains(pos) {
+                    queue.0.push_back(PowerActivation {
+                        pos: *pos,
+                        kind: *kind,
+                        partner_color: None,
+                    });
+                }
+            }
+            to_remove.insert(e);
+        }
+    }
+
+    let removed_positions: HashSet<GridPos> = to_remove
+        .iter()
+        .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
+        .collect();
+    clear_shadow_at(
+        &removed_positions,
+        commands,
+        shadow_q,
+        shadow_count,
+    );
+
+    let power_bonus = economy.run.power_bonus(upgrades.len() as u32);
+    let points = apply_removal_rewards(
+        commands,
+        &to_remove,
+        entity_info,
+        cascade_depth,
+        result.score_reset,
+        power_bonus,
+        economy,
+    );
+    for _ in &upgrades {
+        commands.trigger(PowerCreated);
+    }
+
+    let pops = spawn_pops(
+        commands,
+        &to_remove,
+        entity_info,
+        &pop_delays,
+        ray_settings.pop_duration,
+    );
+    commands.trigger(ChainPop {
+        removed: to_remove.len() as u32,
+        points,
+        hollow: result.score_reset,
+        pops,
+    });
 }

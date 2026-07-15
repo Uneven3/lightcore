@@ -532,14 +532,7 @@ pub(crate) fn scan_runs(
 pub(crate) fn pick_most_common_color(entity_info: &EntityInfo) -> LightColor {
     let mut counts = [0u32; 5];
     for (_, c, _) in entity_info.values() {
-        let idx = match c {
-            LightColor::Red => 0,
-            LightColor::Green => 1,
-            LightColor::Blue => 2,
-            LightColor::Yellow => 3,
-            LightColor::Purple => 4,
-        };
-        counts[idx] += 1;
+        counts[c.index()] += 1;
     }
     LightColor::from_index(
         counts
@@ -559,62 +552,10 @@ pub(crate) fn fire_single_activation(
     entity_info: &EntityInfo,
 ) -> HashSet<Entity> {
     let mut r = HashSet::new();
-    let pos = activation.pos;
-    match activation.kind {
-        LightKind::RayH => {
-            for x in 0..GRID_W {
-                if let Some(&(e, _, _)) = grid.get(&GridPos { x, y: pos.y }) {
-                    r.insert(e);
-                }
-            }
+    for pos in blast_path(activation, entity_info) {
+        if let Some(&(e, _, _)) = grid.get(&pos) {
+            r.insert(e);
         }
-        LightKind::RayV => {
-            for y in 0..GRID_H {
-                if let Some(&(e, _, _)) = grid.get(&GridPos { x: pos.x, y }) {
-                    r.insert(e);
-                }
-            }
-        }
-        LightKind::Supernova => {
-            for dx in -1..=1i32 {
-                for dy in -1..=1i32 {
-                    if let Some(&(e, _, _)) = grid.get(&GridPos {
-                        x: pos.x + dx,
-                        y: pos.y + dy,
-                    }) {
-                        r.insert(e);
-                    }
-                }
-            }
-        }
-        LightKind::Cross => {
-            for x in 0..GRID_W {
-                if let Some(&(e, _, _)) = grid.get(&GridPos { x, y: pos.y }) {
-                    r.insert(e);
-                }
-            }
-            for y in 0..GRID_H {
-                if let Some(&(e, _, _)) = grid.get(&GridPos { x: pos.x, y }) {
-                    r.insert(e);
-                }
-            }
-        }
-        LightKind::Starburst => {
-            let color = activation
-                .partner_color
-                .unwrap_or_else(|| pick_most_common_color(entity_info));
-            for (&e, (_, c, _)) in entity_info {
-                if *c == color {
-                    r.insert(e);
-                }
-            }
-        }
-        LightKind::Blackhole => {
-            for &e in entity_info.keys() {
-                r.insert(e);
-            }
-        }
-        LightKind::Normal | LightKind::Hollow => {}
     }
     r
 }

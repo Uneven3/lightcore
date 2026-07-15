@@ -6,8 +6,9 @@ use bevy::ui_widgets::{
 use bevy::window::{MonitorSelection, WindowMode};
 
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
-use crate::core::grid::{RaySettings, TILE};
+use crate::core::grid::TILE;
 use crate::core::locale::{Language, TrKey};
+use crate::visuals::RaySettings;
 use crate::input::InputActions;
 use crate::platform::PlatformProfile;
 use crate::state::GameState;

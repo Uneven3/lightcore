@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use super::popping::{accumulate_pop_delays, merge_pop_delay};
 use super::{PowerBlastTrail, PowerCombo, PowerConsumed};
-use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
+use crate::visuals::RaySettings;
 
 /// Fires the VFX for one lone (uncombined) power activation — the flash + traveling beam — and
 /// stages its pop-delay ripple. The single-power path that `PowerConsumed`/`PowerBlastTrail` have

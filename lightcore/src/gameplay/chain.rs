@@ -4,13 +4,13 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     CascadeDepth, ChainPop, CollectedCores, CoreReserve, DisplayedScore, GameMode, MovesLeft,
-    PowerActivationQueue, PowerCreated, Score, ShadowCount, SparksCollected, StatsBook,
+    PowerActivationQueue, Score, ShadowCount, SparksCollected, StatsBook,
     SuperComboPending,
 };
 use super::{rewards, vfx};
 use crate::board::{HOLLOW_BASE_CHANCE, clear_shadow_at, shuffle_board};
-use crate::core::grid::RaySettings;
 use crate::core::prelude::*;
+use crate::visuals::RaySettings;
 use crate::core::run::RunState;
 use crate::state::GameState;
 
@@ -46,7 +46,7 @@ pub(crate) fn check_chain_matches(
         ),
     >,
     mut lights: Query<
-        (Entity, &GridPos, &LightColor, &mut LightKind),
+        (Entity, &mut GridPos, &LightColor, &mut LightKind),
         (With<Light>, Without<Shadow>),
     >,
     ray_settings: Res<RaySettings>,
@@ -133,13 +133,15 @@ pub(crate) fn check_chain_matches(
             res.cascade.0,
             false,
             0,
-            &mut res.score,
-            &mut res.displayed,
-            &mut res.reserve,
-            &mut res.collected_cores,
-            &mut res.stats,
-            &mut res.moves,
-            &mut res.run,
+            &mut rewards::EconomyState {
+                score: &mut res.score,
+                displayed: &mut res.displayed,
+                reserve: &mut res.reserve,
+                collected_cores: &mut res.collected_cores,
+                stats: &mut res.stats,
+                moves: &mut res.moves,
+                run: &mut res.run,
+            },
         );
         let pops = rewards::spawn_pops(
             &mut commands,
@@ -198,147 +200,28 @@ pub(crate) fn check_chain_matches(
         return;
     }
 
-    let mut to_remove = result.to_remove;
-
-    let upgrades: Vec<(Entity, LightKind)> = result
-        .to_upgrade
-        .into_iter()
-        .filter(|(e, _)| !to_remove.contains(e))
-        .collect();
-    for (e, kind) in &upgrades {
-        // Setting `LightKind` is enough: `visuals::core_motion::rebuild_cores` reacts to the
-        // change and rebuilds this light's cores into the power's signature cluster.
-        if let Ok((_, _, _, mut k)) = lights.get_mut(*e) {
-            *k = *kind;
-        }
-        if let Some(entry) = entity_info.get_mut(e) {
-            entry.2 = *kind;
-        }
-    }
-
-    // A power light that already occupied an upgrade-host cell still fires its own effect —
-    // the host itself is excluded so it survives to receive the new kind. Anything else its
-    // blast hits is merged into `to_remove` here and picked up by `cascade_powers` below;
-    // deliberately not re-triggered/queued here too, to avoid firing it twice.
-    let mut pop_delays: HashMap<Entity, f32> = HashMap::new();
-    for replaced in &result.replaced_powers {
-        vfx::trigger_single_vfx(
-            &mut commands,
-            replaced,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        let host = grid.get(&replaced.pos).map(|(e, _, _)| *e);
-        for e in fire_single_activation(replaced, &grid, &entity_info) {
-            if Some(e) != host {
-                to_remove.insert(e);
-            }
-        }
-    }
-
-    // Expand cascade-matched power light effects immediately.
-    // Any power light HIT by these effects goes into the chain-reaction queue.
-    let cascade_powers: Vec<PowerActivation> = to_remove
-        .iter()
-        .filter_map(|e| entity_info.get(e))
-        .filter(|(_, _, k)| k.is_power())
-        .map(|(pos, _, kind)| PowerActivation {
-            pos: *pos,
-            kind: *kind,
-            partner_color: None,
-        })
-        .collect();
-
-    if cascade_powers.len() >= 3 {
-        res.super_combo.0 = cascade_powers.iter().map(|a| a.kind).collect();
-        vfx::trigger_super_combo_vfx(
-            &mut commands,
-            &cascade_powers,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        for &e in entity_info.keys() {
-            to_remove.insert(e);
-        }
-    } else {
-        // Combine adjacent cascade powers — each pair plays one unified animation, lone powers
-        // fire on their own. Any OTHER power light caught in the blast goes into the chain-reaction
-        // queue for the next wave (activators themselves are excluded).
-        let wave = resolve_wave(&cascade_powers, &grid, &entity_info);
-        vfx::trigger_wave_vfx(
-            &mut commands,
-            &wave,
-            &grid,
-            &entity_info,
-            &mut pop_delays,
-            &ray_settings,
-        );
-        let activator_positions: HashSet<GridPos> = cascade_powers.iter().map(|a| a.pos).collect();
-        for e in wave.to_remove {
-            if to_remove.contains(&e) {
-                continue;
-            }
-            if let Some((pos, _, kind)) = entity_info.get(&e)
-                && kind.is_power()
-                && !activator_positions.contains(pos)
-            {
-                res.queue.0.push_back(PowerActivation {
-                    pos: *pos,
-                    kind: *kind,
-                    partner_color: None,
-                });
-            }
-            to_remove.insert(e);
-        }
-    }
-
-    let removed_positions: HashSet<GridPos> = to_remove
-        .iter()
-        .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
-        .collect();
-    clear_shadow_at(
-        &removed_positions,
+    rewards::resolve_match_sequence(
         &mut commands,
+        &grid,
+        &mut entity_info,
+        res.cascade.0,
+        result,
+        None,
+        &ray_settings,
+        &mut lights,
         &mut shadow_q,
         &mut res.shadow_count.0,
+        &mut res.queue,
+        &mut res.super_combo,
+        &mut rewards::EconomyState {
+            score: &mut res.score,
+            displayed: &mut res.displayed,
+            reserve: &mut res.reserve,
+            collected_cores: &mut res.collected_cores,
+            stats: &mut res.stats,
+            moves: &mut res.moves,
+            run: &mut res.run,
+        },
     );
-
-    let power_bonus = res.run.power_bonus(upgrades.len() as u32);
-    let points = rewards::apply_removal_rewards(
-        &mut commands,
-        &to_remove,
-        &entity_info,
-        res.cascade.0,
-        result.score_reset,
-        power_bonus,
-        &mut res.score,
-        &mut res.displayed,
-        &mut res.reserve,
-        &mut res.collected_cores,
-        &mut res.stats,
-        &mut res.moves,
-        &mut res.run,
-    );
-    for _ in &upgrades {
-        commands.trigger(PowerCreated);
-    }
-
-    let pops = rewards::spawn_pops(
-        &mut commands,
-        &to_remove,
-        &entity_info,
-        &pop_delays,
-        ray_settings.pop_duration,
-    );
-    commands.trigger(ChainPop {
-        removed: to_remove.len() as u32,
-        points,
-        hollow: result.score_reset,
-        pops,
-    });
     next_state.set(GameState::Popping);
 }

@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 
 use crate::core::components::Light;
-use crate::core::grid::RaySettings;
 use crate::state::GameState;
 
 pub(crate) mod additive_material;
@@ -20,6 +19,10 @@ pub(crate) mod particles;
 pub(crate) mod render_target;
 pub(crate) mod score_light;
 pub(crate) mod space_background;
+pub(crate) mod timing;
+
+pub(crate) use timing::RaySettings;
+
 
 pub(crate) struct VisualsPlugin;
 

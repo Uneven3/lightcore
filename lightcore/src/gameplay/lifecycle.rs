@@ -70,10 +70,9 @@ pub(crate) fn tick_level_timer(
     collected_cores: Res<CollectedCores>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
-    if level_timer.0.is_none() {
+    let Some(t) = level_timer.0.as_mut() else {
         return;
-    }
-    let t = level_timer.0.as_mut().unwrap();
+    };
     t.tick(time.delta());
     if t.is_finished() {
         match &level.goal {
@@ -444,38 +443,8 @@ pub(crate) fn teardown_match(
     for e in &match_entities {
         commands.entity(e).try_despawn();
     }
-    *level = make_level(1);
+    reset_for_replay(make_level(1), &mut level, &mut res, &mode, &run);
     *res.level_timer = LevelTimer(None);
-    res.score.0 = 0;
-    res.displayed.0 = 0;
-    // The run's booster wallet survives leaving to the menu mid-run (e.g. picking the next node,
-    // or Esc'ing out to browse the map) — only a mode switch or a run that has actually ended
-    // wipes it; `setup_match`'s Run branch zeroes it explicitly when a *new* run starts instead.
-    if !(mode.is_run() && run.active) {
-        res.reserve.0 = 0;
-        res.spent.0 = 0;
-    }
-    res.moves.0 = level.total_moves;
-    res.pending.0 = None;
-    res.reverting.0.clear();
-    *res.drag = DragState::default();
-    res.settled.0 = false;
-    res.cascade.0 = 0;
-    res.collected.0 = 0;
-    res.shadow.0 = 0;
-    res.queue.0.clear();
-    res.super_combo.0.clear();
-    res.collected_cores.0 = [0; 5];
-    res.displayed_cores.0 = [0; 5];
-    res.stats.reds = 0;
-    res.stats.greens = 0;
-    res.stats.blues = 0;
-    res.stats.yellows = 0;
-    res.stats.purples = 0;
-    res.stats.lightkinds = 0;
-    res.stats.max_cascade = 0;
-    res.stats.total_chains = 0;
-    res.popup_open.0 = false;
 }
 
 pub(crate) fn show_level_complete(
@@ -881,14 +850,7 @@ fn reset_for_replay(
     res.super_combo.0.clear();
     res.collected_cores.0 = [0; 5];
     res.displayed_cores.0 = [0; 5];
-    res.stats.reds = 0;
-    res.stats.greens = 0;
-    res.stats.blues = 0;
-    res.stats.yellows = 0;
-    res.stats.purples = 0;
-    res.stats.lightkinds = 0;
-    res.stats.max_cascade = 0;
-    res.stats.total_chains = 0;
+    *res.stats = StatsBook::default();
     res.popup_open.0 = false;
 }
 

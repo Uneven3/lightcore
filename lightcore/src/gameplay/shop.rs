@@ -284,8 +284,10 @@ pub(crate) fn shop_targeting(
             // Pop one light into the normal pipeline. `points: 0` so it grants no score and spawns
             // no score-shards (`on_chain_pop_score_light` early-returns on 0); the burst below is
             // the only flourish.
+            let Ok((_, pos, color, _)) = lights.get(target) else {
+                return;
+            };
             cascade.0 = 1;
-            let (_, pos, color, _) = lights.get(target).unwrap();
             let (color, w) = (*color, to_world(*pos));
             commands
                 .entity(target)
@@ -309,15 +311,15 @@ pub(crate) fn shop_targeting(
             next_state.set(GameState::Popping);
         }
         ShopItem::Upgrade => {
-            let cur = *lights.get(target).unwrap().3;
-            if let Some(next) = cur.next_tier() {
-                // `rebuild_cores` reacts to the `LightKind` change (body shape + cores).
-                *lights.get_mut(target).unwrap().3 = next;
-                commands.trigger(PowerCreated);
-                spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
-                disarm(&mut commands, &mut shop, &selected);
+            if let Ok((_, _, _, mut kind)) = lights.get_mut(target) {
+                if let Some(next) = kind.next_tier() {
+                    // `rebuild_cores` reacts to the `LightKind` change (body shape + cores).
+                    *kind = next;
+                    commands.trigger(PowerCreated);
+                    spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
+                    disarm(&mut commands, &mut shop, &selected);
+                }
             }
-            // Already a Blackhole (max tier) → no charge, stays armed for another pick.
         }
         ShopItem::Swap => match shop.first_pick {
             None => {
@@ -331,8 +333,10 @@ pub(crate) fn shop_targeting(
             Some(first) => {
                 // Force the trade via a `free` SwapData: no move cost, no revert on no-match. The
                 // existing swap pipeline (combos, cascades) takes it from here.
-                let a_pos = *lights.get(first).unwrap().1;
-                let b_pos = *lights.get(target).unwrap().1;
+                let Ok((_, a_pos_ref, _, _)) = lights.get(first) else { return; };
+                let Ok((_, b_pos_ref, _, _)) = lights.get(target) else { return; };
+                let (a_pos, b_pos) = (*a_pos_ref, *b_pos_ref);
+
                 if let Ok((_, mut p, _, _)) = lights.get_mut(first) {
                     *p = b_pos;
                 }

@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use super::{
     CoreReserve, DisplayedScore, FallComplete, GameMode, GravitySettled, Score, SparksCollected,
 };
+use crate::core::components::PopAnim;
+use crate::core::grid::ShadowSet;
 use crate::core::prelude::*;
 use crate::core::run::RunState;
 use crate::state::GameState;
@@ -213,7 +215,9 @@ pub(crate) fn apply_gravity(
         if let Some(target) = straight_fall_target(*pos, &occupied, shadow_set) {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            entities.get_mut(*e).unwrap().1.set_if_neq(target);
+            if let Ok((_, mut p, _, _)) = entities.get_mut(*e) {
+                p.set_if_neq(target);
+            }
             commands.entity(*e).insert(Dropping);
             any_moved = true;
         } else {
@@ -225,7 +229,9 @@ pub(crate) fn apply_gravity(
         if let Some(target) = straight_fall_target(pos, &occupied, shadow_set) {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            entities.get_mut(e).unwrap().1.set_if_neq(target);
+            if let Ok((_, mut p, _, _)) = entities.get_mut(e) {
+                p.set_if_neq(target);
+            }
             commands.entity(e).insert(Dropping);
             any_moved = true;
         } else if let Some(target) = if is_spark {
@@ -235,7 +241,9 @@ pub(crate) fn apply_gravity(
         } {
             occupied.remove(&(pos.x, pos.y));
             occupied.insert((target.x, target.y));
-            entities.get_mut(e).unwrap().1.set_if_neq(target);
+            if let Ok((_, mut p, _, _)) = entities.get_mut(e) {
+                p.set_if_neq(target);
+            }
             commands.entity(e).insert(Dropping);
             any_moved = true;
         } else {

@@ -43,9 +43,6 @@ pub(crate) struct HardShadowLabel;
 #[derive(Component)]
 pub(crate) struct IngredientExit;
 
-#[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct ShadowSet(pub(crate) std::collections::HashSet<(i32, i32)>);
-
 /// Shared by Light + Spark for gravity/lerp. Read by both `gameplay` (apply_gravity)
 /// and `visuals` (lerp_visual_pos, sync_transforms), so it lives here rather than in either.
 #[derive(Component)]

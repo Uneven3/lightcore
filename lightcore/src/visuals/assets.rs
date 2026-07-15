@@ -1,9 +1,10 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Srgba;
 use bevy::image::Image;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use super::effects::build_effect_mesh;
 use super::particles::ParticleSettings;
@@ -356,7 +357,9 @@ pub(crate) fn build_cache(
     let font = Font::from_bytes(font_bytes.to_vec());
     let _ = fonts.insert(AssetId::<Font>::default(), font);
 
-    let ring_mesh = std::array::from_fn(|i| LightColor::from_index(i).mesh(&mut meshes));
+    let ring_mesh = std::array::from_fn(|i| {
+        meshes.add(build_light_color_mesh(LightColor::from_index(i)))
+    });
     let ring_mat = std::array::from_fn(|i| {
         materials.add(ColorMaterial::from_color(
             LightColor::from_index(i).ring_color(),
@@ -436,4 +439,167 @@ pub(crate) fn build_cache(
         blackhole_void_mesh: meshes.add(Circle::new(TILE * 0.5)),
         blackhole_rim_mesh: meshes.add(Annulus::new(TILE * 0.5, TILE * 0.62)),
     });
+}
+
+// ─── Mesh Generation Helper Functions ─────────────────────────────────────────
+
+const RING_THICKNESS_PX: f32 = 3.5;
+
+fn ring_inset_for_sides(n: u32, r: f32) -> f32 {
+    let apothem_factor = (PI / n as f32).cos();
+    1.0 - RING_THICKNESS_PX / (r * apothem_factor)
+}
+
+fn ring_polygon_points(n: u32, r: f32, start_angle: f32) -> Vec<Vec2> {
+    let step = TAU / n as f32;
+    (0..n)
+        .map(|i| {
+            let theta = start_angle + i as f32 * step;
+            Vec2::new(r * theta.cos(), r * theta.sin())
+        })
+        .collect()
+}
+
+fn transformed_polygon_points(
+    n: u32,
+    r: f32,
+    start_angle: f32,
+    scale: Vec2,
+    offset: Vec2,
+) -> Vec<Vec2> {
+    ring_polygon_points(n, r, start_angle)
+        .into_iter()
+        .map(|p| p * scale + offset)
+        .collect()
+}
+
+fn build_ring_mesh(outer: &[Vec2], inset: f32) -> Mesh {
+    let n = outer.len();
+    let r_norm = outer
+        .iter()
+        .map(|p| p.length())
+        .fold(0.0f32, f32::max)
+        .max(0.0001);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(n * 2);
+    for &p in outer {
+        positions.push([p.x, p.y, 0.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        uvs.push([0.5 * (p.x / r_norm + 1.0), 1.0 - 0.5 * (p.y / r_norm + 1.0)]);
+    }
+    for &p in outer {
+        let inner = p * inset;
+        positions.push([inner.x, inner.y, 0.0]);
+        normals.push([0.0, 0.0, 1.0]);
+        uvs.push([
+            0.5 * (inner.x / r_norm + 1.0),
+            1.0 - 0.5 * (inner.y / r_norm + 1.0),
+        ]);
+    }
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
+    for i in 0..n as u32 {
+        let (o0, o1) = (i, (i + 1) % n as u32);
+        let (i0, i1) = (n as u32 + i, n as u32 + (i + 1) % n as u32);
+        indices.extend_from_slice(&[o0, o1, i1, o0, i1, i0]);
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_indices(Indices::U32(indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+}
+
+fn star_polygon_points(points: u32, outer_r: f32, inner_r: f32, start_angle: f32) -> Vec<Vec2> {
+    let n = points * 2;
+    let step = TAU / n as f32;
+    (0..n)
+        .map(|i| {
+            let r = if i % 2 == 0 { outer_r } else { inner_r };
+            let theta = start_angle + i as f32 * step;
+            Vec2::new(r * theta.cos(), r * theta.sin())
+        })
+        .collect()
+}
+
+pub(crate) fn star_ring_mesh(
+    points: u32,
+    outer_r: f32,
+    inner_r: f32,
+    start_angle: f32,
+    inset: f32,
+) -> Mesh {
+    build_ring_mesh(
+        &star_polygon_points(points, outer_r, inner_r, start_angle),
+        inset,
+    )
+}
+
+pub(crate) fn circle_ring_mesh(r: f32) -> Mesh {
+    let inset = ring_inset_for_sides(48, r);
+    build_ring_mesh(&ring_polygon_points(48, r, FRAC_PI_2), inset)
+}
+
+pub(crate) fn x_mark_mesh(half_len: f32, thickness: f32) -> Mesh {
+    let half_w = thickness * 0.5;
+    let mut quads = Vec::with_capacity(2);
+    for angle in [FRAC_PI_4, -FRAC_PI_4] {
+        let axis = Vec2::from_angle(angle);
+        let perp = Vec2::new(-axis.y, axis.x);
+        quads.push([
+            axis * -half_len + perp * -half_w,
+            axis * half_len + perp * -half_w,
+            axis * half_len + perp * half_w,
+            axis * -half_len + perp * half_w,
+        ]);
+    }
+
+    let mut positions = Vec::with_capacity(8);
+    let mut normals = Vec::with_capacity(8);
+    let mut uvs = Vec::with_capacity(8);
+    let mut indices = Vec::with_capacity(12);
+    for quad in quads {
+        let base = positions.len() as u32;
+        for p in quad {
+            positions.push([p.x, p.y, 0.0]);
+            normals.push([0.0, 0.0, 1.0]);
+            uvs.push([
+                0.5 * (p.x / half_len + 1.0),
+                1.0 - 0.5 * (p.y / half_len + 1.0),
+            ]);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_indices(Indices::U32(indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+}
+
+fn build_light_color_mesh(color: LightColor) -> Mesh {
+    let r = TILE * 0.40;
+    let angle = color.shape_start_angle();
+    let outer = match color {
+        LightColor::Red => ring_polygon_points(32, r, angle),
+        LightColor::Green => transformed_polygon_points(
+            3,
+            r,
+            angle,
+            Vec2::new(1.08, 1.06),
+            Vec2::new(0.0, -TILE * 0.02),
+        ),
+        LightColor::Blue => ring_polygon_points(4, r, angle),
+        LightColor::Yellow => ring_polygon_points(4, r, angle),
+        LightColor::Purple => ring_polygon_points(5, r, angle),
+    };
+    let inset = ring_inset_for_sides(color.ring_sides(), r);
+    build_ring_mesh(&outer, inset)
 }
