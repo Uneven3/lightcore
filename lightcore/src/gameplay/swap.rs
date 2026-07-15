@@ -244,6 +244,15 @@ fn handle_power_combo_swap(
         accumulate_pop_delays(&mut pop_delays, &b_activation, grid, entity_info, ray_settings);
     }
 
+    vfx::stage_power_impact_jelly(
+        commands,
+        &[a_activation, b_activation],
+        grid,
+        entity_info,
+        &compound,
+        ray_settings,
+    );
+
     let points = rewards::apply_removal_rewards(
         commands,
         &compound,

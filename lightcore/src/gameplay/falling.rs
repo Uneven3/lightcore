@@ -206,11 +206,18 @@ pub(crate) fn apply_gravity(
     mut settled: ResMut<GravitySettled>,
     mut entities: Query<
         (Entity, &mut GridPos, &mut VisualPos, &mut Transform, Has<Spark>),
-        (With<FallPhysics>, With<Movable>, Without<PopAnim>),
+        (
+            With<FallPhysics>,
+            Or<(With<Movable>, With<Spark>)>,
+            Without<PopAnim>,
+        ),
     >,
     gravity_blocks: Res<GravityBlockSet>,
     layout: Res<GridLayout>,
-    locked_lights: Query<&GridPos, (With<Light>, With<BlocksGravity>, Without<Movable>)>,
+    locked_lights: Query<
+        &GridPos,
+        (With<Light>, With<BlocksGravity>, Without<Movable>, Without<Spark>),
+    >,
 ) {
     let shadow_set = &gravity_blocks.0;
 
@@ -243,7 +250,7 @@ pub(crate) fn apply_gravity(
         }
 
         let portal_target = layout
-            .fall_link(*pos)
+            .fall_target(*pos)
             .filter(|exit| !occupied.contains(&(exit.x, exit.y)));
         if let Some(target) = portal_target.or_else(|| straight_fall_target_in(*pos, &occupied, shadow_set, &layout))
         {
@@ -273,7 +280,7 @@ pub(crate) fn apply_gravity(
 
     for (e, pos, is_spark) in blocked_for_diagonal {
         let portal_target = layout
-            .fall_link(pos)
+            .fall_target(pos)
             .filter(|exit| !occupied.contains(&(exit.x, exit.y)));
         if let Some(target) = portal_target.or_else(|| straight_fall_target_in(pos, &occupied, shadow_set, &layout))
         {
@@ -377,6 +384,46 @@ mod tests {
         let mut app = App::new();
         app.add_systems(Update, validate_input_query_disjointness);
         app.update();
+    }
+
+    #[derive(Resource, Default)]
+    struct FallingPieceCount(usize);
+
+    fn count_falling_pieces(
+        pieces: Query<
+            (),
+            (
+                With<FallPhysics>,
+                Or<(With<Movable>, With<Spark>)>,
+                Without<PopAnim>,
+            ),
+        >,
+        locked_lights: Query<
+            &GridPos,
+            (With<Light>, With<BlocksGravity>, Without<Movable>, Without<Spark>),
+        >,
+        mut count: ResMut<FallingPieceCount>,
+    ) {
+        count.0 = pieces.iter().count();
+        let _ = locked_lights.iter().count();
+    }
+
+    #[test]
+    fn gravity_accepts_sparks_but_excludes_locked_lights() {
+        let mut app = App::new();
+        app.init_resource::<FallingPieceCount>()
+            .add_systems(Update, count_falling_pieces);
+        app.world_mut().spawn((Spark, FallPhysics, GridPos { x: 1, y: 4 }));
+        app.world_mut().spawn((
+            Light,
+            Stasis,
+            BlocksGravity,
+            GridPos { x: 1, y: 3 },
+        ));
+
+        app.update();
+
+        assert_eq!(app.world().resource::<FallingPieceCount>().0, 1);
     }
 
     #[test]
@@ -636,6 +683,7 @@ pub(crate) fn on_fall_complete(
     run: Res<RunState>,
     mut settled: ResMut<GravitySettled>,
     mode: Res<GameMode>,
+    layout: Res<GridLayout>,
     lights: Query<(), With<Light>>,
     sparks: Query<(Entity, &GridPos), With<Spark>>,
 ) {
@@ -646,7 +694,7 @@ pub(crate) fn on_fall_complete(
     }
     let mut any_collected = false;
     for (e, gp) in &sparks {
-        if gp.y == 0 {
+        if layout.is_spark_exit(*gp) {
             commands.entity(e).try_despawn();
             collected.0 += 1;
             let bonus = run.spark_bonus();

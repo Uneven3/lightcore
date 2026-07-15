@@ -47,10 +47,10 @@ pub(crate) fn sync_particle_mesh_settings(
     }
 }
 
-/// Tiny white specks flung outward in a near-even ring with a hard short life — the light's
-/// hollow membrane bursting like a soap bubble the instant its core is collected. Separate from
-/// `spawn_burst` (the colored core energy): these are smaller, faster, shorter and fade from the
-/// very start, so they read as a thin shell popping, not a colored puff lingering.
+/// Tiny lightcore-shaped fragments flung outward in a near-even ring with a hard short life — the
+/// light's membrane bursting like a soap bubble the instant its core is collected. `image` is the
+/// same per-color silhouette used by the lightcore itself (circle / triangle / square / diamond /
+/// pentagon), while `color` is HDR-bright so Bloom reads every fragment as emitted energy.
 pub(crate) fn spawn_membrane_pop(
     commands: &mut Commands,
     image: Handle<Image>,
@@ -65,11 +65,14 @@ pub(crate) fn spawn_membrane_pop(
         let speed = rng.random_range(TILE * 2.2..TILE * 3.4);
         let velocity = (Vec2::from_angle(angle) * speed).extend(0.0);
         commands.spawn((
-            Particle {
-                velocity,
+            Particle,
+            ParticleVelocity(velocity),
+            ParticleLifetime {
                 timer: Timer::from_seconds(rng.random_range(0.24..0.39), TimerMode::Once),
                 fade_start_frac: 0.0, // thin out from the very start as the shell expands
             },
+            ParticleDrag(PARTICLE_DRAG),
+            ParticleOrigin(world_pos),
             Sprite {
                 image: image.clone(),
                 color,
@@ -81,14 +84,44 @@ pub(crate) fn spawn_membrane_pop(
     }
 }
 
+/// Marker shared by every short-lived lightcore particle. Motion is deliberately split into
+/// independent components below so a power can change only the attributes it owns.
 #[derive(Component)]
-pub(crate) struct Particle {
-    velocity: Vec3,
+pub(crate) struct Particle;
+
+/// World-space velocity. Supernova can replace or add to this without knowing anything about the
+/// particle's sprite, lifetime, or rendering mesh.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ParticleVelocity(pub(crate) Vec3);
+
+/// Lifetime and alpha curve, kept separate from movement so effects can send a particle farther
+/// without extending every other particle's life by accident.
+#[derive(Component)]
+pub(crate) struct ParticleLifetime {
     timer: Timer,
     fade_start_frac: f32,
 }
 
-/// Spawns `count` small decelerating/fading circles radiating from `world_pos` in `color`.
+/// Per-particle damping. A Supernova particle can use a much lower drag than a normal membrane
+/// pop and therefore visibly travel away from the blast centre.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ParticleDrag(pub(crate) f32);
+
+/// Immutable birthplace of a particle. This is useful for explosion choreography even after its
+/// transform has moved, and avoids inferring its origin from a mutable `Transform`.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct ParticleOrigin(pub(crate) Vec3);
+
+/// Optional radial acceleration. It is intentionally an additive component: ordinary particles
+/// have no force, while a Supernova can attach this to precisely its own particles.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct RadialParticleForce {
+    pub(crate) centre: Vec3,
+    pub(crate) acceleration: f32,
+    pub(crate) max_speed: f32,
+}
+
+/// Spawns `count` small decelerating/fading circular energy particles radiating from `world_pos`.
 /// `color` should already be HDR-boosted (e.g. `LightColor::glow_color()`) so Bloom picks
 /// it up the same way it picks up `LightCore`.
 pub(crate) fn spawn_burst(
@@ -105,11 +138,14 @@ pub(crate) fn spawn_burst(
         let speed = rng.random_range(TILE * 1.3..TILE * 3.1);
         let velocity = (Vec2::from_angle(angle) * speed).extend(0.0);
         commands.spawn((
-            Particle {
-                velocity,
+            Particle,
+            ParticleVelocity(velocity),
+            ParticleLifetime {
                 timer: Timer::from_seconds(rng.random_range(0.38..0.68), TimerMode::Once),
                 fade_start_frac: 0.35,
             },
+            ParticleDrag(PARTICLE_DRAG),
+            ParticleOrigin(world_pos),
             Sprite {
                 image: image.clone(),
                 color,
@@ -123,21 +159,54 @@ pub(crate) fn spawn_burst(
 
 pub(crate) fn tick_particles(
     mut commands: Commands,
-    mut q: Query<(Entity, &mut Transform, &mut Sprite, &mut Particle)>,
+    mut q: Query<(
+        Entity,
+        &mut Transform,
+        &mut Sprite,
+        &mut ParticleVelocity,
+        &mut ParticleLifetime,
+        Option<&ParticleDrag>,
+        Option<&RadialParticleForce>,
+        &ParticleOrigin,
+    ), With<Particle>>,
     time: Res<Time>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut t, mut sprite, mut p) in &mut q {
-        p.timer.tick(time.delta());
-        t.translation += p.velocity * dt;
-        p.velocity *= (1.0 - PARTICLE_DRAG * dt).max(0.0);
+    for (e, mut t, mut sprite, mut velocity, mut lifetime, drag, force, origin) in &mut q {
+        lifetime.timer.tick(time.delta());
+        if let Some(force) = force {
+            let from_centre = (t.translation - force.centre).truncate();
+            // Particles born exactly at the centre need a valid first direction before their
+            // transform has had a chance to move. Their existing launch velocity provides that
+            // direction; origin is the stable fallback for particles that are repositioned.
+            let outward = if from_centre.length_squared() > f32::EPSILON {
+                from_centre.normalize()
+            } else {
+                let origin_direction = (origin.0 - force.centre).truncate();
+                if origin_direction.length_squared() > f32::EPSILON {
+                    origin_direction.normalize()
+                } else {
+                    velocity.0.truncate().normalize_or_zero()
+                }
+            }
+            .extend(0.0);
+            velocity.0 += outward * force.acceleration * dt;
+            let speed = velocity.0.length();
+            if speed > force.max_speed {
+                velocity.0 *= force.max_speed / speed;
+            }
+        }
+        t.translation += velocity.0 * dt;
+        let drag = drag.map_or(PARTICLE_DRAG, |drag| drag.0);
+        velocity.0 *= (1.0 - drag * dt).max(0.0);
 
-        let frac = p.timer.fraction();
-        if frac >= p.fade_start_frac {
-            let fade = (frac - p.fade_start_frac) / (1.0 - p.fade_start_frac).max(0.0001);
+        let frac = lifetime.timer.fraction();
+        if frac >= lifetime.fade_start_frac {
+            let fade = (frac - lifetime.fade_start_frac)
+                / (1.0 - lifetime.fade_start_frac).max(0.0001);
             sprite.color = sprite.color.with_alpha((1.0 - fade).max(0.0));
         }
-        if p.timer.is_finished() {
+        if lifetime.timer.is_finished() {
             commands.entity(e).try_despawn();
         }
     }

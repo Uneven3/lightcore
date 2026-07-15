@@ -19,8 +19,9 @@ pub(crate) struct GridPos {
 #[derive(Resource, Clone, Debug)]
 pub(crate) struct GridLayout {
     cells: HashSet<GridPos>,
-    fall_links: HashMap<GridPos, GridPos>,
+    fall_targets: HashMap<GridPos, GridPos>,
     spawn_entries: HashSet<GridPos>,
+    spark_exits: HashSet<GridPos>,
 }
 
 impl Default for GridLayout {
@@ -35,6 +36,7 @@ impl GridLayout {
     pub(crate) fn rectangles(rectangles: &[(i32, i32, i32, i32)]) -> Self {
         let mut cells = HashSet::new();
         let mut spawn_entries = HashSet::new();
+        let mut spark_exits = HashSet::new();
         for &(x0, y0, width, height) in rectangles {
             for x in x0..x0 + width {
                 for y in y0..y0 + height {
@@ -45,13 +47,15 @@ impl GridLayout {
                         x,
                         y: y0 + height - 1,
                     });
+                    spark_exits.insert(GridPos { x, y: y0 });
                 }
             }
         }
         Self {
             cells,
-            fall_links: HashMap::new(),
+            fall_targets: HashMap::new(),
             spawn_entries,
+            spark_exits,
         }
     }
 
@@ -59,13 +63,15 @@ impl GridLayout {
         self.cells.contains(&pos)
     }
 
-    pub(crate) fn link_fall(&mut self, from: GridPos, to: GridPos) {
+    /// Adds a directed gravity route. A portal is one presentation of this rule; the gravity
+    /// system only knows that a piece at `from` continues falling at `to`.
+    pub(crate) fn add_fall_route(&mut self, from: GridPos, to: GridPos) {
         assert!(self.contains(from) && self.contains(to));
-        self.fall_links.insert(from, to);
+        self.fall_targets.insert(from, to);
     }
 
-    pub(crate) fn fall_link(&self, from: GridPos) -> Option<GridPos> {
-        self.fall_links.get(&from).copied()
+    pub(crate) fn fall_target(&self, from: GridPos) -> Option<GridPos> {
+        self.fall_targets.get(&from).copied()
     }
 
     pub(crate) fn spawn_entries(&self) -> impl Iterator<Item = GridPos> + '_ {
@@ -74,6 +80,44 @@ impl GridLayout {
 
     pub(crate) fn cells_in_column(&self, x: i32) -> impl Iterator<Item = GridPos> + '_ {
         self.cells.iter().copied().filter(move |pos| pos.x == x)
+    }
+
+    /// Replaces the cells that consume falling sparks. A layout may expose only its terminal
+    /// subgrid, rather than every bottom row, by setting this explicitly.
+    pub(crate) fn set_spark_exits(&mut self, exits: impl IntoIterator<Item = GridPos>) {
+        let exits: HashSet<_> = exits.into_iter().collect();
+        assert!(exits.iter().all(|pos| self.contains(*pos)));
+        self.spark_exits = exits;
+    }
+
+    pub(crate) fn spark_exits(&self) -> impl Iterator<Item = GridPos> + '_ {
+        self.spark_exits.iter().copied()
+    }
+
+    pub(crate) fn is_spark_exit(&self, pos: GridPos) -> bool {
+        self.spark_exits.contains(&pos)
+    }
+
+    pub(crate) fn top_cell_in_column(&self, x: i32) -> Option<GridPos> {
+        self.cells_in_column(x).max_by_key(|pos| pos.y)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_and_spark_exits_are_layout_rules() {
+        let mut layout = GridLayout::rectangles(&[(0, 1, 2, 3), (5, 1, 2, 3)]);
+        let from = GridPos { x: 0, y: 1 };
+        let to = GridPos { x: 5, y: 3 };
+        layout.add_fall_route(from, to);
+        layout.set_spark_exits([GridPos { x: 5, y: 1 }, GridPos { x: 6, y: 1 }]);
+
+        assert_eq!(layout.fall_target(from), Some(to));
+        assert!(layout.is_spark_exit(GridPos { x: 5, y: 1 }));
+        assert!(!layout.is_spark_exit(GridPos { x: 0, y: 1 }));
     }
 }
 

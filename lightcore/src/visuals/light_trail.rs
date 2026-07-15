@@ -239,7 +239,12 @@ pub(crate) fn on_power_blast_trail(
                     // Sprite con glow_image para que el orbe sea visible viajando de la
                     // estrella al target. Alpha=0 hasta que el delay expira.
                     commands.spawn((
-                        make_beam(vec![source, target], color, delay, ray.trail_duration),
+                        make_beam(
+                            vec![source, target],
+                            color,
+                            delay,
+                            ray.trail_duration,
+                        ),
                         Transform::from_translation(source.with_z(1.8)),
                         Sprite {
                             image: cache.glow_image.clone(),
@@ -251,7 +256,12 @@ pub(crate) fn on_power_blast_trail(
                 }
             } else {
                 commands.spawn((
-                    make_beam(path.clone(), color, delay, ray.trail_duration),
+                    make_beam(
+                        path.clone(),
+                        color,
+                        delay,
+                        ray.trail_duration,
+                    ),
                     Transform::from_translation(source.with_z(1.8)),
                 ));
             }

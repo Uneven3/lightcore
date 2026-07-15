@@ -11,6 +11,9 @@ pub(crate) enum GameState {
     LevelMenu,
     /// Settings screen (Bloom/shake/partículas/volumen), reachable from `MainMenu`.
     Options,
+    /// Technical visual/timing controls, reached from the regular Options screen. Kept as a
+    /// separate state so it has its own back navigation and cannot leave both menus in the UI tree.
+    AdvancedOptions,
     /// One-shot board setup for the chosen `GameMode`. Runs its `OnEnter` system, then immediately
     /// advances to `Playing`. Kept separate from `Playing` because `Playing` is re-entered on every
     /// cascade settle — populating there would rebuild the board mid-match.

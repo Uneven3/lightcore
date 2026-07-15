@@ -153,11 +153,12 @@ fn populate_board(
     shadow_count: &mut u32,
     hollow_chance: f32,
     weights: [f32; 5],
+    layout: &GridLayout,
 ) {
     let spark_positions: HashSet<GridPos> = if level.goal == LevelGoal::Sparks {
         spark_columns(level.sparks_total)
-            .iter()
-            .map(|&x| GridPos { x, y: GRID_H - 1 })
+            .into_iter()
+            .filter_map(|x| layout.top_cell_in_column(x))
             .collect()
     } else {
         HashSet::new()
@@ -186,9 +187,8 @@ fn populate_board(
     }
 
     if level.goal == LevelGoal::Sparks {
-        let columns = spark_columns(level.sparks_total);
-        spawn_ingredient_exits(commands, cache);
-        spawn_sparks(commands, cache, &columns);
+        spawn_ingredient_exits(commands, cache, layout.spark_exits());
+        spawn_sparks(commands, cache, spark_positions.iter().copied());
     }
 
     if level.goal == LevelGoal::ClearShadow {
@@ -413,6 +413,7 @@ pub(crate) fn setup_match(
                 &mut shadow_count.0,
                 HOLLOW_BASE_CHANCE,
                 [1.0; 5],
+                &layout,
             );
         }
         GameMode::Run(depth) => {
@@ -438,6 +439,7 @@ pub(crate) fn setup_match(
                 &mut shadow_count.0,
                 hollow_chance,
                 weights,
+                &layout,
             );
         }
         GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) | GameMode::TeleportTest => {
@@ -483,7 +485,7 @@ fn populate_teleport_board(commands: &mut Commands, layout: &mut GridLayout) {
         (RIGHT_X, SUBGRID_Y, SUBGRID_W, SUBGRID_H),
     ]);
     for x in 0..SUBGRID_W {
-        layout.link_fall(
+        layout.add_fall_route(
             GridPos { x, y: SUBGRID_Y },
             GridPos {
                 x: RIGHT_X + x,
@@ -491,6 +493,12 @@ fn populate_teleport_board(commands: &mut Commands, layout: &mut GridLayout) {
             },
         );
     }
+    // Only the terminal (right) subgrid consumes sparks. A future ingredient level can reuse
+    // this layout without teaching the falling system where its last board happens to be.
+    layout.set_spark_exits((0..SUBGRID_W).map(|x| GridPos {
+        x: RIGHT_X + x,
+        y: SUBGRID_Y,
+    }));
     let mut rng = rand::rng();
     for offset_x in [0, RIGHT_X] {
         for (mut pos, color, kind) in generate_board(&mut rng, &HashSet::new(), 0.0, [1.0; 5])
@@ -1102,6 +1110,7 @@ pub(crate) fn handle_restart(
     mut res: ResetParams,
     mut next_state: ResMut<NextState<GameState>>,
     cache: Res<VisualCache>,
+    layout: Res<GridLayout>,
     match_entities: Query<Entity, TransientMatchEntity>,
 ) {
     if !actions.confirm {
@@ -1148,6 +1157,7 @@ pub(crate) fn handle_restart(
         &mut res.shadow.0,
         hollow_chance,
         weights,
+        &layout,
     );
     next_state.set(GameState::Playing);
 }

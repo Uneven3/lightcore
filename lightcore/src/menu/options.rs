@@ -30,11 +30,14 @@ impl Plugin for OptionsPlugin {
             .init_resource::<WindowSettings>()
             .add_systems(OnEnter(GameState::Options), spawn_options)
             .add_systems(OnExit(GameState::Options), despawn_options)
+            .add_systems(OnEnter(GameState::AdvancedOptions), spawn_advanced_options)
+            .add_systems(OnExit(GameState::AdvancedOptions), despawn_options)
             .add_systems(
                 Update,
                 (
                     button_hover_system,
                     back_button_system,
+                    advanced_options_button_system,
                     position_thumbs,
                     apply_slider_values,
                     update_slider_value_labels,
@@ -50,7 +53,10 @@ impl Plugin for OptionsPlugin {
                     update_options_static_labels,
                     scroll_drag_system,
                 )
-                    .run_if(in_state(GameState::Options)),
+                    .run_if(
+                        in_state(GameState::Options)
+                            .or_else(in_state(GameState::AdvancedOptions)),
+                    ),
             );
     }
 }
@@ -60,6 +66,12 @@ struct OptionsRoot;
 
 #[derive(Component)]
 struct BackButton;
+
+#[derive(Component)]
+struct AdvancedOptionsButton;
+
+#[derive(Component)]
+struct AdvancedOptionsLabel;
 
 #[derive(Component)]
 struct FpsButton;
@@ -196,12 +208,8 @@ enum SliderTarget {
 fn spawn_options(
     mut commands: Commands,
     settings: Res<WindowSettings>,
-    glow: Res<GlowSettings>,
-    particles: Res<ParticleSettings>,
     gv: Res<GlobalVolume>,
     fps_target: Res<FpsTarget>,
-    ray: Res<RaySettings>,
-    shards: Res<ShardSettings>,
     profile: Res<PlatformProfile>,
     asset_server: Res<AssetServer>,
 ) {
@@ -330,79 +338,6 @@ fn spawn_options(
                 button_index,
                 settings.language.label(),
             );
-
-            spawn_slider(
-                root,
-                "Glow brillo",
-                SliderTarget::GlowBrightness,
-                0.5,
-                4.0,
-                glow.brightness,
-            );
-            spawn_slider(
-                root,
-                "Glow radio ext",
-                SliderTarget::GlowOuterRadius,
-                0.3,
-                2.5,
-                glow.outer_radius,
-            );
-            spawn_slider(
-                root,
-                "Glow alpha ext",
-                SliderTarget::GlowOuterAlpha,
-                0.0,
-                0.6,
-                glow.outer_alpha,
-            );
-            spawn_slider(
-                root,
-                "Glow radio int",
-                SliderTarget::GlowInnerRadius,
-                0.15,
-                1.2,
-                glow.inner_radius,
-            );
-            spawn_slider(
-                root,
-                "Glow alpha int",
-                SliderTarget::GlowInnerAlpha,
-                0.0,
-                1.0,
-                glow.inner_alpha,
-            );
-            spawn_slider(
-                root,
-                "Pop burst count",
-                SliderTarget::PopBurstCount,
-                1.0,
-                20.0,
-                particles.pop_burst_count as f32,
-            );
-            spawn_slider(
-                root,
-                "Burst radius",
-                SliderTarget::BurstRadius,
-                TILE * 0.01,
-                TILE * 0.15,
-                particles.burst_radius,
-            );
-            spawn_slider(
-                root,
-                "Membrane radius",
-                SliderTarget::MembraneRadius,
-                TILE * 0.005,
-                TILE * 0.06,
-                particles.membrane_radius,
-            );
-            spawn_slider(
-                root,
-                "Trail particles",
-                SliderTarget::TrailParticleCount,
-                0.0,
-                6.0,
-                particles.trail_particle_count as f32,
-            );
             spawn_slider(
                 root,
                 "Volumen",
@@ -411,99 +346,115 @@ fn spawn_options(
                 1.5,
                 gv.volume.to_linear(),
             );
-
-            // ── Rayos ───────────────────────────────────────────────────────────────────
-            spawn_slider(
+            button_index += 1;
+            spawn_text_button(
                 root,
-                "Velocidad rayo",
-                SliderTarget::RaySpeed,
-                200.0,
-                1500.0,
-                ray.speed,
-            );
-            spawn_slider(
-                root,
-                "Duracion pop",
-                SliderTarget::PopDuration,
-                0.03,
-                0.35,
-                ray.pop_duration,
-            );
-            spawn_slider(
-                root,
-                "Stagger estrella",
-                SliderTarget::StarStagger,
-                0.005,
-                0.12,
-                ray.stagger_secs,
-            );
-            spawn_slider(
-                root,
-                "Ancho bolt",
-                SliderTarget::BoltWidth,
-                0.2,
-                1.0,
-                ray.bolt_width_frac,
-            );
-            spawn_slider(
-                root,
-                "Duracion trail",
-                SliderTarget::TrailDuration,
-                0.1,
-                0.8,
-                ray.trail_duration,
-            );
-
-            // ── Shards ──────────────────────────────────────────────────────────────────
-            spawn_slider(
-                root,
-                "Shard vel. min",
-                SliderTarget::ShardMinSecs,
-                0.3,
-                1.5,
-                shards.min_secs,
-            );
-            spawn_slider(
-                root,
-                "Shard vel. max",
-                SliderTarget::ShardMaxSecs,
-                0.5,
-                2.5,
-                shards.max_secs,
-            );
-            spawn_slider(
-                root,
-                "Escala shard",
-                SliderTarget::ShardBaseSize,
-                0.15,
-                1.2,
-                shards.base_size_frac,
-            );
-            spawn_slider(
-                root,
-                "Shard curva",
-                SliderTarget::ShardCurve,
-                0.3,
-                3.0,
-                shards.curve_frac,
-            );
-            spawn_slider(
-                root,
-                "Shard brillo HDR",
-                SliderTarget::ShardHdrBoost,
-                1.0,
-                8.0,
-                shards.hdr_boost,
-            );
-            spawn_slider(
-                root,
-                "Shard pausa",
-                SliderTarget::ShardHold,
-                0.0,
-                0.4,
-                shards.hold_secs,
+                AdvancedOptionsButton,
+                AdvancedOptionsLabel,
+                button_index,
+                "Opciones avanzadas",
             );
         });
+}
+
+/// Technical tuning lives on a separate screen so normal settings stay short and touch-friendly.
+/// It remains a regular UI tree (not a modal) and is entered only from `Options`.
+fn spawn_advanced_options(
+    mut commands: Commands,
+    glow: Res<GlowSettings>,
+    particles: Res<ParticleSettings>,
+    ray: Res<RaySettings>,
+    shards: Res<ShardSettings>,
+) {
+    commands
+        .spawn((
+            OptionsRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                overflow: Overflow::scroll_y(),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexStart,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(0.0), Val::Px(28.0)),
+                ..default()
+            },
+            ScrollArea,
+            bevy::ui::ScrollPosition::default(),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("Opciones avanzadas"),
+                TextFont {
+                    font_size: FontSize::Px(34.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.4, 1.6, 2.2)),
+            ));
+            root.spawn((
+                Button,
+                BackButton,
+                MenuButton { index: 0 },
+                Node {
+                    width: Val::Px(180.0),
+                    height: Val::Px(46.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    margin: UiRect::bottom(Val::Px(10.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    ..default()
+                },
+                BackgroundColor(BTN_IDLE),
+                BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
+            ))
+            .with_children(|button| {
+                button.spawn((
+                    Text::new("←"),
+                    TextFont {
+                        font_size: FontSize::Px(28.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.78, 0.92, 1.0)),
+                ));
+            });
+            spawn_advanced_sliders(root, &glow, &particles, &ray, &shards);
+        });
+}
+
+fn spawn_advanced_sliders(
+    root: &mut ChildSpawnerCommands,
+    glow: &GlowSettings,
+    particles: &ParticleSettings,
+    ray: &RaySettings,
+    shards: &ShardSettings,
+) {
+    for (label, target, min, max, value) in [
+        ("Glow brillo", SliderTarget::GlowBrightness, 0.5, 4.0, glow.brightness),
+        ("Glow radio ext", SliderTarget::GlowOuterRadius, 0.3, 2.5, glow.outer_radius),
+        ("Glow alpha ext", SliderTarget::GlowOuterAlpha, 0.0, 0.6, glow.outer_alpha),
+        ("Glow radio int", SliderTarget::GlowInnerRadius, 0.15, 1.2, glow.inner_radius),
+        ("Glow alpha int", SliderTarget::GlowInnerAlpha, 0.0, 1.0, glow.inner_alpha),
+        ("Pop burst count", SliderTarget::PopBurstCount, 1.0, 20.0, particles.pop_burst_count as f32),
+        ("Burst radius", SliderTarget::BurstRadius, TILE * 0.01, TILE * 0.15, particles.burst_radius),
+        ("Membrane radius", SliderTarget::MembraneRadius, TILE * 0.005, TILE * 0.06, particles.membrane_radius),
+        ("Trail particles", SliderTarget::TrailParticleCount, 0.0, 6.0, particles.trail_particle_count as f32),
+        ("Velocidad rayo", SliderTarget::RaySpeed, 200.0, 1500.0, ray.speed),
+        ("Duracion pop", SliderTarget::PopDuration, 0.03, 0.35, ray.pop_duration),
+        ("Stagger estrella", SliderTarget::StarStagger, 0.005, 0.12, ray.stagger_secs),
+        ("Ancho bolt", SliderTarget::BoltWidth, 0.2, 1.0, ray.bolt_width_frac),
+        ("Duracion trail", SliderTarget::TrailDuration, 0.1, 0.8, ray.trail_duration),
+        // Non-overlapping limits guarantee min < max from the UI itself.
+        ("Shard vel. min", SliderTarget::ShardMinSecs, 0.30, 0.95, shards.min_secs),
+        ("Shard vel. max", SliderTarget::ShardMaxSecs, 1.00, 2.50, shards.max_secs),
+        ("Escala shard", SliderTarget::ShardBaseSize, 0.15, 1.2, shards.base_size_frac),
+        ("Shard curva", SliderTarget::ShardCurve, 0.3, 3.0, shards.curve_frac),
+        ("Shard brillo HDR", SliderTarget::ShardHdrBoost, 1.0, 8.0, shards.hdr_boost),
+        ("Shard pausa", SliderTarget::ShardHold, 0.0, 0.4, shards.hold_secs),
+    ] {
+        spawn_slider(root, label, target, min, max, value);
+    }
 }
 
 fn format_slider_value(target: SliderTarget, v: f32) -> String {
@@ -653,8 +604,10 @@ fn apply_slider_values(
             SliderTarget::StarStagger => ray.stagger_secs = value.0,
             SliderTarget::BoltWidth => ray.bolt_width_frac = value.0,
             SliderTarget::TrailDuration => ray.trail_duration = value.0,
-            SliderTarget::ShardMinSecs => shards.min_secs = value.0,
-            SliderTarget::ShardMaxSecs => shards.max_secs = value.0,
+            // The two controls deliberately have non-overlapping UI ranges; clamp here as a
+            // second line of defence for values restored/changed by code rather than the slider.
+            SliderTarget::ShardMinSecs => shards.min_secs = value.0.clamp(0.30, 0.95),
+            SliderTarget::ShardMaxSecs => shards.max_secs = value.0.clamp(1.00, 2.50),
             SliderTarget::ShardBaseSize => shards.base_size_frac = value.0,
             SliderTarget::ShardCurve => shards.curve_frac = value.0,
             SliderTarget::ShardHdrBoost => shards.hdr_boost = value.0,
@@ -982,13 +935,31 @@ fn back_button_system(
     actions: Res<InputActions>,
     menu_activated: Res<MenuActivated>,
     options_return: Res<OptionsReturn>,
+    state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
 ) {
     let clicked = interactions
         .iter()
         .any(|(e, i)| activated(&i, e, &menu_activated));
     if clicked || actions.menu_back() {
-        next.set(options_return.0.clone());
+        if *state.get() == GameState::AdvancedOptions {
+            next.set(GameState::Options);
+        } else {
+            next.set(options_return.0.clone());
+        }
+    }
+}
+
+fn advanced_options_button_system(
+    interactions: Query<(Entity, Ref<Interaction>), With<AdvancedOptionsButton>>,
+    menu_activated: Res<MenuActivated>,
+    mut next: ResMut<NextState<GameState>>,
+) {
+    if interactions
+        .iter()
+        .any(|(entity, interaction)| activated(&interaction, entity, &menu_activated))
+    {
+        next.set(GameState::AdvancedOptions);
     }
 }
 

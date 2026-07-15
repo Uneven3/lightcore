@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use std::collections::HashSet;
+use rand::Rng;
+use std::collections::{HashSet, VecDeque};
 
 use super::{GameMode, SpawnComplete, SuperComboPending};
 use crate::board::{HOLLOW_BASE_CHANCE, random_basic_kind, spawn_light};
@@ -12,11 +13,38 @@ use crate::state::GameState;
 /// the grid (which would look like they popped into existence) and never from far off-screen.
 const SPAWN_GAP: f32 = 2.0;
 
-/// Fixed entry duration for every freshly spawned light, regardless of how far it has to
-/// fall — achieved via a per-light `FallSpeed`, not the shared gravity speed. Lights with
-/// less ground to cover fall slower; deeper ones fall faster — same arrival window, visibly
-/// different speeds (the "falling together but at slightly different speeds" feel).
-const SPAWN_FALL_DURATION: f32 = 0.25;
+/// Each drop lands quickly; the stream feel comes from scheduling, not from slowing the board.
+const SPAWN_FALL_DURATION: f32 = 0.22;
+/// One light enters at a time. This is short enough to keep refill responsive while avoiding the
+/// synchronized row/column "window blind" produced by spawning every missing light in one frame.
+const DRIP_INTERVAL: f32 = 0.028;
+
+#[derive(Clone, Copy)]
+struct SpawnRequest {
+    entry: GridPos,
+    pos: GridPos,
+    color: LightColor,
+    kind: LightKind,
+}
+
+/// The pending refill stream. It is a resource so the cadence is independent from board layout:
+/// any number of subgrids and spawn entries can contribute drops to the same visual flow.
+#[derive(Resource)]
+pub(crate) struct RefillQueue {
+    pending: VecDeque<SpawnRequest>,
+    cadence: Timer,
+    emitted_this_frame: bool,
+}
+
+impl Default for RefillQueue {
+    fn default() -> Self {
+        Self {
+            pending: VecDeque::new(),
+            cadence: Timer::from_seconds(DRIP_INTERVAL, TimerMode::Repeating),
+            emitted_this_frame: false,
+        }
+    }
+}
 
 /// Empty cells that can actually be fed from a column's spawn entry. A blocker/shadow cuts the
 /// vertical feed, so cells below it deliberately do not appear in this result.
@@ -42,7 +70,6 @@ fn refill_positions(
 }
 
 pub(crate) fn spawn_new_lights(
-    mut commands: Commands,
     mut super_combo: ResMut<SuperComboPending>,
     mode: Res<GameMode>,
     run: Res<RunState>,
@@ -50,7 +77,9 @@ pub(crate) fn spawn_new_lights(
     sparks: Query<&GridPos, With<Spark>>,
     gravity_blockers: Query<&GridPos, With<BlocksGravity>>,
     layout: Res<GridLayout>,
+    mut refill: ResMut<RefillQueue>,
 ) {
+    *refill = RefillQueue::default();
     let mut occupied = HashSet::new();
     for p in &lights {
         occupied.insert(*p);
@@ -77,16 +106,15 @@ pub(crate) fn spawn_new_lights(
     } else {
         [1.0; 5]
     };
+    let mut columns = Vec::new();
     for entry in layout.spawn_entries() {
         // Only refill the section that is connected to this column's top entry. A shadow splits
         // the column: cells beneath it have no path from the spawn point and must stay empty
         // until gravity can reach them from a side route/portal.
         let empty_positions = refill_positions(&layout, entry, &occupied, &blocked);
         let topmost_index = empty_positions.len().saturating_sub(1);
+        let mut requests = Vec::new();
         for (index, pos) in empty_positions.into_iter().enumerate() {
-            let top_of_grid = to_world(entry);
-            let above = top_of_grid + Vec3::Y * TILE * SPAWN_GAP;
-            let fall_speed = (above - to_world(pos)).length() / SPAWN_FALL_DURATION;
             let color = LightColor::random_weighted(&mut rng, weights);
             // Place a power light at the topmost newly spawned slot for each column
             let kind = if index == topmost_index && power_placed < power_row.len() {
@@ -96,15 +124,56 @@ pub(crate) fn spawn_new_lights(
             } else {
                 random_basic_kind(&mut rng, hollow_chance)
             };
-            let e = spawn_light(&mut commands, pos, color, kind, above);
-            commands.entity(e).insert(FallSpeed(fall_speed));
-            // The power's cores are built by `visuals::core_motion::rebuild_cores` (off the
-            // `LightKind` `spawn_light` set) — no explicit indicator needed.
+            requests.push(SpawnRequest {
+                entry,
+                pos,
+                color,
+                kind,
+            });
+        }
+        columns.push(requests);
+    }
+
+    // Interleave bottom-to-top streams from shuffled columns. A new drop never waits for an
+    // entire column, so the board reads as a rapid drip/rainfall rather than a sweeping curtain.
+    let max_depth = columns.iter().map(Vec::len).max().unwrap_or(0);
+    let mut order: Vec<usize> = (0..columns.len()).collect();
+    for depth in 0..max_depth {
+        for i in (1..order.len()).rev() {
+            let j = rng.random_range(0..=i);
+            order.swap(i, j);
+        }
+        for &column in &order {
+            if let Some(request) = columns[column].get(depth) {
+                refill.pending.push_back(*request);
+            }
         }
     }
-    // NOTE: do NOT signal completion here — the new lights are still falling in from above.
-    // `wait_for_spawn_settle` fires `SpawnComplete` once they've visually arrived, so powers are
-    // never consumed before the board looks full.
+}
+
+/// Emits one refill drop per cadence beat. Keeping the actual spawn separate from planning lets
+/// `wait_for_spawn_settle` know whether more lights are still scheduled.
+pub(crate) fn emit_refill_drop(
+    mut commands: Commands,
+    mut refill: ResMut<RefillQueue>,
+    time: Res<Time>,
+) {
+    refill.emitted_this_frame = false;
+    if refill.pending.is_empty() || !refill.cadence.tick(time.delta()).just_finished() {
+        return;
+    }
+    let request = refill.pending.pop_front().expect("pending was checked");
+    let above = to_world(request.entry) + Vec3::Y * TILE * SPAWN_GAP;
+    let fall_speed = (above - to_world(request.pos)).length() / SPAWN_FALL_DURATION;
+    let entity = spawn_light(
+        &mut commands,
+        request.pos,
+        request.color,
+        request.kind,
+        above,
+    );
+    commands.entity(entity).insert(FallSpeed(fall_speed));
+    refill.emitted_this_frame = true;
 }
 
 #[cfg(test)]
@@ -129,7 +198,13 @@ mod tests {
 pub(crate) fn wait_for_spawn_settle(
     mut commands: Commands,
     lights: Query<(&GridPos, &VisualPos), With<Light>>,
+    refill: Res<RefillQueue>,
 ) {
+    // A just-issued command is not visible to this query until the next frame. Waiting one frame
+    // prevents the last drop from being skipped when the queue becomes empty.
+    if !refill.pending.is_empty() || refill.emitted_this_frame {
+        return;
+    }
     let all_settled = lights
         .iter()
         .all(|(gp, vp)| vp.0.distance(to_world(*gp)) < TILE * 0.02);

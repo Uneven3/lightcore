@@ -29,12 +29,14 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(GameState::MainMenu), reset_focus)
             .add_systems(OnEnter(GameState::LevelMenu), reset_focus)
             .add_systems(OnEnter(GameState::Options), reset_focus)
+            .add_systems(OnEnter(GameState::AdvancedOptions), reset_focus)
             .add_systems(OnEnter(GameState::Paused), reset_focus)
             .add_systems(
                 Update,
                 menu_nav.run_if(
                     in_state(GameState::MainMenu)
                         .or_else(in_state(GameState::Options))
+                        .or_else(in_state(GameState::AdvancedOptions))
                         .or_else(in_state(GameState::Paused)),
                 ),
             );

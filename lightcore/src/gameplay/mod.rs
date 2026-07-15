@@ -57,6 +57,7 @@ impl Plugin for GameplayPlugin {
             .init_resource::<LevelTimer>()
             .init_resource::<PowerActivationQueue>()
             .init_resource::<SuperComboPending>()
+            .init_resource::<spawning::RefillQueue>()
             .init_resource::<shop::Shop>()
             .init_resource::<input::BoardCursor>()
             .add_observer(swap::on_swap_happened)
@@ -127,6 +128,9 @@ impl Plugin for GameplayPlugin {
                 Update,
                 vfx::tick_pending_light_transform.run_if(in_state(GameState::Popping)),
             )
+            // Impact jelly can deliberately outlive Popping: a Supernova's outer shockwave
+            // starts only after its destroyed cells have finished dissolving.
+            .add_systems(Update, vfx::tick_impact_jelly)
             .add_systems(
                 Update,
                 falling::apply_gravity
@@ -135,9 +139,14 @@ impl Plugin for GameplayPlugin {
             )
             .add_systems(
                 Update,
-                spawning::wait_for_spawn_settle
-                    .run_if(in_state(GameState::Spawning))
-                    .after(lerp_visual_pos),
+                (
+                    spawning::emit_refill_drop,
+                    spawning::wait_for_spawn_settle
+                        .after(spawning::emit_refill_drop)
+                        .after(lerp_visual_pos),
+                )
+                    .chain()
+                    .run_if(in_state(GameState::Spawning)),
             )
             .add_systems(
                 Update,

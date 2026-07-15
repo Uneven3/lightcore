@@ -47,6 +47,7 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::MainMenu), hide_hud)
             .add_systems(OnEnter(GameState::LevelMenu), hide_hud)
             .add_systems(OnEnter(GameState::Options), hide_hud)
+            .add_systems(OnEnter(GameState::AdvancedOptions), hide_hud)
             .add_systems(
                 OnEnter(GameState::Loading),
                 (show_hud, reset_level_tutorial_shown),

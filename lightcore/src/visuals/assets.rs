@@ -1,5 +1,4 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::color::Srgba;
 use bevy::image::Image;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -44,9 +43,8 @@ pub(crate) struct VisualCache {
     /// per kind via `Sprite::custom_size`); `glow_image` is a radial falloff for the halo.
     pub(crate) core_image: Handle<Image>,
     pub(crate) glow_image: Handle<Image>,
-    /// Per-`LightColor` hot-core disc for score shards (see `radial_hot_core_image`) — white at the
-    /// center, fading to the light's own hue toward the rim, so a captured light reads as a real
-    /// emitter instead of a flat tinted dot.
+    /// Per-`LightColor` hot-core disc for score shards: white at the center, fading to the light's
+    /// hue at the rim. Score shards are deliberately round even when their source core is shaped.
     shard_core_image: [Handle<Image>; 5],
     /// Per-`LightColor` shaped core disc for a light's own `LightCore` nucleus dots (see
     /// `shaped_core_image`) — circle/triangle/square/diamond/pentagon matching that color's ring,
@@ -235,23 +233,15 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Radial "hot core" disc, one per `LightColor`: pure white at the very center, blending out to
-/// the light's own color by `white_frac` of the radius, then solid color out to the same
-/// anti-aliased rim as `core_image`. A plain color-tinted white disc (the old `core_image` +
-/// per-instance `Sprite::color` approach) reads as a flat blob of paint; real bright light sources
-/// clip to white at the emitter and only show their true hue where the intensity has fallen off, so
-/// baking that gradient into the texture is what makes a score shard read as an actual light instead
-/// of a colored dot. RGB is baked per-color at cache-build time (`LightColor` is a fixed palette);
-/// `Sprite::color` still applies a uniform (hue-preserving) HDR brightness multiplier at spawn time.
+/// Round hot-core texture for the score-shard particles. Its hue is baked because the additive
+/// material drives brightness, while the separate halo supplies the larger coloured glow.
 fn radial_hot_core_image(
     images: &mut Assets<Image>,
     size: u32,
     color: Color,
     white_frac: f32,
 ) -> Handle<Image> {
-    let Srgba {
-        red, green, blue, ..
-    } = color.to_srgba();
+    let color = color.to_srgba();
     let r = size as f32 / 2.0;
     let mut data = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
@@ -260,15 +250,12 @@ fn radial_hot_core_image(
             let dy = y as f32 + 0.5 - r;
             let d = ((dx * dx + dy * dy).sqrt() / r).min(1.0);
             let t = smoothstep(0.0, white_frac, d);
-            let cr = 1.0 + (red - 1.0) * t;
-            let cg = 1.0 + (green - 1.0) * t;
-            let cb = 1.0 + (blue - 1.0) * t;
-            let a = 1.0 - smoothstep(0.80, 1.0, d);
+            let alpha = 1.0 - smoothstep(0.80, 1.0, d);
             let i = ((y * size + x) * 4) as usize;
-            data[i] = (cr.clamp(0.0, 1.0) * 255.0) as u8;
-            data[i + 1] = (cg.clamp(0.0, 1.0) * 255.0) as u8;
-            data[i + 2] = (cb.clamp(0.0, 1.0) * 255.0) as u8;
-            data[i + 3] = (a.clamp(0.0, 1.0) * 255.0) as u8;
+            data[i] = ((1.0 + (color.red - 1.0) * t).clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 1] = ((1.0 + (color.green - 1.0) * t).clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 2] = ((1.0 + (color.blue - 1.0) * t).clamp(0.0, 1.0) * 255.0) as u8;
+            data[i + 3] = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         }
     }
     images.add(Image::new(

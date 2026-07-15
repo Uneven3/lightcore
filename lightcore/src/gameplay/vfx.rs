@@ -5,12 +5,183 @@
 //! sites (`swap::on_swap_happened` paths A/B and `chain::check_chain_matches` phases 1/2) in sync.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::popping::{accumulate_pop_delays, merge_pop_delay};
 use super::{PowerBlastTrail, PowerCombo, PowerConsumed};
+use crate::core::easing::damped_squash;
 use crate::core::prelude::*;
 use crate::visuals::RaySettings;
+
+const IMPACT_JELLY_DURATION: f32 = 0.48;
+const IMPACT_JELLY_AMOUNT: f32 = 0.16;
+const IMPACT_JELLY_CYCLES: f32 = 2.0;
+/// Small visual beat after a membrane has finished dissolving before its neighbour reacts.
+const JELLY_AFTER_POP_SECS: f32 = 0.06;
+const SUPERNOVA_JELLY_STAGGER: f32 = 0.09;
+
+/// A short impact wobble for a light that survives a nearby power blast. It is presentation-only:
+/// matching, gravity and the board entities remain completely unchanged.
+#[derive(Component)]
+pub(crate) struct ImpactJelly {
+    delay: Option<Timer>,
+    timer: Timer,
+    horizontal: bool,
+}
+
+#[derive(Clone, Copy)]
+struct JellyRequest {
+    delay_secs: f32,
+    horizontal: bool,
+}
+
+fn request_jelly(
+    requests: &mut HashMap<Entity, JellyRequest>,
+    entity: Entity,
+    delay_secs: f32,
+    horizontal: bool,
+) {
+    let request = JellyRequest {
+        delay_secs,
+        horizontal,
+    };
+    match requests.get(&entity) {
+        Some(previous) if previous.delay_secs <= delay_secs => {}
+        _ => {
+            requests.insert(entity, request);
+        }
+    }
+}
+
+/// Stages contact wobble for every ray/cross and the outward shockwave around every Supernova.
+/// `removed` is the complete wave result, so a light that will pop from another overlapping power
+/// never receives a misleading survivor wobble.
+pub(crate) fn stage_power_impact_jelly(
+    commands: &mut Commands,
+    activations: &[PowerActivation],
+    grid: &Grid,
+    entity_info: &EntityInfo,
+    removed: &HashSet<Entity>,
+    settings: &RaySettings,
+) {
+    let mut requests = HashMap::new();
+
+    for activation in activations {
+        if !matches!(activation.kind, LightKind::RayH | LightKind::RayV | LightKind::Cross) {
+            continue;
+        }
+        let source = to_world(activation.pos);
+        for hit in blast_path(activation, entity_info) {
+            // The neighbouring survivor reacts after this hit light has fully dissolved, never
+            // before the beam has consumed it.
+            let delay = settings.pop_delay(to_world(hit).distance(source))
+                + settings.pop_duration
+                + JELLY_AFTER_POP_SECS;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let neighbour = GridPos {
+                        x: hit.x + dx,
+                        y: hit.y + dy,
+                    };
+                    if let Some(&(entity, _, _)) = grid.get(&neighbour)
+                        && !removed.contains(&entity)
+                    {
+                        request_jelly(&mut requests, entity, delay, dx.abs() >= dy.abs());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut consumed_supernovas = HashSet::new();
+    for (index, activation) in activations.iter().enumerate() {
+        if activation.kind != LightKind::Supernova || consumed_supernovas.contains(&index) {
+            continue;
+        }
+        let mut center = activation.pos;
+        let mut destroyed_radius = 1;
+        for (other_index, other) in activations.iter().enumerate().skip(index + 1) {
+            if other.kind == LightKind::Supernova
+                && (other.pos.x - activation.pos.x).abs() + (other.pos.y - activation.pos.y).abs()
+                    == 1
+            {
+                // A double Supernova clears 5×5; its jelly border is therefore 7×7.
+                center = GridPos {
+                    x: (activation.pos.x + other.pos.x) / 2,
+                    y: (activation.pos.y + other.pos.y) / 2,
+                };
+                destroyed_radius = 2;
+                consumed_supernovas.insert(other_index);
+                break;
+            }
+        }
+
+        let outer_radius = destroyed_radius + 1;
+        // Wait until the furthest cell in the destroyed square has completed its PopAnim. Only
+        // then does the shockwave reach the surviving outer ring.
+        let destroyed_edge_distance = destroyed_radius as f32 * TILE * std::f32::consts::SQRT_2;
+        let base_delay = destroyed_edge_distance / settings.speed
+            + settings.pop_duration
+            + JELLY_AFTER_POP_SECS;
+        for (&pos, &(entity, _, _)) in grid {
+            if removed.contains(&entity) {
+                continue;
+            }
+            let dx = (pos.x - center.x).abs();
+            let dy = (pos.y - center.y).abs();
+            if dx.max(dy) != outer_radius {
+                continue;
+            }
+            // Cardinal cells lead; diagonal corners follow, creating a readable expanding wave
+            // across the 5×5 (or 7×7 double-Supernova) jelly border.
+            let delay = base_delay
+                + ((dx + dy - outer_radius).max(0) as f32) * SUPERNOVA_JELLY_STAGGER;
+            request_jelly(&mut requests, entity, delay, dx >= dy);
+        }
+    }
+
+    for (entity, request) in requests {
+        commands.entity(entity).insert(ImpactJelly {
+            delay: (request.delay_secs > 0.001)
+                .then(|| Timer::from_seconds(request.delay_secs, TimerMode::Once)),
+            timer: Timer::from_seconds(IMPACT_JELLY_DURATION, TimerMode::Once),
+            horizontal: request.horizontal,
+        });
+    }
+}
+
+pub(crate) fn tick_impact_jelly(
+    mut commands: Commands,
+    mut lights: Query<(Entity, &mut Transform, &mut ImpactJelly), Without<PopAnim>>,
+    time: Res<Time>,
+) {
+    for (entity, mut transform, mut jelly) in &mut lights {
+        if let Some(delay) = jelly.delay.as_mut()
+            && !delay.tick(time.delta()).is_finished()
+        {
+            continue;
+        }
+        jelly.delay = None;
+        jelly.timer.tick(time.delta());
+        let squash = damped_squash(
+            jelly.timer.fraction(),
+            IMPACT_JELLY_AMOUNT,
+            IMPACT_JELLY_CYCLES,
+        );
+        transform.scale = if jelly.horizontal {
+            Vec3::new(1.0 + squash, 1.0 - squash, 1.0)
+        } else {
+            Vec3::new(1.0 - squash, 1.0 + squash, 1.0)
+        };
+        if jelly.timer.is_finished() {
+            transform.scale = Vec3::ONE;
+            commands.entity(entity).remove::<ImpactJelly>();
+        }
+    }
+}
 
 /// Fires the VFX for one lone (uncombined) power activation — the flash + traveling beam — and
 /// stages its pop-delay ripple. The single-power path that `PowerConsumed`/`PowerBlastTrail` have

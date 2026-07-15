@@ -126,7 +126,10 @@ pub(super) fn apply_removal_rewards(
 
     let move_bonus = economy.run.blue_move_bonus(blue_count);
     if move_bonus > 0 && economy.moves.0 != u32::MAX {
-        economy.moves.0 += move_bonus;
+        // Sandbox/debug modes represent unlimited moves with `u32::MAX`. A power swap can
+        // transiently decrement that sentinel before a Blue boon restores moves; saturating keeps
+        // the sentinel intact instead of panicking at `MAX - 1 + bonus`.
+        economy.moves.0 = economy.moves.0.saturating_add(move_bonus);
     }
 
     if score_reset { 0 } else { points + score_bonus }
@@ -269,6 +272,15 @@ pub(crate) fn resolve_match_sequence(
             to_remove.insert(e);
         }
     }
+
+    vfx::stage_power_impact_jelly(
+        commands,
+        &initial_powers,
+        grid,
+        entity_info,
+        &to_remove,
+        ray_settings,
+    );
 
     let removed_positions: HashSet<GridPos> = to_remove
         .iter()

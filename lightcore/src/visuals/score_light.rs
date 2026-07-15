@@ -205,6 +205,9 @@ pub(crate) fn on_chain_pop_score_light(
     let rem = trigger.points % n;
 
     let shard_curve = shards.curve_frac * TILE;
+    // Options keeps these ranges disjoint, but this guard also protects gameplay from a malformed
+    // future save or a programmatic resource edit. `rand` panics when start >= end.
+    let shard_time_range = safe_shard_time_range(&shards);
     let mut rng = rand::rng();
     for (i, &(pos, c, pop_delay_secs)) in slots.iter().enumerate() {
         let from = pos.with_z(2.0); // float above the board for the whole trip
@@ -230,7 +233,8 @@ pub(crate) fn on_chain_pop_score_light(
                     points: base + if (i as u32) < rem { 1 } else { 0 },
                     tint: tint_of(c),
                     timer: Timer::from_seconds(
-                        rng.random_range(shards.min_secs..shards.max_secs) * if c == LightColor::Green { 0.55 } else { 1.0 },
+                        rng.random_range(shard_time_range.clone())
+                            * if c == LightColor::Green { 0.55 } else { 1.0 },
                         TimerMode::Once,
                     ),
                     pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
@@ -268,6 +272,33 @@ pub(crate) fn on_chain_pop_score_light(
             .id();
 
         commands.entity(parent).add_child(glow_child);
+    }
+}
+
+/// Produces the only range handed to `rand` for score-shard travel. Keeping this invariant in the
+/// visual system (not only in the menu) makes malformed values harmless.
+fn safe_shard_time_range(settings: &ShardSettings) -> std::ops::Range<f32> {
+    let min = settings.min_secs.clamp(0.30, 0.95);
+    let max = settings.max_secs.clamp(1.00, 2.50).max(min + 0.05);
+    min..max
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shard_time_range_stays_valid_when_values_are_reversed() {
+        let settings = ShardSettings {
+            min_secs: 9.0,
+            max_secs: 0.0,
+            ..default()
+        };
+        let range = safe_shard_time_range(&settings);
+
+        assert!(range.start < range.end);
+        assert_eq!(range.start, 0.95);
+        assert_eq!(range.end, 1.0);
     }
 }
 

@@ -203,9 +203,12 @@ pub(crate) fn spawn_blocker(commands: &mut Commands, cache: &VisualCache, pos: G
     ));
 }
 
-pub(crate) fn spawn_ingredient_exits(commands: &mut Commands, cache: &VisualCache) {
-    for x in 0..GRID_W {
-        let pos = GridPos { x, y: 0 };
+pub(crate) fn spawn_ingredient_exits(
+    commands: &mut Commands,
+    cache: &VisualCache,
+    exits: impl IntoIterator<Item = GridPos>,
+) {
+    for pos in exits {
         let world = to_world(pos);
         commands.spawn((
             IngredientExit,
@@ -232,9 +235,12 @@ pub(crate) fn spawn_ingredient_exits(commands: &mut Commands, cache: &VisualCach
     }
 }
 
-pub(crate) fn spawn_sparks(commands: &mut Commands, cache: &VisualCache, columns: &[i32]) {
-    for &x in columns {
-        let pos = GridPos { x, y: GRID_H - 1 };
+pub(crate) fn spawn_sparks(
+    commands: &mut Commands,
+    cache: &VisualCache,
+    positions: impl IntoIterator<Item = GridPos>,
+) {
+    for pos in positions {
         let world = to_world(pos);
         let spark = commands
             .spawn((
@@ -260,7 +266,7 @@ pub(crate) fn spawn_sparks(commands: &mut Commands, cache: &VisualCache, columns
             spark.spawn((
                 SparkNucleusPulse {
                     base_scale: Vec3::ONE,
-                    phase: x as f32 * 0.7,
+                    phase: pos.x as f32 * 0.7,
                 },
                 Sprite {
                     image: cache.core_image.clone(),

@@ -110,6 +110,15 @@ pub(crate) fn check_chain_matches(
             to_remove
         };
 
+        vfx::stage_power_impact_jelly(
+            &mut commands,
+            &activations,
+            &grid,
+            &entity_info,
+            &final_remove,
+            &ray_settings,
+        );
+
         let removed_positions: HashSet<GridPos> = final_remove
             .iter()
             .filter_map(|e| entity_info.get(e).map(|(p, _, _)| *p))
