@@ -8,7 +8,7 @@ use crate::core::run::{BoonKind, RunState};
 use crate::embedded;
 use crate::gameplay::shop::{
     BTN_BORDER_ARMED, BTN_BORDER_BROKE, BTN_BORDER_IDLE, BTN_IDLE, Shop, ShopBar, ShopButton,
-    ShopCard, ShopItem,
+    ShopCard, ShopItem, SpecialMoveButton, SpecialMoveInventory,
 };
 use crate::gameplay::{
     CoreReserve, DisplayedCollectedCores, DisplayedScore, GameMode, LevelTimer, MovesLeft,
@@ -39,6 +39,7 @@ impl Plugin for UiPlugin {
         app.init_resource::<GoalHintTouchTimer>()
             .init_resource::<TutorialState>()
             .init_resource::<LevelTutorialShown>()
+            .init_resource::<PendingBoonSale>()
             .add_systems(Startup, (setup_ui, setup_watermark))
             // The HUD is only meaningful during a match — hide it on every menu screen (the app
             // boots straight into `MainMenu`, so this also covers first launch) and bring it back
@@ -88,6 +89,9 @@ impl Plugin for UiPlugin {
                             .or_else(resource_changed::<Shop>)
                             .or_else(resource_changed::<WindowSettings>),
                     ),
+                    update_special_move_counts.run_if(
+                        resource_changed::<SpecialMoveInventory>.or_else(resource_changed::<Shop>),
+                    ),
                     update_shop_active_badge.run_if(
                         resource_changed::<Shop>.or_else(resource_changed::<WindowSettings>),
                     ),
@@ -107,8 +111,11 @@ impl Plugin for UiPlugin {
                             .or_else(resource_changed::<WindowSettings>),
                     ),
                     update_boon_indicators.run_if(
-                        resource_changed::<RunState>.or_else(resource_changed::<WindowSettings>),
+                        resource_changed::<RunState>
+                            .or_else(resource_changed::<WindowSettings>)
+                            .or_else(resource_changed::<PendingBoonSale>),
                     ),
+                    sell_boon_button_system.run_if(in_state(GameState::Playing)),
                     tutorial_close_button_system,
                     tutorial_overlay_toggle_system,
                     update_tutorial_overlay_toggle_text.run_if(resource_changed::<WindowSettings>),
@@ -148,6 +155,9 @@ pub(crate) struct GoalHintText;
 pub(crate) struct PauseButton;
 #[derive(Component)]
 pub(crate) struct ShopToggleButton;
+/// Visual root for the compact economy/status block (moves, lives, core reserve and specials).
+#[derive(Component)]
+struct PlayerStatusPanel;
 #[derive(Component)]
 pub(crate) struct StatsButton;
 #[derive(Component)]
@@ -178,6 +188,8 @@ struct LivesUnitLabel;
 struct ShopHeaderLabel;
 #[derive(Component)]
 struct ShopCoresLabel;
+#[derive(Component)]
+struct SpecialMoveCountText(ShopItem);
 #[derive(Component)]
 struct ShopModifiersLabel;
 #[derive(Component)]
@@ -321,12 +333,33 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                 });
 
                 // MovesText
+                // One contiguous status/economy panel. Its three controls remain independent ECS
+                // entities so their resources can update separately, but they are presented as a
+                // single HUD unit rather than three unrelated badges.
+                hud.spawn((
+                    PlayerStatusPanel,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(8.0),
+                        right: Val::Px(8.0),
+                        width: Val::Px(258.0),
+                        height: Val::Px(94.0),
+                        border: UiRect::all(Val::Px(1.5)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.32)),
+                    BackgroundColor(Color::srgba(0.035, 0.06, 0.11, 0.92)),
+                ));
+
                 hud.spawn((
                     MovesText,
                     Node {
                         position_type: PositionType::Absolute,
                         top: Val::Px(12.0),
-                        right: Val::Px(12.0),
+                        // Status cluster: moves | lives | core reserve/shop.
+                        right: Val::Px(180.0),
+                        width: Val::Px(78.0),
+                        height: Val::Px(48.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
@@ -334,8 +367,8 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         border: UiRect::all(Val::Px(1.5)),
                         ..default()
                     },
-                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                    BackgroundColor(Color::srgba(0.1, 0.1, 0.18, 0.7)),
+                    BorderColor::all(Color::NONE),
+                    BackgroundColor(Color::NONE),
                     Visibility::Hidden,
                 ))
                 .with_children(|m| {
@@ -364,8 +397,10 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     LivesText,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(72.0),
-                        right: Val::Px(12.0),
+                        top: Val::Px(12.0),
+                        right: Val::Px(96.0),
+                        width: Val::Px(78.0),
+                        height: Val::Px(48.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
@@ -373,8 +408,8 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         border: UiRect::all(Val::Px(1.5)),
                         ..default()
                     },
-                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
-                    BackgroundColor(Color::srgba(0.12, 0.05, 0.05, 0.7)),
+                    BorderColor::all(Color::NONE),
+                    BackgroundColor(Color::NONE),
                     Visibility::Hidden,
                 ))
                 .with_children(|l| {
@@ -396,6 +431,56 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         },
                         TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
                     ));
+                });
+
+                // Owned special-move counters live inside the same status panel. A counter is a
+                // button: tapping it arms one owned copy, while buying happens in the drawer.
+                hud.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(62.0),
+                        right: Val::Px(12.0),
+                        width: Val::Px(246.0),
+                        height: Val::Px(30.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceEvenly,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|moves| {
+                    for (item, label) in [
+                        (ShopItem::Swap, "SWP"),
+                        (ShopItem::Eliminate, "POP"),
+                        (ShopItem::Upgrade, "UP"),
+                    ] {
+                        moves.spawn((
+                            Button,
+                            SpecialMoveButton(item),
+                            Node {
+                                min_width: Val::Px(68.0),
+                                height: Val::Px(26.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                padding: UiRect::axes(Val::Px(5.0), Val::Px(2.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.18)),
+                            BackgroundColor(Color::NONE),
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                SpecialMoveCountText(item),
+                                Text::new(format!("{label} 0")),
+                                TextFont {
+                                    font_size: FontSize::Px(10.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
+                            ));
+                        });
+                    }
                 });
 
                 hud.spawn((
@@ -430,10 +515,13 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     BoonIndicatorBar,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(64.0),
-                        left: Val::Px(18.0),
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(8.0),
+                        // This is the former shop slot: boons are always visible and directly
+                        // sellable instead of being a small, disconnected top-left strip.
+                        bottom: Val::Px(16.0),
+                        right: Val::Px(12.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::FlexEnd,
+                        row_gap: Val::Px(6.0),
                         ..default()
                     },
                     Visibility::Hidden,
@@ -542,20 +630,20 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     ShopToggleButton,
                     Node {
                         position_type: PositionType::Absolute,
-                        bottom: Val::Px(16.0),
+                        top: Val::Px(12.0),
                         right: Val::Px(12.0),
                         width: Val::Px(78.0),
-                        height: Val::Px(76.0),
+                        height: Val::Px(48.0),
                         flex_direction: FlexDirection::Column,
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
-                        row_gap: Val::Px(2.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                        row_gap: Val::Px(0.0),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
                         border: UiRect::all(Val::Px(1.5)),
                         ..default()
                     },
-                    BorderColor::all(BTN_BORDER_IDLE),
-                    BackgroundColor(Color::srgba(0.07, 0.10, 0.17, 0.88)),
+                    BorderColor::all(Color::NONE),
+                    BackgroundColor(Color::NONE),
                     Visibility::Hidden,
                 ))
                 .with_children(|b| {
@@ -563,7 +651,7 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         ShopHeaderLabel,
                         Text::new("SHOP"),
                         TextFont {
-                            font_size: FontSize::Px(10.0),
+                            font_size: FontSize::Px(8.0),
                             ..default()
                         },
                         TextColor(Color::srgb(0.70, 0.86, 1.0)),
@@ -572,7 +660,7 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         ShopReserveText,
                         Text::new("0"),
                         TextFont {
-                            font_size: FontSize::Px(24.0),
+                            font_size: FontSize::Px(18.0),
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -581,7 +669,7 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         ShopCoresLabel,
                         Text::new("cores"),
                         TextFont {
-                            font_size: FontSize::Px(10.0),
+                            font_size: FontSize::Px(8.0),
                             ..default()
                         },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
@@ -714,10 +802,12 @@ fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language, mode:
             ShopBar,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(102.0),
+                // Drawer owned by the status panel: special moves are purchased directly below
+                // moves/lives/cores, never from a second unrelated corner of the HUD.
+                top: Val::Px(106.0),
                 right: Val::Px(12.0),
-                width: Val::Px(360.0),
-                max_width: Val::Percent(93.0),
+                width: Val::Px(258.0),
+                max_width: Val::Percent(66.0),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Stretch,
@@ -938,10 +1028,12 @@ fn spawn_shop_active_badge(commands: &mut Commands, parent: Entity) {
             ShopActiveBadge,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(102.0),
-                left: Val::Px(12.0),
-                max_width: Val::Px(280.0),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                // Part of the same status cluster: this is the live indicator for the currently
+                // armed special move, rather than a detached message beside the goal.
+                top: Val::Px(106.0),
+                right: Val::Px(12.0),
+                max_width: Val::Px(246.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                 border: UiRect::all(Val::Px(1.5)),
                 display: Display::None,
                 ..default()
@@ -1437,11 +1529,45 @@ fn update_shop_toggle_button(
 ) {
     let (mut bg, mut border) = button.into_inner();
     if shop.open {
-        bg.0 = Color::srgba(0.19, 0.15, 0.04, 0.94);
-        *border = BorderColor::all(BTN_BORDER_ARMED);
+        bg.0 = Color::srgba(0.19, 0.15, 0.04, 0.46);
+        *border = BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.42));
     } else {
-        bg.0 = Color::srgba(0.07, 0.10, 0.17, 0.88);
-        *border = BorderColor::all(BTN_BORDER_IDLE);
+        bg.0 = Color::NONE;
+        *border = BorderColor::all(Color::NONE);
+    }
+}
+
+fn update_special_move_counts(
+    inventory: Res<SpecialMoveInventory>,
+    shop: Res<Shop>,
+    mut texts: Query<(&SpecialMoveCountText, &mut Text, &mut TextColor)>,
+    mut buttons: Query<(&SpecialMoveButton, &mut BorderColor, &mut BackgroundColor)>,
+) {
+    for (marker, mut text, mut color) in &mut texts {
+        let label = match marker.0 {
+            ShopItem::Swap => "SWP",
+            ShopItem::Eliminate => "POP",
+            ShopItem::Upgrade => "UP",
+            ShopItem::Life | ShopItem::Boon(_) => continue,
+        };
+        let count = inventory.count(marker.0);
+        text.0 = format!("{label} {count}");
+        color.0 = if shop.armed_item() == Some(marker.0) {
+            Color::srgb(1.0, 0.90, 0.55)
+        } else if count > 0 {
+            Color::srgb(0.76, 0.92, 1.0)
+        } else {
+            Color::srgba(0.68, 0.80, 0.94, 0.42)
+        };
+    }
+    for (button, mut border, mut background) in &mut buttons {
+        if shop.armed_item() == Some(button.0) {
+            *border = BorderColor::all(BTN_BORDER_ARMED);
+            background.0 = Color::srgba(0.25, 0.18, 0.04, 0.42);
+        } else {
+            *border = BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.18));
+            background.0 = Color::NONE;
+        }
     }
 }
 
@@ -1520,10 +1646,10 @@ fn update_shop_active_badge(
     mut text: Single<&mut Text, With<ShopActiveBadgeText>>,
 ) {
     let (mut visibility, mut node) = badge.into_inner();
-    if let Some(label) = shop.active_badge_text(settings.language) {
+    if !shop.open && let Some(label) = shop.active_badge_text(settings.language) {
         *visibility = Visibility::Visible;
         node.display = Display::Flex;
-        text.0 = label;
+        text.0 = format!("ESPECIAL · {label}");
     } else {
         *visibility = Visibility::Hidden;
         node.display = Display::None;
@@ -1722,6 +1848,16 @@ fn tutorial_close_button_system(
 #[derive(Component)]
 pub(crate) struct BoonIndicatorBar;
 
+/// Active boon cards expose selling mid-level, with a deliberate two-tap confirmation and the
+/// complete price of the most recently purchased rank as refund.
+#[derive(Component, Clone, Copy)]
+struct BoonSellButton(BoonKind);
+
+/// First tap selects a boon for sale; the second, deliberate tap confirms it. This prevents a
+/// stray touch on a persistent HUD card from immediately deleting a run upgrade.
+#[derive(Resource, Default)]
+struct PendingBoonSale(Option<BoonKind>);
+
 #[derive(Component)]
 pub(crate) struct HudRoot;
 
@@ -1733,6 +1869,7 @@ struct TutorialText;
 
 fn update_boon_indicators(
     run: Res<RunState>,
+    pending_sale: Res<PendingBoonSale>,
     settings: Res<WindowSettings>,
     mut commands: Commands,
     bar: Single<Entity, With<BoonIndicatorBar>>,
@@ -1748,28 +1885,31 @@ fn update_boon_indicators(
         for boon in BoonKind::ALL {
             let lvl = run.level(boon);
             if lvl > 0 {
-                let (label, color) = match boon {
-                    BoonKind::RedValue => ("R", Color::srgba(1.2, 0.4, 0.4, 0.85)),
-                    BoonKind::GreenReserve => ("G", Color::srgba(0.4, 1.2, 0.4, 0.85)),
-                    BoonKind::BlueMoves => ("B", Color::srgba(0.4, 0.6, 1.3, 0.85)),
-                    BoonKind::SparkBounty => ("S", Color::srgba(1.3, 0.7, 0.1, 0.85)),
-                    BoonKind::PowerBounty => ("P", Color::srgba(1.1, 0.4, 1.2, 0.85)),
-                    BoonKind::HollowWard => ("H", Color::srgba(0.5, 0.5, 0.6, 0.85)),
-                    BoonKind::RedSpawn => ("r", Color::srgba(1.0, 0.2, 0.2, 0.85)),
-                    BoonKind::GreenSpawn => ("g", Color::srgba(0.2, 1.0, 0.2, 0.85)),
-                    BoonKind::BlueSpawn => ("b", Color::srgba(0.2, 0.4, 1.0, 0.85)),
-                    BoonKind::YellowSpawn => ("y", Color::srgba(1.0, 0.9, 0.2, 0.85)),
-                    BoonKind::PurpleSpawn => ("p", Color::srgba(0.8, 0.2, 0.9, 0.85)),
+                let confirming_sale = pending_sale.0 == Some(boon);
+                let color = match boon {
+                    BoonKind::RedValue => Color::srgba(1.2, 0.4, 0.4, 0.85),
+                    BoonKind::GreenReserve => Color::srgba(0.4, 1.2, 0.4, 0.85),
+                    BoonKind::BlueMoves => Color::srgba(0.4, 0.6, 1.3, 0.85),
+                    BoonKind::StarBounty => Color::srgba(1.3, 0.7, 0.1, 0.85),
+                    BoonKind::PowerBounty => Color::srgba(1.1, 0.4, 1.2, 0.85),
+                    BoonKind::HollowWard => Color::srgba(0.5, 0.5, 0.6, 0.85),
+                    BoonKind::RedSpawn => Color::srgba(1.0, 0.2, 0.2, 0.85),
+                    BoonKind::GreenSpawn => Color::srgba(0.2, 1.0, 0.2, 0.85),
+                    BoonKind::BlueSpawn => Color::srgba(0.2, 0.4, 1.0, 0.85),
+                    BoonKind::YellowSpawn => Color::srgba(1.0, 0.9, 0.2, 0.85),
+                    BoonKind::PurpleSpawn => Color::srgba(0.8, 0.2, 0.9, 0.85),
                 };
 
                 parent
                     .spawn((
                         Button,
+                        BoonSellButton(boon),
                         Interaction::default(),
                         get_item_tooltip(ShopItem::Boon(boon), lang),
                         Node {
-                            width: Val::Px(40.0),
-                            height: Val::Px(40.0),
+                            width: Val::Px(58.0),
+                            height: Val::Px(48.0),
+                            flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: UiRect::all(Val::Px(1.0)),
@@ -1780,17 +1920,54 @@ fn update_boon_indicators(
                     ))
                     .with_children(|b| {
                         b.spawn((
-                            Text::new(format!("{}{}", label, lvl)),
+                            Text::new(if confirming_sale {
+                                format!("VENDER {}{}?", boon.notation(), lvl)
+                            } else {
+                                format!("{}{}", boon.notation(), lvl)
+                            }),
                             TextFont {
-                                font_size: FontSize::Px(14.0),
+                                font_size: FontSize::Px(if confirming_sale { 10.0 } else { 13.0 }),
                                 ..default()
                             },
                             TextColor(Color::WHITE),
+                        ));
+                        b.spawn((
+                            Text::new(if confirming_sale {
+                                format!("CONFIRMA ↺ {}c", boon.cost(lvl - 1))
+                            } else {
+                                format!("↺ {}c", boon.cost(lvl - 1))
+                            }),
+                            TextFont {
+                                font_size: FontSize::Px(9.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 0.92, 0.62, 0.9)),
                         ));
                     });
             }
         }
     });
+}
+
+fn sell_boon_button_system(
+    interactions: Query<(&Interaction, &BoonSellButton), Changed<Interaction>>,
+    mut run: ResMut<RunState>,
+    mut reserve: ResMut<CoreReserve>,
+    mut pending_sale: ResMut<PendingBoonSale>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if pending_sale.0 == Some(button.0) {
+            if let Some(refund) = run.sell(button.0) {
+                reserve.0 = reserve.0.saturating_add(refund);
+            }
+            pending_sale.0 = None;
+        } else {
+            pending_sale.0 = Some(button.0);
+        }
+    }
 }
 
 #[derive(Component)]
@@ -1992,9 +2169,9 @@ pub(crate) fn get_item_tooltip(item: ShopItem, lang: Language) -> TooltipTrigger
                 title: lang.tr(TrKey::TooltipBoonBlueTitle).to_string(),
                 description: lang.tr(TrKey::TooltipBoonBlueDesc).to_string(),
             },
-            BoonKind::SparkBounty => TooltipTrigger {
-                title: lang.tr(TrKey::TooltipBoonSparkTitle).to_string(),
-                description: lang.tr(TrKey::TooltipBoonSparkDesc).to_string(),
+            BoonKind::StarBounty => TooltipTrigger {
+                title: lang.tr(TrKey::TooltipBoonStarTitle).to_string(),
+                description: lang.tr(TrKey::TooltipBoonStarDesc).to_string(),
             },
             BoonKind::PowerBounty => TooltipTrigger {
                 title: lang.tr(TrKey::TooltipBoonPowerTitle).to_string(),

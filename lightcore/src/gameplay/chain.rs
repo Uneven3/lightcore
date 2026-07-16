@@ -147,7 +147,7 @@ pub(crate) fn check_chain_matches(
                 run: &mut res.run,
             },
         );
-        let pops = rewards::spawn_pops(
+        let (pops, starburst_origins) = rewards::spawn_pops(
             &mut commands,
             &final_remove,
             &entity_info,
@@ -159,6 +159,7 @@ pub(crate) fn check_chain_matches(
             points,
             hollow: false,
             pops,
+            starburst_origins,
             supernova_origins: activations
                 .iter()
                 .filter(|activation| activation.kind == LightKind::Supernova)

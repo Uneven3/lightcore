@@ -7,6 +7,7 @@ use super::assets::VisualCache;
 use super::particles::{ParticleSettings, spawn_membrane_pop};
 use crate::core::grid::TILE;
 use crate::core::prelude::LightColor;
+use crate::core::run::{BoonKind, RunState};
 use crate::gameplay::{
     ChainPop, DisplayedCollectedCores, DisplayedScore, LightPopped, Score, ScoreAnchor, ScoreDrained,
     ScoreGlow,
@@ -134,6 +135,64 @@ fn cubic_bezier(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: f32) -> Vec3 {
         + p3 * (t * t * t)
 }
 
+/// Moves at constant perceived speed across two perpendicular legs. The first leg is vertical,
+/// so a shard on the right visibly rises before turning toward the score instead of cutting the
+/// corner diagonally.
+fn right_angle_path(from: Vec3, to: Vec3, frac: f32) -> Vec3 {
+    let corner = Vec3::new(from.x, to.y, from.z);
+    let first = from.distance(corner);
+    let second = corner.distance(to);
+    let total = (first + second).max(f32::EPSILON);
+    let distance = frac * total;
+    if distance <= first && first > f32::EPSILON {
+        from.lerp(corner, distance / first)
+    } else if second > f32::EPSILON {
+        corner.lerp(to, (distance - first).max(0.0) / second)
+    } else {
+        to
+    }
+}
+
+/// One broad, energetic bend for the Purple pentagon. A single break reads as a lightning bolt;
+/// several tiny bends read as a stiff staircase at board scale.
+fn lightning_path(from: Vec3, to: Vec3, frac: f32, phase: f32) -> Vec3 {
+    let line = (to - from).truncate();
+    let perpendicular = Vec2::new(-line.y, line.x).normalize_or_zero();
+    let amplitude = TILE * (1.65 + 0.35 * phase.sin().abs());
+    let points = [
+        from,
+        from.lerp(to, 0.46) + (perpendicular * amplitude).extend(0.0),
+        to,
+    ];
+    let lengths = [
+        points[0].distance(points[1]),
+        points[1].distance(points[2]),
+    ];
+    let total: f32 = lengths.iter().sum::<f32>().max(f32::EPSILON);
+    let mut remaining = frac * total;
+    for index in 0..lengths.len() {
+        if remaining <= lengths[index] || index == lengths.len() - 1 {
+            return points[index].lerp(points[index + 1], remaining / lengths[index].max(f32::EPSILON));
+        }
+        remaining -= lengths[index];
+    }
+    to
+}
+
+/// Yellow diamonds dive well below the board, with a small diagonal bias, before the score pulls
+/// them back. This deliberately uses the available screen space instead of orbiting locally.
+fn yellow_dive_path(from: Vec3, to: Vec3, frac: f32, phase: f32) -> Vec3 {
+    let horizontal = if phase.cos() >= 0.0 { 1.0 } else { -1.0 };
+    let dive = Vec3::new(horizontal * TILE * 1.55, -TILE * 4.6, 0.0);
+    cubic_bezier(
+        from,
+        from + dive,
+        from.lerp(to, 0.42) + dive * 1.08,
+        to,
+        frac,
+    )
+}
+
 /// Shared ease/alpha curve for a `ScoreShardAbsorb`'s flight, whether it's rendered via `Sprite`
 /// (`tick_score_shard_absorb`) or `Mesh2d` + `AdditiveMaterial` (`tick_score_shard_absorb_glow`) —
 /// ease-out cubic toward the target, full opacity for the first 78% of the trip then a quick fade.
@@ -168,7 +227,10 @@ fn tint_of(color: LightColor) -> Vec3 {
 /// gradient itself now lives in the baked `shard_core_image` texture (see `visuals::assets`), so
 /// this only needs to scale intensity for Bloom, not tint.
 fn shard_core_boost(hdr_boost: f32) -> Color {
-    Color::linear_rgb(hdr_boost, hdr_boost, hdr_boost)
+    // Only the travelling Lightcore itself gets hotter; its surrounding halo keeps the previous
+    // intensity so score particles remain crisp rather than washing out the whole HUD.
+    let boost = hdr_boost * 1.55;
+    Color::linear_rgb(boost, boost, boost)
 }
 
 fn shard_halo_color(color: LightColor, hdr_boost: f32) -> Color {
@@ -189,6 +251,7 @@ pub(crate) fn on_chain_pop_score_light(
     cache: Res<VisualCache>,
     anchor: Res<ScoreAnchor>,
     shards: Res<ShardSettings>,
+    run: Res<RunState>,
     mut materials: ResMut<Assets<AdditiveMaterial>>,
 ) {
     if trigger.points == 0 || trigger.pops.is_empty() {
@@ -206,7 +269,24 @@ pub(crate) fn on_chain_pop_score_light(
     // Flatten pops → shard slots (a couple per light), dropping to 1 each if a huge clear would
     // otherwise spawn too many. Points are split across all slots so the readout ticks up in a
     // burst as they land, instead of one jump — front slots carry the remainder for an exact total.
-    let per_pop = if trigger.pops.len() * SHARDS_PER_POP <= MAX_TOTAL_SHARDS {
+    let requested_slots: usize = trigger
+        .pops
+        .iter()
+        .map(|(pos, color, _)| {
+            let star_multiplier = if trigger
+                .starburst_origins
+                .iter()
+                .any(|origin| origin.distance(pos.with_z(2.0)) < 0.1)
+            {
+                1 + run.level(BoonKind::StarBounty) as usize
+            } else {
+                1
+            };
+            run.particle_multiplier_for_color(*color) * star_multiplier
+        })
+        .sum::<usize>()
+        * SHARDS_PER_POP;
+    let per_pop = if requested_slots <= MAX_TOTAL_SHARDS {
         SHARDS_PER_POP
     } else {
         1
@@ -225,7 +305,16 @@ pub(crate) fn on_chain_pop_score_light(
                 a.distance_squared(pos.with_z(2.0))
                     .total_cmp(&b.distance_squared(pos.with_z(2.0)))
             });
-        for _ in 0..per_pop {
+        let star_multiplier = if trigger
+            .starburst_origins
+            .iter()
+            .any(|origin| origin.distance(pos.with_z(2.0)) < 0.1)
+        {
+            1 + run.level(BoonKind::StarBounty) as usize
+        } else {
+            1
+        };
+        for _ in 0..(per_pop * run.particle_multiplier_for_color(c) * star_multiplier) {
             slots.push((pos, c, delay, launch_centre));
         }
     }
@@ -268,7 +357,18 @@ pub(crate) fn on_chain_pop_score_light(
         let side = rng.random_range(-1.0..1.0) * shard_curve;
         let radial =
             Vec2::from_angle(rng.random_range(0.0..TAU)) * rng.random_range(0.0..TILE * 0.6);
-        let ctrl = from + (line * along + perp * side + radial).extend(0.0);
+        let ctrl = match c {
+            // Red's circle is the most fluid core: make its capture arc deliberate rather than a
+            // shallow generic bend.
+            LightColor::Red => {
+                let direction = if rng.random_bool(0.5) { 1.0 } else { -1.0 };
+                // Quadratic Bézier reaches roughly half its control-point lateral distance, so
+                // this deliberately overshoots several tile widths and takes the core outside
+                // the board before the score reels it back in.
+                from + (line * 0.18 + perp * shard_curve * 5.2 * direction).extend(0.0)
+            }
+            _ => from + (line * along + perp * side + radial).extend(0.0),
+        };
         let core_color = shard_core_boost(shards.hdr_boost);
         let glow_color = shard_halo_color(c, shards.hdr_boost);
 
@@ -282,7 +382,14 @@ pub(crate) fn on_chain_pop_score_light(
                     tint: tint_of(c),
                     timer: Timer::from_seconds(
                         rng.random_range(shard_time_range.clone())
-                            * if c == LightColor::Green { 0.55 } else { 1.0 }
+                            * match c {
+                                // Green is the arrow: quickest but still visibly readable.
+                                LightColor::Green => 0.72,
+                                // Purple is a fast electric strike; its wide single bend remains
+                                // legible without slowing it into a staircase.
+                                LightColor::Purple => 0.76,
+                                _ => 1.0,
+                            }
                             * if launch.is_some() { rng.random_range(1.20..1.65) } else { 1.0 },
                         TimerMode::Once,
                     ),
@@ -606,25 +713,27 @@ pub(crate) fn tick_score_light(
             frac
         } else { match shard.color {
             LightColor::Green => {
-                // Green: high-speed straight ray
-                let eased = frac * frac;
-                t.translation = shard.from.lerp(shard.to, eased);
-                eased
+                // Green triangle: an arrow — direct, steady and uncurved.
+                let pulled = frac * frac;
+                t.translation = shard.from.lerp(shard.to, pulled);
+                pulled
             }
-            LightColor::Yellow | LightColor::Purple => {
-                // Yellow/Purple: revolves on grid first, then flies to score
-                if frac < 0.4 {
-                    let t_orbit = frac / 0.4;
-                    let orbit_radius = TILE * 0.42 * (1.0 - t_orbit);
-                    let angle = t_orbit * 8.0 + shard.glow_phase;
-                    t.translation = shard.from + Vec3::new(angle.cos() * orbit_radius, angle.sin() * orbit_radius, 0.0);
-                    0.0 // no progress on main path during orbit
-                } else {
-                    let t_fly = (frac - 0.4) / 0.6;
-                    let eased = t_fly * t_fly * t_fly;
-                    t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
-                    eased
-                }
+            LightColor::Blue => {
+                // Four-sided cores travel in two clean 90° legs, but the score's pull makes
+                // their pace accelerate instead of reading like a conveyor belt.
+                let pulled = frac * frac;
+                t.translation = right_angle_path(shard.from, shard.to, pulled);
+                pulled
+            }
+            LightColor::Yellow => {
+                let pulled = frac * frac;
+                t.translation = yellow_dive_path(shard.from, shard.to, pulled, shard.glow_phase);
+                pulled
+            }
+            LightColor::Purple => {
+                let pulled = frac * frac;
+                t.translation = lightning_path(shard.from, shard.to, pulled, shard.glow_phase);
+                pulled
             }
             _ => {
                 // Standard curved flight path

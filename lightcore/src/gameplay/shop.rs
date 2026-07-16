@@ -91,6 +91,54 @@ pub(crate) struct Shop {
     pub(crate) open: bool,
 }
 
+/// Consumable special moves bought from the shop. They are inventory, not an immediate targeting
+/// mode: buying one increments the HUD counter; selecting that counter arms it; successful use
+/// finally consumes one copy.
+#[derive(Resource, Default)]
+pub(crate) struct SpecialMoveInventory {
+    counts: [u32; 3],
+}
+
+impl SpecialMoveInventory {
+    fn index(item: ShopItem) -> Option<usize> {
+        match item {
+            ShopItem::Swap => Some(0),
+            ShopItem::Eliminate => Some(1),
+            ShopItem::Upgrade => Some(2),
+            ShopItem::Life | ShopItem::Boon(_) => None,
+        }
+    }
+
+    pub(crate) fn count(&self, item: ShopItem) -> u32 {
+        Self::index(item).map_or(0, |index| self.counts[index])
+    }
+
+    fn add(&mut self, item: ShopItem) {
+        if let Some(index) = Self::index(item) {
+            self.counts[index] = self.counts[index].saturating_add(1);
+        }
+    }
+
+    fn consume(&mut self, item: ShopItem) -> bool {
+        let Some(index) = Self::index(item) else {
+            return false;
+        };
+        if self.counts[index] == 0 {
+            return false;
+        }
+        self.counts[index] -= 1;
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.counts = [0; 3];
+    }
+}
+
+/// Click target for an owned special-move counter in the integrated HUD panel.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct SpecialMoveButton(pub(crate) ShopItem);
+
 impl Shop {
     /// Whether a booster is currently aiming — `gameplay::input::handle_input` bails when so, so
     /// the drag-swap doesn't fight the targeting click.
@@ -168,17 +216,15 @@ fn arm(shop: &mut Shop, item: ShopItem, pointer: &PointerInput) {
     shop.ignore_board_press = pointer.just_pressed;
 }
 
-/// Arms / disarms a booster when its bar button is clicked. Doesn't charge — payment happens when
-/// the ability is actually applied (`shop_targeting`).
+/// Purchases one special move into inventory. Targeting is deliberately separate: it starts only
+/// when the player taps an owned counter in the status panel.
 pub(crate) fn shop_button_system(
-    mut commands: Commands,
     mut shop: ResMut<Shop>,
     mut reserve: ResMut<CoreReserve>,
     mut spent: ResMut<CoresSpent>,
     mut run: ResMut<RunState>,
-    pointer: Res<PointerInput>,
+    mut inventory: ResMut<SpecialMoveInventory>,
     interactions: Query<(&Interaction, &ShopButton), Changed<Interaction>>,
-    selected: Query<Entity, With<Selected>>,
 ) {
     for (interaction, btn) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -197,33 +243,42 @@ pub(crate) fn shop_button_system(
             continue;
         }
         if item.is_boon() {
-            if reserve.0 >= cost
-                && let ShopItem::Boon(boon) = item
-                && run.buy(boon)
-            {
-                spend(&mut reserve, &mut spent, cost);
-                shop.open = false;
-            }
+            // Boons deliberately have no in-level purchase path. `ShopItem::Boon` remains a
+            // presentation model for tooltips/reward cards, while the completion overlay owns
+            // the only transaction that may call `RunState::buy`.
             continue;
         }
-        if shop.armed == Some(item) {
-            // Click the armed booster again to put it away.
-            disarm(&mut commands, &mut shop, &selected);
-        } else if shop.is_armed() {
-            // A different booster is currently armed. Clear it first, then try to arm the new one.
-            disarm(&mut commands, &mut shop, &selected);
-            if reserve.0 >= cost {
-                clear_pick(&mut commands, &mut shop, &selected);
-                arm(&mut shop, item, &pointer);
-                shop.open = false;
-            }
-        } else if reserve.0 >= cost {
-            // No booster armed yet — arm this one.
-            clear_pick(&mut commands, &mut shop, &selected);
-            arm(&mut shop, item, &pointer);
-            shop.open = false; // Close drawer when armed!
+        if reserve.0 >= cost {
+            inventory.add(item);
+            spend(&mut reserve, &mut spent, cost);
+            shop.open = false;
         }
-        // Can't afford and nothing armed → ignore (the button is shown greyed by `update_shop_buttons`).
+    }
+}
+
+/// Arms one already-owned special move. The counter is only decremented by `shop_targeting` after
+/// a valid board action, so cancelling or changing target never burns a purchase.
+pub(crate) fn special_move_button_system(
+    mut commands: Commands,
+    mut shop: ResMut<Shop>,
+    inventory: Res<SpecialMoveInventory>,
+    pointer: Res<PointerInput>,
+    interactions: Query<(&Interaction, &SpecialMoveButton), Changed<Interaction>>,
+    selected: Query<Entity, With<Selected>>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed || inventory.count(button.0) == 0 {
+            continue;
+        }
+        if shop.armed == Some(button.0) {
+            disarm(&mut commands, &mut shop, &selected);
+        } else {
+            if shop.is_armed() {
+                disarm(&mut commands, &mut shop, &selected);
+            }
+            clear_pick(&mut commands, &mut shop, &selected);
+            arm(&mut shop, button.0, &pointer);
+        }
     }
 }
 
@@ -233,8 +288,7 @@ pub(crate) fn shop_button_system(
 pub(crate) fn shop_targeting(
     mut commands: Commands,
     mut shop: ResMut<Shop>,
-    mut reserve: ResMut<CoreReserve>,
-    mut spent: ResMut<CoresSpent>,
+    mut inventory: ResMut<SpecialMoveInventory>,
     mut cascade: ResMut<CascadeDepth>,
     mut next_state: ResMut<NextState<GameState>>,
     mut pending: ResMut<PendingSwap>,
@@ -243,7 +297,6 @@ pub(crate) fn shop_targeting(
     particles: Res<ParticleSettings>,
     mut lights: Query<(Entity, &mut GridPos, &LightColor, &mut LightKind), With<Light>>,
     selected: Query<Entity, With<Selected>>,
-    run: Res<RunState>,
     tutorial: Res<TutorialState>,
 ) {
     if tutorial.open {
@@ -305,9 +358,10 @@ pub(crate) fn shop_targeting(
                 points: 0,
                 hollow: false,
                 pops: vec![(w, color, 0.0)],
+                starburst_origins: Vec::new(),
                 supernova_origins: Vec::new(),
             });
-            spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
+            inventory.consume(item);
             disarm(&mut commands, &mut shop, &selected);
             next_state.set(GameState::Popping);
         }
@@ -317,7 +371,7 @@ pub(crate) fn shop_targeting(
                     // `rebuild_cores` reacts to the `LightKind` change (body shape + cores).
                     *kind = next;
                     commands.trigger(PowerCreated);
-                    spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
+                    inventory.consume(item);
                     disarm(&mut commands, &mut shop, &selected);
                 }
             }
@@ -351,7 +405,7 @@ pub(crate) fn shop_targeting(
                     b_pos,
                     free: true,
                 });
-                spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
+                inventory.consume(item);
                 clear_pick(&mut commands, &mut shop, &selected);
                 shop.armed = None;
                 next_state.set(GameState::SwapAnimating);
@@ -391,4 +445,32 @@ pub(crate) fn reset_shop(
 ) {
     disarm(&mut commands, &mut shop, &selected);
     shop.open = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_moves_are_inventory_until_they_are_used() {
+        let mut inventory = SpecialMoveInventory::default();
+        inventory.add(ShopItem::Swap);
+        inventory.add(ShopItem::Swap);
+
+        assert_eq!(inventory.count(ShopItem::Swap), 2);
+        assert!(inventory.consume(ShopItem::Swap));
+        assert_eq!(inventory.count(ShopItem::Swap), 1);
+        assert!(inventory.consume(ShopItem::Swap));
+        assert!(!inventory.consume(ShopItem::Swap));
+    }
+
+    #[test]
+    fn life_and_boons_cannot_enter_special_inventory() {
+        let mut inventory = SpecialMoveInventory::default();
+        inventory.add(ShopItem::Life);
+        inventory.add(ShopItem::Boon(BoonKind::RedValue));
+
+        assert_eq!(inventory.count(ShopItem::Life), 0);
+        assert_eq!(inventory.count(ShopItem::Boon(BoonKind::RedValue)), 0);
+    }
 }

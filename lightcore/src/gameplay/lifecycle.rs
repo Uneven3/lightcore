@@ -127,15 +127,13 @@ pub(crate) struct LevelRewardInstructionText;
 #[derive(Resource, Default)]
 pub(crate) struct LevelRewardOffer {
     offered: Vec<BoonKind>,
-    selected: Option<BoonKind>,
-    just_selected: bool,
+    purchased: Vec<BoonKind>,
 }
 
 impl LevelRewardOffer {
     fn reset(&mut self, offered: Vec<BoonKind>) {
         self.offered = offered;
-        self.selected = None;
-        self.just_selected = false;
+        self.purchased.clear();
     }
 
     fn active(&self) -> bool {
@@ -817,7 +815,7 @@ pub(crate) fn show_level_complete(
                                     ))
                                     .with_children(|button| {
                                         button.spawn((
-                                            Text::new(boon.label(lang)),
+                                            Text::new(format!("{}  {}", boon.notation(), boon.label(lang))),
                                             TextFont {
                                                 font_size: FontSize::Px(16.0),
                                                 ..default()
@@ -825,7 +823,7 @@ pub(crate) fn show_level_complete(
                                             TextColor(Color::WHITE),
                                         ));
                                         button.spawn((
-                                            Text::new(boon.status_label(lang)),
+                                            Text::new(format!("{} · {}c", boon.status_label(lang), boon.cost(run.level(boon)))),
                                             TextFont {
                                                 font_size: FontSize::Px(11.0),
                                                 ..default()
@@ -839,11 +837,7 @@ pub(crate) fn show_level_complete(
 
                     card.spawn((
                         LevelRewardInstructionText,
-                        Text::new(if reward_offer.is_empty() {
-                            lang.tr(TrKey::BoonContinueInstruction)
-                        } else {
-                            lang.tr(TrKey::BoonSelectInstruction)
-                        }),
+                        Text::new(lang.tr(TrKey::BoonContinueInstruction)),
                         TextFont {
                             font_size: FontSize::Px(12.0),
                             ..default()
@@ -860,6 +854,9 @@ pub(crate) fn level_reward_button_system(
     mut buttons: Query<(&LevelRewardButton, &mut BackgroundColor, &mut BorderColor)>,
     mut instruction: Query<&mut Text, With<LevelRewardInstructionText>>,
     settings: Res<WindowSettings>,
+    mut run: ResMut<RunState>,
+    mut reserve: ResMut<CoreReserve>,
+    mut spent: ResMut<CoresSpent>,
 ) {
     if !reward.active() {
         return;
@@ -880,23 +877,26 @@ pub(crate) fn level_reward_button_system(
         return;
     }
 
-    let already_selected = reward.selected == Some(boon);
-    reward.selected = Some(boon);
-    reward.just_selected = !already_selected;
+    if reward.purchased.contains(&boon) {
+        return;
+    }
+    let Some(cost) = run.boon_cost(boon) else {
+        return;
+    };
+    if reserve.0 < cost || !run.buy(boon) {
+        return;
+    }
+    reserve.0 -= cost;
+    spent.0 += cost;
+    reward.purchased.push(boon);
     for (button, mut bg, mut border) in &mut buttons {
         if button.0 == boon {
-            bg.0 = Color::srgba(0.28, 0.21, 0.05, 0.96);
-            *border = BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.88));
-        } else {
-            bg.0 = Color::srgba(0.05, 0.06, 0.09, 0.74);
-            *border = BorderColor::all(Color::srgba(0.35, 0.40, 0.48, 0.18));
+            bg.0 = Color::srgba(0.08, 0.24, 0.14, 0.96);
+            *border = BorderColor::all(Color::srgba(0.42, 1.0, 0.63, 0.88));
         }
     }
     for mut text in &mut instruction {
-        text.0 = settings
-            .language
-            .tr(TrKey::BoonContinueInstruction)
-            .to_string();
+        text.0 = format!("{} · {}", settings.language.tr(TrKey::BoonPurchased), settings.language.tr(TrKey::BoonContinueInstruction));
     }
 }
 
@@ -935,6 +935,7 @@ fn reset_for_replay(
     res.displayed_cores.0 = [0; 5];
     *res.stats = StatsBook::default();
     res.popup_open.0 = false;
+    res.special_moves.clear();
 }
 
 fn level_complete_meta(
@@ -954,28 +955,10 @@ fn level_complete_meta(
 pub(crate) fn handle_level_advance(
     actions: Res<InputActions>,
     mode: Res<GameMode>,
-    mut reward: ResMut<LevelRewardOffer>,
-    mut run: ResMut<RunState>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if !actions.confirm {
         return;
-    }
-
-    if mode.is_run() && reward.active() {
-        if reward.selected.is_none() {
-            return;
-        }
-        if reward.just_selected {
-            reward.just_selected = false;
-            return;
-        }
-        let Some(boon) = reward.selected else {
-            return;
-        };
-        if !run.grant(boon) {
-            return;
-        }
     }
 
     if mode.is_sandbox() || matches!(*mode, GameMode::Classic(_) | GameMode::Run(_)) {

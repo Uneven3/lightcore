@@ -4,6 +4,30 @@ Esta lista realiza un seguimiento del progreso para estabilizar, mejorar y pulir
 
 ---
 
+## 📝 Estado de la sesión — 2026-07-15
+
+- [x] **Boons como economía de run**
+  - Los boons se ofrecen y compran solamente tras completar una etapa; ya no se conceden gratis.
+  - Se pueden vender durante la etapa por el coste íntegro del último rango comprado, con confirmación de dos toques para evitar ventas accidentales.
+  - `Chispa+` fue reemplazado por `Estrella×`: los Starburst entregan lightcores y shards extra. `Rojo+` ahora aumenta tanto el valor (+25% por rango) como los shards visuales rojos.
+  - *Archivos:* `core/run.rs`, `gameplay/lifecycle.rs`, `gameplay/rewards.rs`, `visuals/score_light.rs`, `ui/mod.rs`.
+
+- [x] **Inventario de movimientos especiales**
+  - La tienda compra `SWP`, `POP` y `UP` como inventario. Los contadores del HUD arman una copia y solo la consumen tras ejecutar una acción válida.
+  - *Archivos:* `gameplay/shop.rs`, `gameplay/mod.rs`, `ui/mod.rs`.
+
+- [/] **Panel integrado de estado/economía**
+  - El HUD agrupa moves, vidas, cores/tienda y contadores de especiales; los boons se muestran independientemente en la esquina inferior derecha.
+  - **Pendiente crítico para mañana:** el panel superior y/o su desplegable de movimientos especiales bloquea/invade el área de juego. Rediseñar su anclaje, dimensiones y comportamiento responsive antes de seguir puliendo su estética.
+  - *Archivos:* `ui/mod.rs`.
+
+- [x] **VFX de captura y Supernova**
+  - Refinadas las trayectorias de shards por color, brillo HDR, pausa/velocidad variables y la expulsión continua de shards de Supernova antes de que el score los absorba.
+  - El refill ahora cae como gotera rápida, evitando el efecto de persiana.
+  - *Archivos:* `visuals/score_light.rs`, `gameplay/spawning.rs`, `visuals/particles.rs`.
+
+---
+
 ## 🎨 1. VFX e Interacciones entre Power Lights
 
 - [x] **Animación Unificada para Doble Supernova (Supernova × Supernova)**

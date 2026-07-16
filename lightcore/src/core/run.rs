@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use super::light::LightColor;
+use super::light::{LightColor, LightKind};
 use super::locale::{Language, TrKey};
 use super::storage;
 
@@ -26,7 +26,9 @@ pub(crate) enum BoonKind {
     RedValue,
     GreenReserve,
     BlueMoves,
-    SparkBounty,
+    /// Starbursts yield extra lightcores when destroyed. Replaces the old spark-only boon so it
+    /// remains useful in every level layout.
+    StarBounty,
     PowerBounty,
     HollowWard,
     RedSpawn,
@@ -41,7 +43,7 @@ impl BoonKind {
         BoonKind::RedValue,
         BoonKind::GreenReserve,
         BoonKind::BlueMoves,
-        BoonKind::SparkBounty,
+        BoonKind::StarBounty,
         BoonKind::PowerBounty,
         BoonKind::HollowWard,
         BoonKind::RedSpawn,
@@ -56,7 +58,7 @@ impl BoonKind {
             BoonKind::RedValue => 0,
             BoonKind::GreenReserve => 1,
             BoonKind::BlueMoves => 2,
-            BoonKind::SparkBounty => 3,
+            BoonKind::StarBounty => 3,
             BoonKind::PowerBounty => 4,
             BoonKind::HollowWard => 5,
             BoonKind::RedSpawn => 6,
@@ -72,7 +74,7 @@ impl BoonKind {
             BoonKind::RedValue => 70,
             BoonKind::GreenReserve => 60,
             BoonKind::BlueMoves => 80,
-            BoonKind::SparkBounty => 65,
+            BoonKind::StarBounty => 75,
             BoonKind::PowerBounty => 75,
             BoonKind::HollowWard => 70,
             BoonKind::RedSpawn | BoonKind::GreenSpawn | BoonKind::BlueSpawn | BoonKind::YellowSpawn | BoonKind::PurpleSpawn => 50,
@@ -85,7 +87,7 @@ impl BoonKind {
             BoonKind::RedValue => lang.tr(TrKey::BoonRedValue),
             BoonKind::GreenReserve => lang.tr(TrKey::BoonGreenReserve),
             BoonKind::BlueMoves => lang.tr(TrKey::BoonBlueMoves),
-            BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBounty),
+            BoonKind::StarBounty => lang.tr(TrKey::BoonStarBounty),
             BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBounty),
             BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWard),
             BoonKind::RedSpawn => lang.tr(TrKey::BoonRedSpawn),
@@ -101,7 +103,7 @@ impl BoonKind {
             BoonKind::RedValue => lang.tr(TrKey::BoonRedValueStatus),
             BoonKind::GreenReserve => lang.tr(TrKey::BoonGreenReserveStatus),
             BoonKind::BlueMoves => lang.tr(TrKey::BoonBlueMovesStatus),
-            BoonKind::SparkBounty => lang.tr(TrKey::BoonSparkBountyStatus),
+            BoonKind::StarBounty => lang.tr(TrKey::BoonStarBountyStatus),
             BoonKind::PowerBounty => lang.tr(TrKey::BoonPowerBountyStatus),
             BoonKind::HollowWard => lang.tr(TrKey::BoonHollowWardStatus),
             BoonKind::RedSpawn => lang.tr(TrKey::BoonRedSpawnStatus),
@@ -109,6 +111,25 @@ impl BoonKind {
             BoonKind::BlueSpawn => lang.tr(TrKey::BoonBlueSpawnStatus),
             BoonKind::YellowSpawn => lang.tr(TrKey::BoonYellowSpawnStatus),
             BoonKind::PurpleSpawn => lang.tr(TrKey::BoonPurpleSpawnStatus),
+        }
+    }
+
+    /// Short notation shared by reward cards and the live boon tray: `+R` changes a core's
+    /// reward, while `%R` changes how often it appears. This keeps the two red upgrades legible
+    /// at a glance instead of relying on similar names.
+    pub(crate) fn notation(self) -> &'static str {
+        match self {
+            BoonKind::RedValue => "+R",
+            BoonKind::GreenReserve => "+G",
+            BoonKind::BlueMoves => "+B",
+            BoonKind::StarBounty => "★×",
+            BoonKind::PowerBounty => "✦+",
+            BoonKind::HollowWard => "⊘H",
+            BoonKind::RedSpawn => "%R",
+            BoonKind::GreenSpawn => "%G",
+            BoonKind::BlueSpawn => "%B",
+            BoonKind::YellowSpawn => "%Y",
+            BoonKind::PurpleSpawn => "%P",
         }
     }
 }
@@ -198,6 +219,17 @@ impl RunState {
         self.grant(boon)
     }
 
+    /// Removes the latest rank and returns exactly the amount that rank cost. This makes every
+    /// boon reversible without tracking separate purchase history: costs only depend on rank.
+    pub(crate) fn sell(&mut self, boon: BoonKind) -> Option<u32> {
+        let level = self.level(boon);
+        if level == 0 {
+            return None;
+        }
+        self.boons[boon.index()] -= 1;
+        Some(boon.cost(level - 1))
+    }
+
     pub(crate) fn grant(&mut self, boon: BoonKind) -> bool {
         if !self.can_buy(boon) {
             return false;
@@ -227,9 +259,11 @@ impl RunState {
         offers
     }
 
+    /// Red ranks add 25% of a red light's normal capture value. Integer rounding happens per
+    /// removal wave so a small match still feels the boon instead of silently receiving zero.
     pub(crate) fn score_bonus_for_color(&self, color: LightColor, count: u32) -> u32 {
         match color {
-            LightColor::Red => count * self.level(BoonKind::RedValue) as u32 * 2,
+            LightColor::Red => (count * self.level(BoonKind::RedValue) as u32 + 3) / 4,
             _ => 0,
         }
     }
@@ -253,12 +287,17 @@ impl RunState {
         moves
     }
 
-    pub(crate) fn spark_bonus(&self) -> u32 {
-        self.level(BoonKind::SparkBounty) as u32 * 25
+    /// A Starburst's normal capture is duplicated at rank one, tripled at rank two, etc.
+    pub(crate) fn star_capture_bonus(&self, kind: LightKind, capture_value: u32) -> u32 {
+        if kind == LightKind::Starburst {
+            capture_value * self.level(BoonKind::StarBounty) as u32
+        } else {
+            0
+        }
     }
 
     pub(crate) fn power_bonus(&self, created: u32) -> u32 {
-        created * self.level(BoonKind::PowerBounty) as u32 * 12
+        created * self.level(BoonKind::PowerBounty) as u32 * 18
     }
 
     pub(crate) fn hollow_spawn_chance(&self, base_chance: f32) -> f32 {
@@ -274,6 +313,15 @@ impl RunState {
         weights[3] += self.level(BoonKind::YellowSpawn) as f32 * 0.45;
         weights[4] += self.level(BoonKind::PurpleSpawn) as f32 * 0.45;
         weights
+    }
+
+    /// Extra visual shards mirror percentage/value boons, so their benefit is readable before the
+    /// scoreboard catches up. Rank one means one additional shard per captured matching color.
+    pub(crate) fn particle_multiplier_for_color(&self, color: LightColor) -> usize {
+        match color {
+            LightColor::Red => 1 + self.level(BoonKind::RedValue) as usize,
+            _ => 1,
+        }
     }
 
     fn encode(&self, reserve: u32) -> String {
@@ -375,6 +423,36 @@ mod tests {
 
         assert_eq!(run.blue_move_bonus(5), 0);
         assert_eq!(run.blue_move_bonus(1), 1);
+    }
+
+    #[test]
+    fn selling_refunds_the_exact_rank_price() {
+        let mut run = RunState::default();
+        assert!(run.buy(BoonKind::RedValue));
+        assert!(run.buy(BoonKind::RedValue));
+        assert_eq!(run.sell(BoonKind::RedValue), Some(BoonKind::RedValue.cost(1)));
+        assert_eq!(run.level(BoonKind::RedValue), 1);
+        assert_eq!(run.sell(BoonKind::RedValue), Some(BoonKind::RedValue.cost(0)));
+        assert_eq!(run.sell(BoonKind::RedValue), None);
+    }
+
+    #[test]
+    fn star_bounty_only_duplicates_starbursts() {
+        let mut run = RunState::default();
+        run.buy(BoonKind::StarBounty);
+
+        assert_eq!(run.star_capture_bonus(LightKind::Starburst, 2), 2);
+        assert_eq!(run.star_capture_bonus(LightKind::Supernova, 2), 0);
+    }
+
+    #[test]
+    fn red_value_also_increases_its_visual_shard_count() {
+        let mut run = RunState::default();
+        run.buy(BoonKind::RedValue);
+        run.buy(BoonKind::RedValue);
+
+        assert_eq!(run.particle_multiplier_for_color(LightColor::Red), 3);
+        assert_eq!(run.particle_multiplier_for_color(LightColor::Blue), 1);
     }
 
     #[test]

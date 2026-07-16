@@ -1,13 +1,10 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use super::{
-    CoreReserve, DisplayedScore, FallComplete, GameMode, GravitySettled, Score, SparksCollected,
-};
+use super::{FallComplete, GameMode, GravitySettled, SparksCollected};
 use crate::core::components::PopAnim;
 use crate::core::grid::GravityBlockSet;
 use crate::core::prelude::*;
-use crate::core::run::RunState;
 use crate::state::GameState;
 
 /// Marks an entity actively dropping under gravity — stays inserted through the visual
@@ -677,10 +674,6 @@ pub(crate) fn on_fall_complete(
     mut commands: Commands,
     mut next_state: ResMut<NextState<GameState>>,
     mut collected: ResMut<SparksCollected>,
-    mut score: ResMut<Score>,
-    mut displayed_score: ResMut<DisplayedScore>,
-    mut reserve: ResMut<CoreReserve>,
-    run: Res<RunState>,
     mut settled: ResMut<GravitySettled>,
     mode: Res<GameMode>,
     layout: Res<GridLayout>,
@@ -697,10 +690,6 @@ pub(crate) fn on_fall_complete(
         if layout.is_spark_exit(*gp) {
             commands.entity(e).try_despawn();
             collected.0 += 1;
-            let bonus = run.spark_bonus();
-            score.0 += bonus;
-            displayed_score.0 += bonus;
-            reserve.0 += bonus;
             any_collected = true;
         }
     }

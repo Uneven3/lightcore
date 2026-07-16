@@ -59,6 +59,7 @@ impl Plugin for GameplayPlugin {
             .init_resource::<SuperComboPending>()
             .init_resource::<spawning::RefillQueue>()
             .init_resource::<shop::Shop>()
+            .init_resource::<shop::SpecialMoveInventory>()
             .init_resource::<input::BoardCursor>()
             .add_observer(swap::on_swap_happened)
             .add_observer(falling::on_fall_complete)
@@ -101,6 +102,7 @@ impl Plugin for GameplayPlugin {
                 Update,
                 (
                     shop::shop_button_system.before(shop::shop_targeting),
+                    shop::special_move_button_system.before(shop::shop_targeting),
                     shop::update_shop_buttons.run_if(
                         resource_changed::<CoreReserve>
                             .or_else(resource_changed::<RunState>)
@@ -386,6 +388,7 @@ pub(crate) struct ResetParams<'w> {
     pub(crate) displayed_cores: ResMut<'w, DisplayedCollectedCores>,
     pub(crate) stats: ResMut<'w, StatsBook>,
     pub(crate) popup_open: ResMut<'w, StatsPopupOpen>,
+    pub(crate) special_moves: ResMut<'w, shop::SpecialMoveInventory>,
 }
 
 // ─── Events ─────────────────────────────────────────────────────────────────────
@@ -438,6 +441,9 @@ pub(crate) struct ChainPop {
     /// (world position, color, pop_delay_secs) of each light. The delay matches PopDelay so
     /// score shards start flying when the light's pop actually begins, not all at once.
     pub(crate) pops: Vec<(Vec3, LightColor, f32)>,
+    /// Starbursts destroyed in this wave. Kept separate from generic powers so the Star× boon can
+    /// double only their score-shard read, matching its economy effect.
+    pub(crate) starburst_origins: Vec<Vec3>,
     /// Centres of Supernovas resolved in this wave. Visuals use this only to give the *same score
     /// shards* an outward launch phase before their normal trip to the HUD.
     pub(crate) supernova_origins: Vec<Vec3>,

@@ -84,6 +84,12 @@ pub(super) fn apply_removal_rewards(
             if !score_reset {
                 score_bonus += economy.run.score_bonus_for_color(*color, cascade);
                 reserve_bonus += economy.run.reserve_bonus_for_color(*color, cascade);
+                // Star bounty duplicates the capture itself, not merely a side score bonus. The
+                // same amount reaches Score and the spendable core reserve, matching what the
+                // player sees as additional score shards.
+                let star_bonus = economy.run.star_capture_bonus(*kind, cascade);
+                score_bonus += star_bonus;
+                reserve_bonus += star_bonus;
             }
             if *color == LightColor::Blue {
                 blue_count += cascade;
@@ -144,8 +150,9 @@ pub(super) fn spawn_pops(
     entity_info: &EntityInfo,
     pop_delays: &HashMap<Entity, f32>,
     pop_duration: f32,
-) -> Vec<(Vec3, LightColor, f32)> {
+) -> (Vec<(Vec3, LightColor, f32)>, Vec<Vec3>) {
     let mut pops = Vec::new();
+    let mut starburst_origins = Vec::new();
     for e in to_remove {
         commands
             .entity(*e)
@@ -157,9 +164,12 @@ pub(super) fn spawn_pops(
             let w = to_world(*pos);
             let delay = pop_delays.get(e).copied().unwrap_or(0.0);
             pops.push((w, *color, delay));
+            if *kind == LightKind::Starburst {
+                starburst_origins.push(w.with_z(2.0));
+            }
         }
     }
-    pops
+    (pops, starburst_origins)
 }
 
 /// Shared match sequence resolution: upgrades matched lights, processes power combos,
@@ -307,7 +317,7 @@ pub(crate) fn resolve_match_sequence(
         commands.trigger(PowerCreated);
     }
 
-    let pops = spawn_pops(
+    let (pops, starburst_origins) = spawn_pops(
         commands,
         &to_remove,
         entity_info,
@@ -319,6 +329,7 @@ pub(crate) fn resolve_match_sequence(
         points,
         hollow: result.score_reset,
         pops,
+        starburst_origins,
         supernova_origins: initial_powers
             .iter()
             .filter(|activation| activation.kind == LightKind::Supernova)

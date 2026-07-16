@@ -271,7 +271,7 @@ fn handle_power_combo_swap(
         },
     );
 
-    let pops = rewards::spawn_pops(
+    let (pops, starburst_origins) = rewards::spawn_pops(
         commands,
         &compound,
         entity_info,
@@ -284,6 +284,7 @@ fn handle_power_combo_swap(
         points,
         hollow: false,
         pops,
+        starburst_origins,
         supernova_origins: [a_activation, b_activation]
             .into_iter()
             .filter(|activation| activation.kind == LightKind::Supernova)
