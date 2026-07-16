@@ -16,6 +16,9 @@ const SHARDS_PER_POP: usize = 2;
 const MAX_TOTAL_SHARDS: usize = 48;
 const SCORE_DRAIN_SHARDS: usize = 34;
 const HOLLOW_LOCAL_DRAIN_SHARDS: usize = 8;
+/// The same score shard first rides this brief explosive arc out of a Supernova, then enters its
+/// usual capture hold and curved trip to the HUD.
+const SUPERNOVA_SHARD_DISTANCE_RANGE: std::ops::Range<f32> = 1.8..3.4;
 /// How strongly each arriving shard drags the score's tint toward its own color.
 const GLOW_BLEND: f32 = 0.18;
 
@@ -86,6 +89,12 @@ pub(crate) struct ScoreShard {
     /// Base on-screen size in pixels, baked into `Transform::scale` at spawn (Mesh2d has no
     /// `Sprite::custom_size` equivalent) — animation systems must multiply by this, not overwrite it.
     base_size: f32,
+    supernova_launch: Option<SupernovaShardLaunch>,
+}
+
+struct SupernovaShardLaunch {
+    centre: Vec3,
+    target: Vec3,
 }
 
 #[derive(Component)]
@@ -115,6 +124,14 @@ pub(crate) struct ScoreShardAbsorbGlow {
 fn quad_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
     let u = 1.0 - t;
     p0 * (u * u) + p1 * (2.0 * u * t) + p2 * (t * t)
+}
+
+fn cubic_bezier(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: f32) -> Vec3 {
+    let u = 1.0 - t;
+    p0 * (u * u * u)
+        + p1 * (3.0 * u * u * t)
+        + p2 * (3.0 * u * t * t)
+        + p3 * (t * t * t)
 }
 
 /// Shared ease/alpha curve for a `ScoreShardAbsorb`'s flight, whether it's rendered via `Sprite`
@@ -194,10 +211,22 @@ pub(crate) fn on_chain_pop_score_light(
     } else {
         1
     };
-    let mut slots: Vec<(Vec3, LightColor, f32)> = Vec::with_capacity(trigger.pops.len() * per_pop);
+    let mut slots: Vec<(Vec3, LightColor, f32, Option<Vec3>)> =
+        Vec::with_capacity(trigger.pops.len() * per_pop);
     for &(pos, c, delay) in &trigger.pops {
+        // Only pops inside Supernova reach receive this phase. Other matches retain exactly their
+        // existing score animation, and the nearest centre gives double-Supernovas a stable owner.
+        let launch_centre = trigger
+            .supernova_origins
+            .iter()
+            .copied()
+            .filter(|centre| centre.distance(pos.with_z(2.0)) <= TILE * 1.55)
+            .min_by(|a, b| {
+                a.distance_squared(pos.with_z(2.0))
+                    .total_cmp(&b.distance_squared(pos.with_z(2.0)))
+            });
         for _ in 0..per_pop {
-            slots.push((pos, c, delay));
+            slots.push((pos, c, delay, launch_centre));
         }
     }
     let n = slots.len() as u32;
@@ -209,9 +238,28 @@ pub(crate) fn on_chain_pop_score_light(
     // future save or a programmatic resource edit. `rand` panics when start >= end.
     let shard_time_range = safe_shard_time_range(&shards);
     let mut rng = rand::rng();
-    for (i, &(pos, c, pop_delay_secs)) in slots.iter().enumerate() {
-        let from = pos.with_z(2.0); // float above the board for the whole trip
+    for (i, &(pos, c, pop_delay_secs, launch_centre)) in slots.iter().enumerate() {
+        let source = pos.with_z(2.0);
         let to = to.with_z(6.0);
+        let launch = launch_centre.map(|centre| {
+            // The particle does not stop at the 3×3 edge: it is expelled well beyond it. The
+            // centre cell has no natural radial direction, so give it one of its own.
+            let radial = (source - centre).truncate();
+            let direction = if radial.length_squared() > f32::EPSILON {
+                radial.normalize()
+            } else {
+                Vec2::from_angle(rng.random_range(0.0..TAU))
+            };
+            let target = centre
+                + (direction * TILE * rng.random_range(SUPERNOVA_SHARD_DISTANCE_RANGE)).extend(0.0);
+            SupernovaShardLaunch {
+                centre,
+                target,
+            }
+        });
+        // A launched shard's score path starts at its farthest explosive point. This avoids the
+        // old snap back to the destroyed cell and lets the HUD pull it in from the expanded field.
+        let from = launch.as_ref().map_or(source, |launch| launch.target);
         let line = (to - from).truncate();
         let perp = Vec2::new(-line.y, line.x).normalize_or_zero();
         // Control point sits in the first part of the trip, kicked sideways (perp) and a little
@@ -234,7 +282,8 @@ pub(crate) fn on_chain_pop_score_light(
                     tint: tint_of(c),
                     timer: Timer::from_seconds(
                         rng.random_range(shard_time_range.clone())
-                            * if c == LightColor::Green { 0.55 } else { 1.0 },
+                            * if c == LightColor::Green { 0.55 } else { 1.0 }
+                            * if launch.is_some() { rng.random_range(1.20..1.65) } else { 1.0 },
                         TimerMode::Once,
                     ),
                     pop_delay: Timer::from_seconds(pop_delay_secs, TimerMode::Once),
@@ -245,13 +294,14 @@ pub(crate) fn on_chain_pop_score_light(
                     glow_phase: rng.random_range(0.0..TAU),
                     color: c,
                     base_size: size,
+                    supernova_launch: launch,
                 },
                 Mesh2d(cache.unit_quad_mesh.clone()),
                 MeshMaterial2d(materials.add(AdditiveMaterial {
                     color: core_color.to_linear(),
                     texture: cache.shard_core_image(c),
                 })),
-                Transform::from_translation(from).with_scale(Vec3::splat(size)),
+                Transform::from_translation(launch_centre.unwrap_or(from)).with_scale(Vec3::splat(size)),
             ))
             .id();
 
@@ -515,7 +565,8 @@ pub(crate) fn tick_score_light(
             continue;
         }
 
-        if !shard.hold.tick(time.delta()).is_finished() {
+        let is_supernova_shard = shard.supernova_launch.is_some();
+        if !is_supernova_shard && !shard.hold.tick(time.delta()).is_finished() {
             // Hover at the capture point and pop into view instead of appearing already mid-flight
             // — a short gathered breath before the shard throws itself into the curve.
             let hold_frac = shard.hold.fraction();
@@ -540,7 +591,20 @@ pub(crate) fn tick_score_light(
         shard.timer.tick(time.delta());
         let frac = shard.timer.fraction();
 
-        let eased = match shard.color {
+        let eased = if let Some(launch) = &shard.supernova_launch {
+            // One continuous, inertia-like curve: the first control point keeps the shard moving
+            // outward, then the last half bends it into the score's pull. There is no hold or
+            // velocity reset at the far point, so it reads as dust drifting in vacuum.
+            let outward_control = launch.centre.lerp(launch.target, 1.22);
+            t.translation = cubic_bezier(
+                launch.centre,
+                outward_control,
+                launch.target,
+                shard.to,
+                frac,
+            );
+            frac
+        } else { match shard.color {
             LightColor::Green => {
                 // Green: high-speed straight ray
                 let eased = frac * frac;
@@ -568,7 +632,7 @@ pub(crate) fn tick_score_light(
                 t.translation = quad_bezier(shard.from, shard.ctrl, shard.to, eased);
                 eased
             }
-        };
+        }};
         // Shrink as it's absorbed, so arrival reads as the score "drinking" the light.
         t.scale = Vec3::splat(shard.base_size * (1.0 - 0.6 * frac));
         // Full brightness for the whole flight — the light disappears ABRUPTLY on arrival (the

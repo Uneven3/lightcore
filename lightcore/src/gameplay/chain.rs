@@ -159,6 +159,11 @@ pub(crate) fn check_chain_matches(
             points,
             hollow: false,
             pops,
+            supernova_origins: activations
+                .iter()
+                .filter(|activation| activation.kind == LightKind::Supernova)
+                .map(|activation| to_world(activation.pos).with_z(2.0))
+                .collect(),
         });
         next_state.set(GameState::Popping);
         return;

@@ -438,6 +438,9 @@ pub(crate) struct ChainPop {
     /// (world position, color, pop_delay_secs) of each light. The delay matches PopDelay so
     /// score shards start flying when the light's pop actually begins, not all at once.
     pub(crate) pops: Vec<(Vec3, LightColor, f32)>,
+    /// Centres of Supernovas resolved in this wave. Visuals use this only to give the *same score
+    /// shards* an outward launch phase before their normal trip to the HUD.
+    pub(crate) supernova_origins: Vec<Vec3>,
 }
 
 /// A swap produced no match and was reverted. Fired so `AudioPlugin` can play the "nope" sound

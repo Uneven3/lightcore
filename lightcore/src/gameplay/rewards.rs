@@ -319,5 +319,10 @@ pub(crate) fn resolve_match_sequence(
         points,
         hollow: result.score_reset,
         pops,
+        supernova_origins: initial_powers
+            .iter()
+            .filter(|activation| activation.kind == LightKind::Supernova)
+            .map(|activation| to_world(activation.pos).with_z(2.0))
+            .collect(),
     });
 }

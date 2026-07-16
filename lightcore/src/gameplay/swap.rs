@@ -284,6 +284,11 @@ fn handle_power_combo_swap(
         points,
         hollow: false,
         pops,
+        supernova_origins: [a_activation, b_activation]
+            .into_iter()
+            .filter(|activation| activation.kind == LightKind::Supernova)
+            .map(|activation| to_world(activation.pos).with_z(2.0))
+            .collect(),
     });
 
     next_state.set(GameState::Popping);

@@ -305,6 +305,7 @@ pub(crate) fn shop_targeting(
                 points: 0,
                 hollow: false,
                 pops: vec![(w, color, 0.0)],
+                supernova_origins: Vec::new(),
             });
             spend(&mut reserve, &mut spent, item.cost(&run).unwrap_or(0));
             disarm(&mut commands, &mut shop, &selected);
