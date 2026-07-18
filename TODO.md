@@ -4,6 +4,46 @@ Esta lista realiza un seguimiento del progreso para estabilizar, mejorar y pulir
 
 ---
 
+## 📝 Estado de la sesión — 2026-07-18 (build Android)
+
+- [x] **Primer build/deploy funcional en Android (Nokia 5.1 Plus)**
+  - `Cargo.toml` no tenía `assets = "assets"` bajo `[package.metadata.android]` → cargo-apk nunca empaquetaba `assets/` en el APK, dejando iconos/fuentes/tutorial rotos en silencio. Agregado.
+  - Faltaba el entry point `android_main` en el crate `cdylib`: `#[bevy_main] fn main()` vivía implícito solo en `main.rs` (target `bin`, no empaquetado por cargo-apk). Agregado a `lib.rs`.
+  - Firmado temporal de release con el `debug.keystore` del sistema (`[package.metadata.android.signing.release]`) — **no sirve para Play Store**, falta generar un keystore dedicado antes de publicar.
+  - *Archivos:* `Cargo.toml`, `src/lib.rs`.
+
+- [x] **Panel de estado (moves/vidas/reserva/especiales) invadía el grid en portrait**
+  - Causa 1: `toggle_hud_descriptions_on_hover` solo alternaba `Visibility`, no `Display` — en `bevy_ui` un nodo `Visibility::Hidden` sigue reservando espacio de layout (taffy no mira `Visibility`). Arreglado seteando también `Node.display`.
+  - Causa 2: sin tamaño compacto para `DeviceMode::Mobile` (icon/padding/gap fijos independiente del modo). Agregado `compact` en `ui/mod.rs::setup_ui`.
+  - Resultado verificado en dispositivo: el panel ya no se solapa con el grid.
+  - *Archivos:* `ui/mod.rs`.
+
+- [x] **Boon se vendía sin querer al tocar para leerlo (touch no tiene hover)**
+  - Se separó "leer" (tap en el ícono expande la tarjeta con descripción, `BoonPeekButton` + `PeekedBoon`) de "vender" (botón `BoonSellButton` nuevo, solo visible expandido, con la misma confirmación de doble-tap de antes).
+  - *Archivos:* `ui/mod.rs`.
+
+- [x] **Texto "Tutorial: ON/OFF" del overlay en partida no aparecía**
+  - `update_tutorial_overlay_toggle_text` estaba gateado por `resource_changed::<WindowSettings>`, que no disparaba a tiempo tras el spawn inicial (`Startup`). Se quitó el gate (costo trivial).
+  - *Archivos:* `ui/mod.rs`.
+
+- [x] **Redistribuir el HUD y separar compra/uso de especiales**
+  - Objetivo, movimientos y cores quedaron como indicadores borderless sobre los controles inferiores.
+  - Vida, Swap, Eliminar y Mejorar están en una fila borderless con iconos grandes; `+coste` compra y tocar el icono usa una copia existente.
+  - Las compras de especiales requieren segundo toque de confirmación (`OK`); comprar vida sigue siendo directo.
+  - El HUD inferior deja una franja exclusiva para los datos de versión/FPS del build.
+  - *Archivos:* `ui/mod.rs`, `gameplay/shop.rs`.
+
+- [x] **Tooltips legibles en desktop y touch**
+  - Centrados, con wrapping y ancho limitado; en touch persisten tres segundos después del toque.
+  - El objetivo se identifica explícitamente como "Objetivo del nivel".
+  - Los tooltips de vida y botones de compra fueron verificados en el Nokia.
+  - Los boons compactos son borderless; su detalle usa un panel oscuro y la venta mantiene doble confirmación.
+  - *Archivos:* `ui/mod.rs`, `core/locale.rs`.
+
+- [x] Version bump: `0.1.0` → `0.1.1`.
+
+---
+
 ## 📝 Estado de la sesión — 2026-07-15
 
 - [x] **Boons como economía de run**

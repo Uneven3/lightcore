@@ -102,3 +102,13 @@ pub fn run_game() {
 
     App::new().add_plugins((default_plugins, GamePlugin)).run();
 }
+
+// `#[bevy_main]` expands into `android_main` (the symbol `NativeActivity` dlopen's on launch),
+// gated `#[cfg(target_os = "android")]` internally. It must live in this crate's `cdylib` build
+// (this file), not in `main.rs` — that's a separate `bin` compilation unit cargo-apk never links
+// into the `.so`, which is why the APK could install but crashed with `UnsatisfiedLinkError:
+// cannot locate symbol "android_main"` before this existed.
+#[bevy_main]
+fn main() {
+    run_game();
+}

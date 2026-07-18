@@ -135,6 +135,7 @@ pub(crate) enum TrKey {
     NotEnoughCores,
 
     // ── Goal hints ────────────────────────────────────────────────────────────
+    GoalTitle,
     GoalFreePlay,
     GoalReachTarget,
     GoalRescueSparks,
@@ -180,6 +181,8 @@ pub(crate) enum TrKey {
     TooltipEliminateTitle,
     TooltipUpgradeTitle,
     TooltipLifeTitle,
+    TooltipMovesTitle,
+    TooltipCoresTitle,
     TooltipBoonRedTitle,
     TooltipBoonGreenTitle,
     TooltipBoonBlueTitle,
@@ -197,6 +200,8 @@ pub(crate) enum TrKey {
     TooltipEliminateDesc,
     TooltipUpgradeDesc,
     TooltipLifeDesc,
+    TooltipMovesDesc,
+    TooltipCoresDesc,
     TooltipBoonRedDesc,
     TooltipBoonGreenDesc,
     TooltipBoonBlueDesc,
@@ -334,6 +339,7 @@ fn tr_es(key: TrKey) -> &'static str {
         // Shop state
         TrKey::NotEnoughCores => "Sin cores suficientes",
         // Goal hints
+        TrKey::GoalTitle => "Objetivo del nivel",
         TrKey::GoalFreePlay => "Captura libre",
         TrKey::GoalReachTarget => "Alcanza meta",
         TrKey::GoalRescueSparks => "Rescata chispas",
@@ -365,6 +371,8 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::TooltipEliminateTitle => "Habilidad: Eliminar",
         TrKey::TooltipUpgradeTitle => "Habilidad: Subir tier",
         TrKey::TooltipLifeTitle => "Artículo: +1 Vida",
+        TrKey::TooltipMovesTitle => "Estado: Movimientos",
+        TrKey::TooltipCoresTitle => "Reserva: Núcleos",
         TrKey::TooltipBoonRedTitle => "Boon: Rojos+",
         TrKey::TooltipBoonGreenTitle => "Boon: Verdes+",
         TrKey::TooltipBoonBlueTitle => "Boon: Azul+",
@@ -386,6 +394,12 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::TooltipUpgradeDesc => "Sube el tier del núcleo seleccionado (ej. normal a Rayo).",
         TrKey::TooltipLifeDesc => {
             "Otorga una vida de reserva para poder reintentar si fallas un nivel."
+        }
+        TrKey::TooltipMovesDesc => {
+            "Movimientos restantes para completar el nivel."
+        }
+        TrKey::TooltipCoresDesc => {
+            "Reserva de núcleos acumulada. Úsalos para comprar habilidades y vidas."
         }
         TrKey::TooltipBoonRedDesc => "Los núcleos rojos recolectados otorgan +25% de puntuación.",
         TrKey::TooltipBoonGreenDesc => {
@@ -519,6 +533,7 @@ fn tr_en(key: TrKey) -> &'static str {
         // Shop state
         TrKey::NotEnoughCores => "Not enough cores",
         // Goal hints
+        TrKey::GoalTitle => "Level objective",
         TrKey::GoalFreePlay => "Free play",
         TrKey::GoalReachTarget => "Reach target",
         TrKey::GoalRescueSparks => "Rescue sparks",
@@ -550,6 +565,8 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::TooltipEliminateTitle => "Ability: Eliminate",
         TrKey::TooltipUpgradeTitle => "Ability: Upgrade",
         TrKey::TooltipLifeTitle => "Item: +1 Life",
+        TrKey::TooltipMovesTitle => "Status: Moves",
+        TrKey::TooltipCoresTitle => "Reserve: Cores",
         TrKey::TooltipBoonRedTitle => "Boon: Red+",
         TrKey::TooltipBoonGreenTitle => "Boon: Green+",
         TrKey::TooltipBoonBlueTitle => "Boon: Blue+",
@@ -568,6 +585,8 @@ fn tr_en(key: TrKey) -> &'static str {
             "Upgrade the tier of the selected light (e.g. normal to Lightning)."
         }
         TrKey::TooltipLifeDesc => "Grants a reserve life to retry if you fail a level.",
+        TrKey::TooltipMovesDesc => "Moves remaining to complete the level.",
+        TrKey::TooltipCoresDesc => "Cores reserve. Use them to purchase special moves and extra lives.",
         TrKey::TooltipBoonRedDesc => "Collected red lights grant +25% score.",
         TrKey::TooltipBoonGreenDesc => "Collected green lights give cores for the shop.",
         TrKey::TooltipBoonBlueDesc => "Every 7 blue cores collected return +1 extra move.",

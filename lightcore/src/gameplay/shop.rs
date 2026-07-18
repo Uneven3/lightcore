@@ -39,6 +39,7 @@ pub(crate) enum ShopItem {
 
 impl ShopItem {
     /// Bar order (left→right), also used to spawn the buttons.
+    #[allow(dead_code)]
     pub(crate) const ALL: [ShopItem; 4] = [
         ShopItem::Swap,
         ShopItem::Eliminate,
@@ -56,6 +57,7 @@ impl ShopItem {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn label(self, lang: Language) -> &'static str {
         match self {
             ShopItem::Swap => lang.tr(TrKey::ShopSwap),
@@ -66,6 +68,7 @@ impl ShopItem {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn status_label(self, lang: Language) -> &'static str {
         match self {
             ShopItem::Swap => lang.tr(TrKey::ShopSwapStatus),
@@ -88,6 +91,7 @@ pub(crate) struct Shop {
     armed: Option<ShopItem>,
     first_pick: Option<Entity>,
     ignore_board_press: bool,
+    pending_purchase: Option<ShopItem>,
     pub(crate) open: bool,
 }
 
@@ -154,6 +158,10 @@ impl Shop {
         self.first_pick.is_some()
     }
 
+    pub(crate) fn pending_purchase_item(&self) -> Option<ShopItem> {
+        self.pending_purchase
+    }
+
     pub(crate) fn active_badge_text(&self, lang: Language) -> Option<String> {
         let item = self.armed?;
         Some(match item {
@@ -173,18 +181,13 @@ impl Shop {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct ShopButton(pub(crate) ShopItem);
 
-/// Root of the booster bar — tagged so the HUD show/hide (`ui::HudFilter`) includes it.
-#[derive(Component)]
-pub(crate) struct ShopBar;
+
 
 #[derive(Component)]
 pub(crate) struct ShopCard;
 
-/// Button background = neutral when affordable, dim grey when too expensive, gold when armed.
-pub(crate) const BTN_IDLE: Color = Color::srgb(0.12, 0.12, 0.20);
-const BTN_BROKE: Color = Color::srgb(0.06, 0.06, 0.09);
-const BTN_ARMED: Color = Color::srgb(0.85, 0.65, 0.18);
-pub(crate) const BTN_BORDER_IDLE: Color = Color::srgba(0.50, 0.74, 1.0, 0.20);
+#[allow(dead_code)]
+pub(crate) const BTN_ARMED: Color = Color::srgb(0.85, 0.65, 0.18);
 pub(crate) const BTN_BORDER_BROKE: Color = Color::srgba(0.35, 0.40, 0.48, 0.18);
 pub(crate) const BTN_BORDER_ARMED: Color = Color::srgba(1.0, 0.86, 0.46, 0.88);
 
@@ -235,6 +238,7 @@ pub(crate) fn shop_button_system(
             continue;
         };
         if item == ShopItem::Life {
+            shop.pending_purchase = None;
             if reserve.0 >= cost {
                 run.lives += 1;
                 spend(&mut reserve, &mut spent, cost);
@@ -248,11 +252,18 @@ pub(crate) fn shop_button_system(
             // the only transaction that may call `RunState::buy`.
             continue;
         }
-        if reserve.0 >= cost {
-            inventory.add(item);
-            spend(&mut reserve, &mut spent, cost);
-            shop.open = false;
+        if reserve.0 < cost {
+            shop.pending_purchase = None;
+            continue;
         }
+        if shop.pending_purchase != Some(item) {
+            shop.pending_purchase = Some(item);
+            continue;
+        }
+        shop.pending_purchase = None;
+        inventory.add(item);
+        spend(&mut reserve, &mut spent, cost);
+        shop.open = false;
     }
 }
 
@@ -270,6 +281,7 @@ pub(crate) fn special_move_button_system(
         if *interaction != Interaction::Pressed || inventory.count(button.0) == 0 {
             continue;
         }
+        shop.pending_purchase = None;
         if shop.armed == Some(button.0) {
             disarm(&mut commands, &mut shop, &selected);
         } else {
@@ -420,25 +432,14 @@ pub(crate) fn shop_targeting(
     }
 }
 
-/// Repaints the bar each frame: armed = gold, affordable = neutral, too dear = dim grey.
+/// Purchase targets are intentionally borderless; affordability is communicated by the cost text
+/// color in `ui::update_shop_button_texts`, without bringing back large boxed controls.
 pub(crate) fn update_shop_buttons(
-    reserve: Res<CoreReserve>,
-    run: Res<RunState>,
-    shop: Res<Shop>,
     mut buttons: Query<(&ShopButton, &mut BackgroundColor, &mut BorderColor), With<ShopCard>>,
 ) {
-    for (btn, mut bg, mut border) in &mut buttons {
-        let item = btn.0;
-        let cost = item.cost(&run);
-        let (bg_color, border_color) = if shop.armed == Some(item) {
-            (BTN_ARMED, BTN_BORDER_ARMED)
-        } else if cost.is_some_and(|cost| reserve.0 >= cost) {
-            (BTN_IDLE, BTN_BORDER_IDLE)
-        } else {
-            (BTN_BROKE, BTN_BORDER_BROKE)
-        };
-        bg.0 = bg_color;
-        *border = BorderColor::all(border_color);
+    for (_, mut bg, mut border) in &mut buttons {
+        bg.0 = Color::NONE;
+        *border = BorderColor::all(Color::NONE);
     }
 }
 
@@ -450,6 +451,7 @@ pub(crate) fn reset_shop(
     selected: Query<Entity, With<Selected>>,
 ) {
     disarm(&mut commands, &mut shop, &selected);
+    shop.pending_purchase = None;
     shop.open = false;
 }
 
@@ -479,6 +481,60 @@ mod tests {
 
         assert_eq!(inventory.count(ShopItem::Life), 0);
         assert_eq!(inventory.count(ShopItem::Boon(BoonKind::RedValue)), 0);
+    }
+
+    #[test]
+    fn special_move_purchase_requires_a_second_confirmation_press() {
+        let mut app = App::new();
+        app.init_resource::<Shop>()
+            .insert_resource(CoreReserve(100))
+            .insert_resource(CoresSpent(0))
+            .init_resource::<RunState>()
+            .init_resource::<SpecialMoveInventory>()
+            .add_systems(Update, shop_button_system);
+
+        let button = app
+            .world_mut()
+            .spawn((Interaction::Pressed, ShopButton(ShopItem::Swap)))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<Shop>().pending_purchase_item(),
+            Some(ShopItem::Swap)
+        );
+        assert_eq!(app.world().resource::<CoreReserve>().0, 100);
+        assert_eq!(
+            app.world()
+                .resource::<SpecialMoveInventory>()
+                .count(ShopItem::Swap),
+            0
+        );
+
+        *app
+            .world_mut()
+            .entity_mut(button)
+            .get_mut::<Interaction>()
+            .expect("purchase button has Interaction") = Interaction::None;
+        app.update();
+        *app
+            .world_mut()
+            .entity_mut(button)
+            .get_mut::<Interaction>()
+            .expect("purchase button has Interaction") = Interaction::Pressed;
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Shop>().pending_purchase_item(),
+            None
+        );
+        assert_eq!(app.world().resource::<CoreReserve>().0, 80);
+        assert_eq!(
+            app.world()
+                .resource::<SpecialMoveInventory>()
+                .count(ShopItem::Swap),
+            1
+        );
     }
 
     #[test]

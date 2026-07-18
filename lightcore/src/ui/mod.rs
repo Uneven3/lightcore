@@ -9,7 +9,7 @@ use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::embedded;
 use crate::gameplay::shop::{
-    BTN_BORDER_ARMED, BTN_BORDER_BROKE, BTN_BORDER_IDLE, BTN_IDLE, Shop, ShopBar, ShopButton,
+    BTN_BORDER_ARMED, BTN_BORDER_BROKE, Shop, ShopButton,
     ShopCard, ShopItem, SpecialMoveButton, SpecialMoveInventory,
 };
 use crate::gameplay::{
@@ -42,6 +42,8 @@ impl Plugin for UiPlugin {
             .init_resource::<TutorialState>()
             .init_resource::<LevelTutorialShown>()
             .init_resource::<PendingBoonSale>()
+            .init_resource::<PeekedBoon>()
+            .init_resource::<TooltipTouchState>()
             .add_systems(Startup, (setup_ui, setup_watermark))
             // The HUD is only meaningful during a match — hide it on every menu screen (the app
             // boots straight into `MainMenu`, so this also covers first launch) and bring it back
@@ -58,15 +60,15 @@ impl Plugin for UiPlugin {
             // The match stays alive while paused — keep the HUD up; this also restores it when
             // returning from Options (which hid it) back to the pause overlay.
             .add_systems(OnEnter(Overlay::Paused), show_hud)
-            .add_systems(OnEnter(MatchPhase::Playing), check_show_tutorial_on_start)
+            .add_systems(OnEnter(MatchPhase::Playing), (check_show_tutorial_on_start, update_hud_tooltips))
             .add_systems(OnExit(MatchPhase::Playing), reset_tutorial_state)
             .add_systems(Update, update_watermark_fps)
             .add_systems(
                 Update,
                 (
                     pause_button_system,
-                    shop_toggle_system,
                     stats_button_system,
+                    boon_peek_button_system,
                     sell_boon_button_system,
                 )
                     .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
@@ -92,9 +94,7 @@ impl Plugin for UiPlugin {
                                 .or_else(resource_changed::<LevelConfig>)
                                 .or_else(resource_changed::<GameMode>),
                         ),
-                        update_shop_toggle_button.run_if(resource_changed::<Shop>),
                         update_shop_reserve_text.run_if(resource_changed::<CoreReserve>),
-                        update_shop_bar_visibility.run_if(resource_changed::<Shop>),
                         update_shop_button_texts.run_if(
                             resource_changed::<CoreReserve>
                                 .or_else(resource_changed::<RunState>)
@@ -111,6 +111,7 @@ impl Plugin for UiPlugin {
                     (
                         update_slow_mo_badge,
                         update_static_hud_labels.run_if(resource_changed::<WindowSettings>),
+                        update_hud_tooltips.run_if(resource_changed::<WindowSettings>),
                         update_goal_hint,
                         update_stats_popup.run_if(
                             resource_changed::<StatsPopupOpen>
@@ -120,11 +121,17 @@ impl Plugin for UiPlugin {
                         update_boon_indicators.run_if(
                             resource_changed::<RunState>
                                 .or_else(resource_changed::<WindowSettings>)
-                                .or_else(resource_changed::<PendingBoonSale>),
+                                .or_else(resource_changed::<PendingBoonSale>)
+                                .or_else(resource_changed::<PeekedBoon>),
                         ),
                         tutorial_close_button_system,
                         tutorial_overlay_toggle_system,
-                        update_tutorial_overlay_toggle_text.run_if(resource_changed::<WindowSettings>),
+                        // Unconditional: gating on `resource_changed::<WindowSettings>` missed the
+                        // very first paint (the entity is spawned in `Startup`, and by the time this
+                        // runs on the first `Update` tick the resource no longer reads as freshly
+                        // changed), leaving the toggle's label permanently blank. The system is a
+                        // one-entity string format — negligible cost to just run every frame.
+                        update_tutorial_overlay_toggle_text,
                         update_tutorial_visibility.run_if(resource_changed::<TutorialState>),
                         update_lives_text
                             .run_if(resource_changed::<RunState>.or_else(resource_changed::<GameMode>)),
@@ -169,8 +176,21 @@ pub(crate) struct GoalHintContainer;
 pub(crate) struct GoalHintText;
 #[derive(Component)]
 pub(crate) struct PauseButton;
+
 #[derive(Component)]
-pub(crate) struct ShopToggleButton;
+pub(crate) struct ShopCardsContainer;
+#[derive(Component)]
+pub(crate) struct LevelStatusContainer;
+#[derive(Component)]
+pub(crate) struct CoresTooltipMarker;
+#[derive(Component)]
+pub(crate) struct BuyButtonTooltipMarker(pub(crate) ShopItem);
+#[derive(Component)]
+pub(crate) struct LivesTooltipMarker;
+#[derive(Component)]
+pub(crate) struct SpecialMoveCard(pub(crate) ShopItem);
+#[derive(Component)]
+pub(crate) struct LivesCard;
 /// Visual root for the compact economy/status block (moves, lives, core reserve and specials).
 #[derive(Component)]
 struct PlayerStatusPanel;
@@ -216,6 +236,12 @@ struct FpsWatermarkText;
 #[derive(Resource, Default)]
 struct GoalHintTouchTimer(Option<Timer>);
 
+#[derive(Resource, Default)]
+struct TooltipTouchState {
+    trigger: Option<TooltipTrigger>,
+    timer: Option<Timer>,
+}
+
 #[derive(Default)]
 struct FpsWatermarkState {
     visible: bool,
@@ -236,6 +262,7 @@ pub(crate) struct HudIcons {
     pub(crate) swap: Handle<Image>,
     pub(crate) eliminate: Handle<Image>,
     pub(crate) upgrade: Handle<Image>,
+    pub(crate) boons: [Handle<Image>; 11],
 }
 
 fn make_procedural_icon<F>(width: u32, height: u32, draw_fn: F) -> Image
@@ -275,6 +302,13 @@ fn setup_ui(
     settings: Res<WindowSettings>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    // The status panel (moves/lives/reserve/specials) is a fixed-size vertical stack docked
+    // top-right. On Mobile the board fills the screen width edge-to-edge (see
+    // `visuals::render_target::fit_canvas`'s `AutoMin` viewport), leaving no side gutter, so a
+    // full-size panel's lower rows spill onto the board's top-right cells. Shrinking it here is
+    // the cheapest fix that doesn't touch board sizing/gameplay.
+    let compact = settings.device_mode == DeviceMode::Mobile;
+
     let heart = images.add(make_procedural_icon(32, 32, |x, y| {
         let cx = x * 1.3;
         let cy = -y * 1.3 + 0.1;
@@ -339,12 +373,77 @@ fn setup_ui(
             Color::NONE
         }
     }));
+    let boon_images = BoonKind::ALL.map(|kind| {
+        images.add(make_procedural_icon(32, 32, move |x, y| {
+            let base_color = match kind {
+                BoonKind::RedValue => Color::srgb(1.0, 0.3, 0.3),
+                BoonKind::GreenReserve => Color::srgb(0.3, 1.0, 0.3),
+                BoonKind::BlueMoves => Color::srgb(0.3, 0.6, 1.0),
+                BoonKind::StarBounty => Color::srgb(1.0, 0.85, 0.3),
+                BoonKind::PowerBounty => Color::srgb(1.0, 0.5, 0.2),
+                BoonKind::HollowWard => Color::srgb(0.8, 0.3, 1.0),
+                BoonKind::RedSpawn => Color::srgb(1.0, 0.35, 0.35),
+                BoonKind::GreenSpawn => Color::srgb(0.35, 1.0, 0.35),
+                BoonKind::BlueSpawn => Color::srgb(0.35, 0.7, 1.0),
+                BoonKind::YellowSpawn => Color::srgb(1.0, 0.9, 0.4),
+                BoonKind::PurpleSpawn => Color::srgb(0.85, 0.4, 1.0),
+            };
+
+            let draw_sign = if kind == BoonKind::HollowWard { -1 } else { 1 };
+
+            // Left side: '+' or '-' centered at cx = -0.4, cy = 0
+            let cx = -0.4;
+            let dx = x - cx;
+            let dy = y;
+            let sign_width = 0.25;
+            let sign_thickness = 0.06;
+
+            let in_sign = if draw_sign == 1 {
+                // Plus sign
+                (dy.abs() < sign_thickness && dx.abs() < sign_width) ||
+                (dx.abs() < sign_thickness && dy.abs() < sign_width)
+            } else {
+                // Minus sign
+                dy.abs() < sign_thickness && dx.abs() < sign_width
+            };
+
+            // Right side: '%' centered at cx = 0.35, cy = 0
+            let rx = 0.35;
+            let px = x - rx;
+            let py = y;
+
+            // Diagonal slash
+            let in_slash = (px + py).abs() < 0.06 && px.abs() < 0.4 && py.abs() < 0.4;
+
+            // Top-left ring
+            let c1_x = px + 0.18;
+            let c1_y = py - 0.18;
+            let dist1 = (c1_x * c1_x + c1_y * c1_y).sqrt();
+            let in_ring1 = (dist1 - 0.10).abs() < 0.035;
+
+            // Bottom-right ring
+            let c2_x = px - 0.18;
+            let c2_y = py + 0.18;
+            let dist2 = (c2_x * c2_x + c2_y * c2_y).sqrt();
+            let in_ring2 = (dist2 - 0.10).abs() < 0.035;
+
+            let in_percent = in_slash || in_ring1 || in_ring2;
+
+            if in_sign || in_percent {
+                base_color
+            } else {
+                Color::NONE
+            }
+        }))
+    });
+
     let icons = HudIcons {
         heart: heart.clone(),
         moves: moves.clone(),
         swap: swap.clone(),
         eliminate: eliminate.clone(),
         upgrade: upgrade.clone(),
+        boons: boon_images,
     };
     commands.insert_resource(icons.clone());
 
@@ -465,260 +564,7 @@ fn setup_ui(
                         TextColor(Color::WHITE),
                     ));
                 });
-                // PlayerStatusPanel (the vertical container)
-                hud.spawn((
-                    PlayerStatusPanel,
-                    Interaction::default(),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(12.0),
-                        right: Val::Px(12.0),
-                        width: Val::Px(84.0),
-                        height: Val::Auto,
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::FlexStart,
-                        padding: UiRect::all(Val::Px(8.0)),
-                        row_gap: Val::Px(10.0),
-                        ..default()
-                    },
-                    BorderColor::all(Color::NONE),
-                    BackgroundColor(Color::srgba(0.035, 0.06, 0.11, 0.5)),
-                    Visibility::Hidden,
-                ))
-                .with_children(|panel| {
-                    // Moves Container
-                    panel.spawn((
-                        MovesText,
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                        Visibility::Inherited,
-                    ))
-                    .with_children(|m| {
-                        m.spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            row.spawn((
-                                ImageNode {
-                                    image: icons.moves.clone(),
-                                    ..default()
-                                },
-                                Node {
-                                    width: Val::Px(18.0),
-                                    height: Val::Px(18.0),
-                                    ..default()
-                                },
-                            ));
-                            row.spawn((
-                                MovesNumberText,
-                                Text::new("30"),
-                                TextFont {
-                                    font_size: FontSize::Px(16.0),
-                                    ..default()
-                                },
-                                TextColor(Color::WHITE),
-                            ));
-                        });
-                        m.spawn((
-                            MovesUnitLabel,
-                            HudDescriptionLabel,
-                            Text::new("moves"),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-                            Visibility::Hidden,
-                        ));
-                    });
-
-                    // Lives Container
-                    panel.spawn((
-                        LivesText,
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                        Visibility::Inherited,
-                    ))
-                    .with_children(|l| {
-                        l.spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            row.spawn((
-                                ImageNode {
-                                    image: icons.heart.clone(),
-                                    ..default()
-                                },
-                                Node {
-                                    width: Val::Px(18.0),
-                                    height: Val::Px(18.0),
-                                    ..default()
-                                },
-                            ));
-                            row.spawn((
-                                LivesNumberText,
-                                Text::new("2"),
-                                TextFont {
-                                    font_size: FontSize::Px(16.0),
-                                    ..default()
-                                },
-                                TextColor(Color::srgb(1.0, 0.45, 0.45)),
-                            ));
-                        });
-                        l.spawn((
-                            LivesUnitLabel,
-                            HudDescriptionLabel,
-                            Text::new("vidas"),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
-                            Visibility::Hidden,
-                        ));
-                    });
-
-                    // Shop Toggle Button (integrated)
-                    panel.spawn((
-                        Button,
-                        ShopToggleButton,
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            padding: UiRect::vertical(Val::Px(4.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::NONE),
-                        BackgroundColor(Color::NONE),
-                        Visibility::Inherited,
-                    ))
-                    .with_children(|b| {
-                        b.spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(4.0),
-                            ..default()
-                        })
-                        .with_children(|row| {
-                            row.spawn((
-                                ImageNode {
-                                    image: cache.core_image.clone(),
-                                    color: Color::srgb(0.70, 0.86, 1.0),
-                                    ..default()
-                                },
-                                Node {
-                                    width: Val::Px(18.0),
-                                    height: Val::Px(18.0),
-                                    ..default()
-                                },
-                            ));
-                            row.spawn((
-                                ShopReserveText,
-                                Text::new("0"),
-                                TextFont {
-                                    font_size: FontSize::Px(16.0),
-                                    ..default()
-                                },
-                                TextColor(Color::WHITE),
-                            ));
-                        });
-                        b.spawn((
-                            ShopHeaderLabel,
-                            HudDescriptionLabel,
-                            Text::new("SHOP"),
-                            TextFont {
-                                font_size: FontSize::Px(8.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgb(0.70, 0.86, 1.0)),
-                            Visibility::Hidden,
-                        ));
-                    });
-
-                    // Special Moves Buttons
-                    for (item, label, icon) in [
-                        (ShopItem::Swap, "SWAP", icons.swap.clone()),
-                        (ShopItem::Eliminate, "ELIM", icons.eliminate.clone()),
-                        (ShopItem::Upgrade, "UPGRD", icons.upgrade.clone()),
-                    ] {
-                        panel.spawn((
-                            Button,
-                            SpecialMoveButton(item),
-                            Node {
-                                width: Val::Percent(100.0),
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::Center,
-                                padding: UiRect::vertical(Val::Px(4.0)),
-                                border: UiRect::all(Val::Px(1.0)),
-                                ..default()
-                            },
-                            BorderColor::all(Color::NONE),
-                            BackgroundColor(Color::NONE),
-                        ))
-                        .with_children(|button| {
-                            button.spawn(Node {
-                                flex_direction: FlexDirection::Row,
-                                align_items: AlignItems::Center,
-                                column_gap: Val::Px(4.0),
-                                ..default()
-                            })
-                            .with_children(|row| {
-                                row.spawn((
-                                    ImageNode {
-                                        image: icon,
-                                        ..default()
-                                    },
-                                    Node {
-                                        width: Val::Px(18.0),
-                                        height: Val::Px(18.0),
-                                        ..default()
-                                    },
-                                ));
-                                row.spawn((
-                                    SpecialMoveCountText(item),
-                                    Text::new("0"),
-                                    TextFont {
-                                        font_size: FontSize::Px(14.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
-                                ));
-                            });
-                            button.spawn((
-                                HudDescriptionLabel,
-                                Text::new(label),
-                                TextFont {
-                                    font_size: FontSize::Px(8.0),
-                                    ..default()
-                                },
-                                TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
-                                Visibility::Hidden,
-                            ));
-                        });
-                    }
-                });
-
+                // SlowMoBadge
                 hud.spawn((
                     SlowMoBadge,
                     Node {
@@ -746,62 +592,127 @@ fn setup_ui(
                     ));
                 });
 
-                // BoonIndicatorBar
+                // BoonIndicatorBar (now horizontal at top-right)
                 hud.spawn((
                     BoonIndicatorBar,
                     Node {
                         position_type: PositionType::Absolute,
-                        // This is the former shop slot: boons are always visible and directly
-                        // sellable instead of being a small, disconnected top-left strip.
-                        bottom: Val::Px(16.0),
+                        top: Val::Px(12.0),
                         right: Val::Px(12.0),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::FlexEnd,
-                        row_gap: Val::Px(6.0),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
                         ..default()
                     },
                     Visibility::Hidden,
                 ));
 
-                // GoalText
+                // LevelStatusContainer (Horizontal row above shop cards)
                 hud.spawn((
-                    Button,
-                    GoalText,
+                    LevelStatusContainer,
                     Node {
                         position_type: PositionType::Absolute,
-                        bottom: Val::Px(16.0),
-                        left: Val::Px(12.0),
-                        min_width: Val::Px(96.0),
-                        min_height: Val::Px(40.0),
+                        bottom: Val::Px(if compact { 104.0 } else { 100.0 }),
+                        left: Val::Px(0.0),
+                        right: Val::Px(0.0),
+                        height: Val::Auto,
                         flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(8.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                        border: UiRect::all(Val::Px(1.5)),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
+                        column_gap: Val::Px(if compact { 6.0 } else { 12.0 }),
                         ..default()
                     },
-                    BorderColor::all(Color::srgba(0.8, 1.0, 0.8, 0.2)),
-                    BackgroundColor(Color::srgba(0.08, 0.15, 0.08, 0.7)),
                     Visibility::Hidden,
                 ))
-                .with_children(|goal| {
-                    goal.spawn((
-                        GoalIcon,
+                .with_children(|status_row| {
+                    // 1. Goal indicator (GoalText)
+                    status_row.spawn((
+                        Button,
+                        GoalText,
                         Node {
-                            width: Val::Px(24.0),
-                            height: Val::Px(24.0),
+                            min_width: Val::Px(if compact { 64.0 } else { 76.0 }),
+                            height: Val::Px(32.0),
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(6.0),
+                            padding: UiRect::horizontal(Val::Px(4.0)),
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             ..default()
                         },
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
                     ))
-                    .with_children(|icon| {
-                        icon.spawn((
-                            GoalIconImage,
+                    .with_children(|goal| {
+                        goal.spawn((
+                            GoalIcon,
+                            Node {
+                                width: Val::Px(22.0),
+                                height: Val::Px(22.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|icon| {
+                            icon.spawn((
+                                GoalIconImage,
+                                ImageNode {
+                                    image: cache.core_image.clone(),
+                                    color: Color::srgb(0.8, 1.0, 0.8),
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(20.0),
+                                    height: Val::Px(20.0),
+                                    ..default()
+                                },
+                            ));
+                        });
+                        goal.spawn((
+                            GoalPrimaryText,
+                            Text::new("0"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.90, 1.0, 0.90)),
+                        ));
+                        goal.spawn((
+                            GoalTargetText,
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(11.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
+                        ));
+                    });
+
+                    // 2. Moves indicator (MovesText)
+                    status_row.spawn((
+                        Button,
+                        MovesText,
+                        TooltipTrigger {
+                            title: "".to_string(),
+                            description: "".to_string(),
+                        },
+                        Node {
+                            min_width: Val::Px(if compact { 64.0 } else { 76.0 }),
+                            height: Val::Px(32.0),
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(6.0),
+                            padding: UiRect::horizontal(Val::Px(4.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|m| {
+                        m.spawn((
                             ImageNode {
-                                image: cache.core_image.clone(),
-                                color: Color::srgb(0.8, 1.0, 0.8),
+                                image: icons.moves.clone(),
                                 ..default()
                             },
                             Node {
@@ -810,54 +721,307 @@ fn setup_ui(
                                 ..default()
                             },
                         ));
+                        m.spawn((
+                            MovesNumberText,
+                            Text::new("30"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
                     });
-                    goal.spawn((
-                        GoalPrimaryText,
-                        Text::new("0"),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
+
+                    // 3. Cores indicator
+                    status_row.spawn((
+                        Button,
+                        CoresTooltipMarker,
+                        TooltipTrigger {
+                            title: "".to_string(),
+                            description: "".to_string(),
+                        },
+                        Node {
+                            min_width: Val::Px(if compact { 64.0 } else { 76.0 }),
+                            height: Val::Px(32.0),
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(6.0),
+                            padding: UiRect::horizontal(Val::Px(4.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.90, 1.0, 0.90)),
-                    ));
-                    goal.spawn((
-                        GoalTargetText,
-                        Text::new(""),
-                        TextFont {
-                            font_size: FontSize::Px(13.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(0.90, 1.0, 0.90, 0.68)),
-                    ));
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            ImageNode {
+                                image: cache.core_image.clone(),
+                                color: Color::srgb(0.70, 0.86, 1.0),
+                                ..default()
+                            },
+                            Node {
+                                width: Val::Px(22.0),
+                                height: Val::Px(22.0),
+                                ..default()
+                            },
+                        ));
+                        b.spawn((
+                            ShopReserveText,
+                            Text::new("0"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
                 });
 
-                // GoalHintContainer
+                // ShopCardsContainer (contains the 4 cards)
+                hud.spawn((
+                    ShopCardsContainer,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Px(if compact { 44.0 } else { 40.0 }),
+                        left: Val::Px(0.0),
+                        right: Val::Px(0.0),
+                        height: Val::Auto,
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(if compact { 2.0 } else { 10.0 }),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ))
+                .with_children(|cards_row| {
+                    let card_w = if compact { Val::Percent(24.0) } else { Val::Px(112.0) };
+                    let card_h = if compact { Val::Px(42.0) } else { Val::Px(46.0) };
+
+                    // 1. Lives Card (LivesText component on wrapper so it hides in sandbox)
+                    cards_row.spawn((
+                        LivesText,
+                        LivesCard,
+                        Node {
+                            width: card_w,
+                            height: card_h,
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Stretch,
+                            ..default()
+                        },
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
+                        Visibility::Inherited,
+                    ))
+                    .with_children(|card| {
+                        // Left / Use area (just display for Lives)
+                        card.spawn((
+                            LivesTooltipMarker,
+                            Node {
+                                flex_grow: 1.0,
+                                flex_direction: FlexDirection::Row,
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(4.0),
+                                ..default()
+                            },
+                            BorderColor::all(Color::NONE),
+                            Interaction::default(),
+                            TooltipTrigger {
+                                title: "".to_string(),
+                                description: "".to_string(),
+                            },
+                        ))
+                        .with_children(|left| {
+                            left.spawn((
+                                ImageNode {
+                                    image: icons.heart.clone(),
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(22.0),
+                                    height: Val::Px(22.0),
+                                    ..default()
+                                },
+                            ));
+                            left.spawn((
+                                LivesNumberText,
+                                Text::new("2"),
+                                TextFont {
+                                    font_size: FontSize::Px(14.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(1.0, 0.45, 0.45)),
+                            ));
+                        });
+
+                        // Right / Buy button (ShopItem::Life)
+                        card.spawn((
+                            Button,
+                            ShopCard,
+                            ShopButton(ShopItem::Life),
+                            TooltipTrigger {
+                                title: "".to_string(),
+                                description: "".to_string(),
+                            },
+                            BuyButtonTooltipMarker(ShopItem::Life),
+                            Node {
+                                width: Val::Px(if compact { 40.0 } else { 44.0 }),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BorderColor::all(Color::NONE),
+                            BackgroundColor(Color::NONE),
+                        ))
+                        .with_children(|right| {
+                            right.spawn((
+                                ShopButtonCostText(ShopItem::Life),
+                                Text::new(""),
+                                TextFont {
+                                    font_size: FontSize::Px(12.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(1.0, 0.86, 0.48)),
+                            ));
+                        });
+                    });
+
+                    // 2, 3, 4. Special Move Cards (Swap, Eliminate, Upgrade)
+                    for (item, icon) in [
+                        (ShopItem::Swap, icons.swap.clone()),
+                        (ShopItem::Eliminate, icons.eliminate.clone()),
+                        (ShopItem::Upgrade, icons.upgrade.clone()),
+                    ] {
+                        cards_row.spawn((
+                            SpecialMoveCard(item),
+                            Node {
+                                width: card_w,
+                                height: card_h,
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Stretch,
+                                ..default()
+                            },
+                            BorderColor::all(Color::NONE),
+                            BackgroundColor(Color::NONE),
+                            Visibility::Inherited,
+                        ))
+                        .with_children(|card| {
+                            // Left / Use button (SpecialMoveButton)
+                            card.spawn((
+                                Button,
+                                SpecialMoveButton(item),
+                                TooltipTrigger {
+                                    title: "".to_string(),
+                                    description: "".to_string(),
+                                },
+                                Node {
+                                    flex_grow: 1.0,
+                                    flex_direction: FlexDirection::Row,
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    column_gap: Val::Px(4.0),
+                                    ..default()
+                                },
+                                BorderColor::all(Color::NONE),
+                                BackgroundColor(Color::NONE),
+                            ))
+                            .with_children(|left| {
+                                left.spawn((
+                                    ImageNode {
+                                        image: icon,
+                                        ..default()
+                                    },
+                                    Node {
+                                        width: Val::Px(22.0),
+                                        height: Val::Px(22.0),
+                                        ..default()
+                                    },
+                                ));
+                                left.spawn((
+                                    SpecialMoveCountText(item),
+                                    Text::new("0"),
+                                    TextFont {
+                                        font_size: FontSize::Px(13.0),
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
+                                ));
+                            });
+
+                            // Right / Buy button (ShopButton)
+                            card.spawn((
+                                Button,
+                                ShopCard,
+                                ShopButton(item),
+                                TooltipTrigger {
+                                    title: "".to_string(),
+                                    description: "".to_string(),
+                                },
+                                BuyButtonTooltipMarker(item),
+                                Node {
+                                    width: Val::Px(if compact { 40.0 } else { 44.0 }),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                                BorderColor::all(Color::NONE),
+                                BackgroundColor(Color::NONE),
+                            ))
+                            .with_children(|right| {
+                                right.spawn((
+                                    ShopButtonCostText(item),
+                                    Text::new(""),
+                                    TextFont {
+                                        font_size: FontSize::Px(12.0),
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgb(1.0, 0.86, 0.48)),
+                                ));
+                            });
+                        });
+                    }
+                });
+
+                // GoalHintContainer (Centered above the LevelStatusContainer)
                 hud.spawn((
                     GoalHintContainer,
                     Node {
                         position_type: PositionType::Absolute,
-                        bottom: Val::Px(64.0),
-                        left: Val::Px(12.0),
-                        max_width: Val::Px(180.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
-                        border: UiRect::all(Val::Px(1.5)),
+                        top: Val::Px(70.0),
+                        left: Val::Px(0.0),
+                        right: Val::Px(0.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         display: Display::None,
                         ..default()
                     },
-                    BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
-                    BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
                     Visibility::Hidden,
                 ))
-                .with_children(|hint| {
-                    hint.spawn((
-                        GoalHintText,
-                        Text::new(""),
-                        TextFont {
-                            font_size: FontSize::Px(13.0),
+                .with_children(|hint_parent| {
+                    hint_parent.spawn((
+                        Node {
+                            max_width: Val::Px(200.0),
+                            padding: UiRect::all(Val::Px(8.0)),
+                            border: UiRect::all(Val::Px(1.5)),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
-                    ));
+                        BorderColor::all(Color::srgba(0.70, 0.90, 1.0, 0.35)),
+                        BackgroundColor(Color::srgba(0.04, 0.06, 0.09, 0.94)),
+                    ))
+                    .with_children(|hint| {
+                        hint.spawn((
+                            GoalHintText,
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(13.0),
+                                ..default()
+                            },
+                            TextLayout::justify(Justify::Center),
+                            TextColor(Color::WHITE),
+                        ));
+                    });
                 });
 
             })
@@ -871,36 +1035,51 @@ fn setup_ui(
                 BoonTooltipContainer,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: Val::Px(120.0),
-                    left: Val::Percent(50.0),
-                    margin: UiRect::left(Val::Px(-200.0)),
-                    width: Val::Px(400.0),
-                    max_width: Val::Percent(90.0),
-                    flex_direction: FlexDirection::Column,
+                    top: Val::Px(70.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    padding: UiRect::all(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(1.5)),
+                    display: Display::None,
                     ..default()
                 },
-                BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75)),
-                BackgroundColor(Color::srgba(0.06, 0.07, 0.10, 0.95)),
                 Visibility::Hidden,
             ))
             .with_children(|t| {
                 t.spawn((
-                    BoonTooltipText,
-                    Text::new(""),
-                    TextFont {
-                        font_size: FontSize::Px(13.0),
+                    Node {
+                        width: Val::Percent(100.0),
+                        max_width: Val::Px(400.0),
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(11.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
-                ));
+                    BorderColor::all(Color::srgba(0.52, 0.78, 1.0, 0.42)),
+                    BackgroundColor(Color::srgba(0.025, 0.04, 0.075, 0.96)),
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        BoonTooltipText,
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(13.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Node {
+                            width: Val::Percent(100.0),
+                            ..default()
+                        },
+                    ));
+                });
             });
     });
 
-    spawn_shop_bar(&mut commands, hud_root_id, settings.language, settings.device_mode);
     spawn_shop_active_badge(&mut commands, hud_root_id);
     spawn_tutorial_overlay(&mut commands);
 }
@@ -967,124 +1146,7 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-fn spawn_shop_bar(commands: &mut Commands, parent: Entity, lang: Language, mode: DeviceMode) {
-    let compact = mode == DeviceMode::Mobile;
-    let bar_padding = if compact { 10.0 } else { 14.0 };
-    let row_gap = if compact { 6.0 } else { 10.0 };
-    let list_gap = if compact { 6.0 } else { 6.0 };
 
-    // Cards layout
-    let card_height = if compact { 44.0 } else { 52.0 };
-    let card_padding = if compact { UiRect::axes(Val::Px(6.0), Val::Px(4.0)) } else { UiRect::axes(Val::Px(8.0), Val::Px(6.0)) };
-
-    // Font sizes
-    let title_font_sz = if compact { 11.5 } else { 14.0 };
-    let cost_font_sz = if compact { 11.5 } else { 13.0 };
-    let status_font_sz = if compact { 8.5 } else { 10.0 };
-
-    let bar = commands
-        .spawn((
-            ShopBar,
-            Node {
-                position_type: PositionType::Absolute,
-                // Drawer owned by the status panel: special moves are purchased directly below
-                // moves/lives/cores, never from a second unrelated corner of the HUD.
-                top: Val::Px(106.0),
-                right: Val::Px(12.0),
-                width: Val::Px(258.0),
-                max_width: Val::Percent(66.0),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Stretch,
-                row_gap: Val::Px(row_gap),
-                padding: UiRect::all(Val::Px(bar_padding)),
-                border: UiRect::all(Val::Px(1.5)),
-                ..default()
-            },
-            BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.28)),
-            BackgroundColor(Color::srgba(0.05, 0.08, 0.13, 0.94)),
-            Visibility::Hidden,
-        ))
-        .with_children(|bar| {
-            bar.spawn((
-                ShopModifiersLabel,
-                Text::new("MODIFICADORES DE TIENDA"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.72, 0.88, 1.0)),
-            ));
-            bar.spawn((Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Row,
-                flex_wrap: FlexWrap::Wrap,
-                column_gap: Val::Px(list_gap),
-                row_gap: Val::Px(list_gap),
-                ..default()
-            },))
-                .with_children(|list| {
-                    for item in ShopItem::ALL {
-                        list.spawn((
-                            Button,
-                            ShopCard,
-                            ShopButton(item),
-                            get_item_tooltip(item, lang),
-                            Node {
-                                width: Val::Percent(48.0),
-                                min_height: Val::Px(card_height),
-                                justify_content: JustifyContent::SpaceBetween,
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Stretch,
-                                padding: card_padding,
-                                border: UiRect::all(Val::Px(1.5)),
-                                ..default()
-                            },
-                            BackgroundColor(BTN_IDLE),
-                            BorderColor::all(BTN_BORDER_IDLE),
-                        ))
-                        .with_children(|b| {
-                            b.spawn((Node {
-                                width: Val::Percent(100.0),
-                                justify_content: JustifyContent::SpaceBetween,
-                                align_items: AlignItems::Center,
-                                ..default()
-                            },))
-                                .with_children(|row| {
-                                    row.spawn((
-                                        Text::new(item.label(lang)),
-                                        TextFont {
-                                            font_size: FontSize::Px(title_font_sz),
-                                            ..default()
-                                        },
-                                        TextColor(Color::WHITE),
-                                    ));
-                                    row.spawn((
-                                        ShopButtonCostText(item),
-                                        Text::new(""),
-                                        TextFont {
-                                            font_size: FontSize::Px(cost_font_sz),
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(1.0, 0.86, 0.48)),
-                                    ));
-                                });
-                            b.spawn((
-                                ShopButtonStatusText(item),
-                                Text::new(item.status_label(lang)),
-                                TextFont {
-                                    font_size: FontSize::Px(status_font_sz),
-                                    ..default()
-                                },
-                                TextColor(Color::srgb(0.64, 0.81, 0.98)),
-                            ));
-                        });
-                    }
-                });
-        })
-        .id();
-    commands.entity(parent).add_child(bar);
-}
 
 fn spawn_tutorial_overlay(commands: &mut Commands) {
     // Tutorial Overlay (inicialmente oculto)
@@ -1213,30 +1275,41 @@ fn spawn_shop_active_badge(commands: &mut Commands, parent: Entity) {
             ShopActiveBadge,
             Node {
                 position_type: PositionType::Absolute,
-                // Part of the same status cluster: this is the live indicator for the currently
-                // armed special move, rather than a detached message beside the goal.
-                top: Val::Px(106.0),
-                right: Val::Px(12.0),
-                max_width: Val::Px(246.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.5)),
+                bottom: Val::Px(146.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Auto,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 display: Display::None,
                 ..default()
             },
-            BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.88)),
-            BackgroundColor(Color::srgba(0.18, 0.14, 0.04, 0.92)),
             Visibility::Hidden,
         ))
-        .with_children(|badge| {
-            badge.spawn((
-                ShopActiveBadgeText,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
+        .with_children(|badge_wrapper| {
+            badge_wrapper.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.95, 0.78)),
-            ));
+                BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.88)),
+                BackgroundColor(Color::srgba(0.18, 0.14, 0.04, 0.92)),
+            ))
+            .with_children(|badge| {
+                badge.spawn((
+                    ShopActiveBadgeText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(13.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(1.0, 0.95, 0.78)),
+                ));
+            });
         })
         .id();
     commands.entity(parent).add_child(badge);
@@ -1249,11 +1322,9 @@ type HideHudFilter = Or<(
     With<MovesText>,
     With<GoalText>,
     With<LivesText>,
-    With<PlayerStatusPanel>,
-    // The booster bar root — its children inherit visibility, so hiding the root hides the bar.
-    With<ShopBar>,
+    With<LevelStatusContainer>,
+    With<ShopCardsContainer>,
     With<PauseButton>,
-    With<ShopToggleButton>,
     With<ShopActiveBadge>,
     With<SlowMoBadge>,
     With<GoalHintContainer>,
@@ -1270,9 +1341,9 @@ type ShowHudFilter = Or<(
     With<MovesText>,
     With<GoalText>,
     With<LivesText>,
-    With<PlayerStatusPanel>,
+    With<LevelStatusContainer>,
+    With<ShopCardsContainer>,
     With<PauseButton>,
-    With<ShopToggleButton>,
     With<StatsButton>,
     With<BoonIndicatorBar>,
     With<HudRoot>,
@@ -1549,8 +1620,8 @@ fn update_goal_text(
     };
 
     let (mut bg, mut border) = panel.into_inner();
-    bg.0 = Color::srgba(0.05, 0.08, 0.10, 0.78);
-    *border = BorderColor::all(icon_color.with_alpha(0.38));
+    bg.0 = Color::NONE;
+    *border = BorderColor::all(Color::NONE);
     let mut icon_node = icon.into_inner();
     icon_node.image = icon_image;
     icon_node.color = icon_color;
@@ -1609,17 +1680,19 @@ fn update_goal_hint(
 }
 
 fn goal_hint_text(mode: &GameMode, level: &LevelConfig, lang: Language) -> String {
-    if mode.is_sandbox() {
-        return lang.tr(TrKey::GoalFreePlay).to_string();
-    }
-    match &level.goal {
-        LevelGoal::Score(_) => lang.tr(TrKey::GoalReachTarget).to_string(),
-        LevelGoal::Sparks => lang.tr(TrKey::GoalRescueSparks).to_string(),
-        LevelGoal::ClearShadow => lang.tr(TrKey::GoalClearShadows).to_string(),
-        LevelGoal::TimedScore { .. } => lang.tr(TrKey::GoalScoreOnClock).to_string(),
-        LevelGoal::CollectColor { .. } => lang.tr(TrKey::GoalCollectColor).to_string(),
-        LevelGoal::TimedCollectColor { .. } => lang.tr(TrKey::GoalColorOnClock).to_string(),
-    }
+    let detail = if mode.is_sandbox() {
+        lang.tr(TrKey::GoalFreePlay)
+    } else {
+        match &level.goal {
+            LevelGoal::Score(_) => lang.tr(TrKey::GoalReachTarget),
+            LevelGoal::Sparks => lang.tr(TrKey::GoalRescueSparks),
+            LevelGoal::ClearShadow => lang.tr(TrKey::GoalClearShadows),
+            LevelGoal::TimedScore { .. } => lang.tr(TrKey::GoalScoreOnClock),
+            LevelGoal::CollectColor { .. } => lang.tr(TrKey::GoalCollectColor),
+            LevelGoal::TimedCollectColor { .. } => lang.tr(TrKey::GoalColorOnClock),
+        }
+    };
+    format!("{}\n{}", lang.tr(TrKey::GoalTitle), detail)
 }
 
 fn stats_button_system(
@@ -1690,40 +1763,15 @@ fn pause_button_system(
     }
 }
 
-fn shop_toggle_system(
-    interactions: Query<&Interaction, (Changed<Interaction>, With<ShopToggleButton>)>,
-    tutorial: Res<TutorialState>,
-    mut shop: ResMut<Shop>,
-) {
-    if tutorial.open {
-        return;
-    }
-    for interaction in &interactions {
-        if *interaction == Interaction::Pressed {
-            shop.open = !shop.open;
-        }
-    }
-}
 
-fn update_shop_toggle_button(
-    shop: Res<Shop>,
-    button: Single<(&mut BackgroundColor, &mut BorderColor), With<ShopToggleButton>>,
-) {
-    let (mut bg, mut border) = button.into_inner();
-    if shop.open {
-        bg.0 = Color::srgba(0.19, 0.15, 0.04, 0.46);
-        *border = BorderColor::all(Color::srgba(1.0, 0.86, 0.46, 0.42));
-    } else {
-        bg.0 = Color::NONE;
-        *border = BorderColor::all(Color::NONE);
-    }
-}
+
 
 fn update_special_move_counts(
     inventory: Res<SpecialMoveInventory>,
     shop: Res<Shop>,
     mut texts: Query<(&SpecialMoveCountText, &mut Text, &mut TextColor)>,
     mut buttons: Query<(&SpecialMoveButton, &mut BorderColor, &mut BackgroundColor)>,
+    mut cards: Query<(&SpecialMoveCard, &mut BorderColor, &mut BackgroundColor), Without<SpecialMoveButton>>,
 ) {
     for (marker, mut text, mut color) in &mut texts {
         let count = inventory.count(marker.0);
@@ -1745,18 +1793,18 @@ fn update_special_move_counts(
             background.0 = Color::NONE;
         }
     }
+    for (card, mut border, mut background) in &mut cards {
+        if shop.armed_item() == Some(card.0) {
+            *border = BorderColor::all(Color::NONE);
+            background.0 = Color::srgba(1.0, 0.76, 0.18, 0.12);
+        } else {
+            *border = BorderColor::all(Color::NONE);
+            background.0 = Color::NONE;
+        }
+    }
 }
 
-pub(crate) fn update_shop_bar_visibility(
-    shop: Res<Shop>,
-    mut v: Single<&mut Visibility, With<ShopBar>>,
-) {
-    **v = if shop.open {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
-}
+
 
 fn update_shop_reserve_text(
     reserve: Res<CoreReserve>,
@@ -1802,8 +1850,15 @@ fn update_shop_button_texts(
 
     for (cost_item, mut text, mut color) in &mut costs {
         if let Some(cost) = cost_item.0.cost(&run) {
-            text.0 = format!("{}c", cost);
-            color.0 = if reserve.0 >= cost {
+            let confirming = shop.pending_purchase_item() == Some(cost_item.0);
+            text.0 = if confirming {
+                "OK".to_string()
+            } else {
+                format!("+{}c", cost)
+            };
+            color.0 = if confirming {
+                Color::srgb(0.55, 1.0, 0.66)
+            } else if reserve.0 >= cost {
                 Color::srgb(1.0, 0.86, 0.48)
             } else {
                 BTN_BORDER_BROKE.with_alpha(0.92)
@@ -2025,9 +2080,23 @@ fn tutorial_close_button_system(
 pub(crate) struct BoonIndicatorBar;
 
 /// Active boon cards expose selling mid-level, with a deliberate two-tap confirmation and the
-/// complete price of the most recently purchased rank as refund.
+/// complete price of the most recently purchased rank as refund. Lives only on the "Vender"
+/// sub-button that appears once a card is peeked (see [`BoonPeekButton`]) — reading a boon must
+/// never itself risk arming a sale.
 #[derive(Component, Clone, Copy)]
 struct BoonSellButton(BoonKind);
+
+/// Tapping a boon card's icon toggles it "peeked" open (see [`PeekedBoon`]) to read its
+/// description — no touch device has a hover state, so this is the only way to read a boon on
+/// Android/iOS without also arming its sale, which is what tapping the (mouse-only) tooltip
+/// trigger used to do.
+#[derive(Component, Clone, Copy)]
+struct BoonPeekButton(BoonKind);
+
+/// Which active boon's card is currently expanded to show its full description + Vender button.
+/// `None` collapses every card back to its compact `{notation}{level}` form.
+#[derive(Resource, Default)]
+struct PeekedBoon(Option<BoonKind>);
 
 /// First tap selects a boon for sale; the second, deliberate tap confirms it. This prevents a
 /// stray touch on a persistent HUD card from immediately deleting a run upgrade.
@@ -2046,9 +2115,11 @@ struct TutorialText;
 fn update_boon_indicators(
     run: Res<RunState>,
     pending_sale: Res<PendingBoonSale>,
+    peeked: Res<PeekedBoon>,
     settings: Res<WindowSettings>,
     mut commands: Commands,
     bar: Single<Entity, With<BoonIndicatorBar>>,
+    icons: Res<HudIcons>,
 ) {
     let bar_entity = *bar;
     let lang = settings.language;
@@ -2061,68 +2132,129 @@ fn update_boon_indicators(
         for boon in BoonKind::ALL {
             let lvl = run.level(boon);
             if lvl > 0 {
+                let is_peeked = peeked.0 == Some(boon);
                 let confirming_sale = pending_sale.0 == Some(boon);
-                let color = match boon {
-                    BoonKind::RedValue => Color::srgba(1.2, 0.4, 0.4, 0.85),
-                    BoonKind::GreenReserve => Color::srgba(0.4, 1.2, 0.4, 0.85),
-                    BoonKind::BlueMoves => Color::srgba(0.4, 0.6, 1.3, 0.85),
-                    BoonKind::StarBounty => Color::srgba(1.3, 0.7, 0.1, 0.85),
-                    BoonKind::PowerBounty => Color::srgba(1.1, 0.4, 1.2, 0.85),
-                    BoonKind::HollowWard => Color::srgba(0.5, 0.5, 0.6, 0.85),
-                    BoonKind::RedSpawn => Color::srgba(1.0, 0.2, 0.2, 0.85),
-                    BoonKind::GreenSpawn => Color::srgba(0.2, 1.0, 0.2, 0.85),
-                    BoonKind::BlueSpawn => Color::srgba(0.2, 0.4, 1.0, 0.85),
-                    BoonKind::YellowSpawn => Color::srgba(1.0, 0.9, 0.2, 0.85),
-                    BoonKind::PurpleSpawn => Color::srgba(0.8, 0.2, 0.9, 0.85),
-                };
 
                 parent
                     .spawn((
                         Button,
-                        BoonSellButton(boon),
+                        BoonPeekButton(boon),
                         Interaction::default(),
-                        get_item_tooltip(ShopItem::Boon(boon), lang),
                         Node {
-                            width: Val::Px(58.0),
-                            height: Val::Px(48.0),
+                            width: Val::Px(if is_peeked { 180.0 } else { 44.0 }),
+                            height: Val::Auto,
+                            min_height: Val::Px(if is_peeked { 48.0 } else { 44.0 }),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.0)),
+                            padding: UiRect::all(Val::Px(if is_peeked { 10.0 } else { 0.0 })),
+                            border_radius: BorderRadius::all(Val::Px(8.0)),
+                            row_gap: Val::Px(if is_peeked { 4.0 } else { 1.0 }),
                             ..default()
                         },
-                        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.25)),
-                        BackgroundColor(color),
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(if is_peeked {
+                            Color::srgba(0.025, 0.04, 0.075, 0.96)
+                        } else {
+                            Color::NONE
+                        }),
                     ))
                     .with_children(|b| {
                         b.spawn((
-                            Text::new(if confirming_sale {
-                                format!("VENDER {}{}?", boon.notation(), lvl)
+                            ImageNode {
+                                image: icons.boons[boon.index()].clone(),
+                                ..default()
+                            },
+                            Node {
+                                width: Val::Px(28.0),
+                                height: Val::Px(28.0),
+                                ..default()
+                            },
+                        ));
+                        b.spawn((
+                            Text::new(if is_peeked {
+                                format!("lvl {}", lvl)
                             } else {
-                                format!("{}{}", boon.notation(), lvl)
+                                format!("{}", lvl)
                             }),
                             TextFont {
-                                font_size: FontSize::Px(if confirming_sale { 10.0 } else { 13.0 }),
+                                font_size: FontSize::Px(10.0),
                                 ..default()
                             },
                             TextColor(Color::WHITE),
                         ));
-                        b.spawn((
-                            Text::new(if confirming_sale {
-                                format!("CONFIRMA ↺ {}c", boon.cost(lvl - 1))
-                            } else {
-                                format!("↺ {}c", boon.cost(lvl - 1))
-                            }),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgba(1.0, 0.92, 0.62, 0.9)),
-                        ));
+                        if is_peeked {
+                            let trigger = get_item_tooltip(ShopItem::Boon(boon), lang);
+                            b.spawn((
+                                Text::new(format!("{}\n{}", trigger.title, trigger.description)),
+                                TextFont {
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextLayout::justify(Justify::Center),
+                                TextColor(Color::WHITE),
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    ..default()
+                                },
+                            ));
+                            b.spawn((
+                                Button,
+                                BoonSellButton(boon),
+                                Interaction::default(),
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    min_height: Val::Px(28.0),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    margin: UiRect::top(Val::Px(2.0)),
+                                    ..default()
+                                },
+                                BorderColor::all(Color::NONE),
+                                BackgroundColor(Color::NONE),
+                            ))
+                            .with_children(|sell| {
+                                sell.spawn((
+                                    Text::new(if confirming_sale {
+                                        format!("CONFIRMAR · +{}c", boon.cost(lvl - 1))
+                                    } else {
+                                        format!("VENDER · +{}c", boon.cost(lvl - 1))
+                                    }),
+                                    TextFont {
+                                        font_size: FontSize::Px(11.0),
+                                        ..default()
+                                    },
+                                    TextColor(if confirming_sale {
+                                        Color::srgb(1.0, 0.48, 0.42)
+                                    } else {
+                                        Color::srgba(1.0, 0.92, 0.62, 0.92)
+                                    }),
+                                ));
+                            });
+                        }
                     });
             }
         }
     });
+}
+
+/// Tapping a boon's icon only expands/collapses its card to read the description — it must never
+/// arm a sale by itself (that's the touch bug this replaces: on touch there's no hover state, so
+/// the only way to read a card used to be the same tap that armed selling it).
+fn boon_peek_button_system(
+    interactions: Query<(&Interaction, &BoonPeekButton), Changed<Interaction>>,
+    mut peeked: ResMut<PeekedBoon>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        peeked.0 = if peeked.0 == Some(button.0) {
+            None
+        } else {
+            Some(button.0)
+        };
+    }
 }
 
 fn sell_boon_button_system(
@@ -2130,6 +2262,7 @@ fn sell_boon_button_system(
     mut run: ResMut<RunState>,
     mut reserve: ResMut<CoreReserve>,
     mut pending_sale: ResMut<PendingBoonSale>,
+    mut peeked: ResMut<PeekedBoon>,
 ) {
     for (interaction, button) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -2140,6 +2273,7 @@ fn sell_boon_button_system(
                 reserve.0 = reserve.0.saturating_add(refund);
             }
             pending_sale.0 = None;
+            peeked.0 = None;
         } else {
             pending_sale.0 = Some(button.0);
         }
@@ -2382,25 +2516,52 @@ pub(crate) fn get_item_tooltip(item: ShopItem, lang: Language) -> TooltipTrigger
 }
 
 fn update_tooltip_system(
+    time: Res<Time>,
     triggers: Query<(&Interaction, &TooltipTrigger)>,
-    mut q_container: Query<(&mut Visibility, &mut BorderColor), With<BoonTooltipContainer>>,
+    mut touch_state: ResMut<TooltipTouchState>,
+    mut q_container: Query<(&mut Visibility, &mut Node), With<BoonTooltipContainer>>,
     mut q_text: Single<&mut Text, With<BoonTooltipText>>,
 ) {
+    let mut pressed_trigger = None;
     let mut hovered_trigger = None;
     for (interaction, trigger) in &triggers {
-        if matches!(*interaction, Interaction::Hovered | Interaction::Pressed) {
-            hovered_trigger = Some(trigger);
-            break;
+        match *interaction {
+            Interaction::Pressed => {
+                pressed_trigger = Some(trigger.clone());
+                break;
+            }
+            Interaction::Hovered if hovered_trigger.is_none() => {
+                hovered_trigger = Some(trigger.clone());
+            }
+            _ => {}
         }
     }
 
-    if let Ok((mut vis, mut border)) = q_container.single_mut() {
-        if let Some(trigger) = hovered_trigger {
+    if let Some(trigger) = pressed_trigger.as_ref() {
+        touch_state.trigger = Some(trigger.clone());
+        touch_state.timer = Some(Timer::from_seconds(3.0, TimerMode::Once));
+    }
+    if let Some(timer) = touch_state.timer.as_mut() {
+        timer.tick(time.delta());
+        if timer.is_finished() {
+            touch_state.timer = None;
+            touch_state.trigger = None;
+        }
+    }
+
+    let visible_trigger = pressed_trigger
+        .as_ref()
+        .or(hovered_trigger.as_ref())
+        .or(touch_state.trigger.as_ref());
+
+    if let Ok((mut vis, mut node)) = q_container.single_mut() {
+        if let Some(trigger) = visible_trigger {
             *vis = Visibility::Visible;
-            q_text.0 = format!("{}\n{}", trigger.title, trigger.description);
-            *border = BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75));
+            node.display = Display::Flex;
+            q_text.0 = format!("{}\n\n{}", trigger.title, trigger.description);
         } else {
             *vis = Visibility::Hidden;
+            node.display = Display::None;
         }
     }
 }
@@ -2410,15 +2571,69 @@ pub(crate) struct HudDescriptionLabel;
 
 fn toggle_hud_descriptions_on_hover(
     panel: Query<&Interaction, (With<PlayerStatusPanel>, Changed<Interaction>)>,
-    mut labels: Query<&mut Visibility, With<HudDescriptionLabel>>,
+    mut labels: Query<(&mut Visibility, &mut Node), With<HudDescriptionLabel>>,
 ) {
     for interaction in &panel {
-        let visible = match *interaction {
-            Interaction::Hovered => Visibility::Visible,
-            _ => Visibility::Hidden,
-        };
-        for mut visibility in &mut labels {
-            *visibility = visible;
+        // `Visibility::Hidden` alone only skips rendering — taffy still lays the node out as if it
+        // were there. On touch there's no `Hovered` state at all, so these labels stay collapsed
+        // (`Display::None`) at all times there, which also fixes the status panel's resting height
+        // on portrait/mobile screens where it otherwise overflowed onto the board (each hidden
+        // label was silently reserving its line height in the column below it).
+        let hovered = *interaction == Interaction::Hovered;
+        for (mut visibility, mut node) in &mut labels {
+            *visibility = if hovered { Visibility::Visible } else { Visibility::Hidden };
+            node.display = if hovered { Display::Flex } else { Display::None };
+        }
+    }
+}
+
+fn update_hud_tooltips(
+    settings: Res<WindowSettings>,
+    mut q_triggers: Query<(
+        &mut TooltipTrigger,
+        Option<&MovesText>,
+        Option<&CoresTooltipMarker>,
+        Option<&LivesTooltipMarker>,
+        Option<&SpecialMoveButton>,
+        Option<&BuyButtonTooltipMarker>,
+    )>,
+) {
+    let lang = settings.language;
+    for (mut trigger, opt_moves, opt_cores, opt_lives, opt_special, opt_buy) in &mut q_triggers {
+        if opt_moves.is_some() {
+            trigger.title = lang.tr(TrKey::TooltipMovesTitle).to_string();
+            trigger.description = lang.tr(TrKey::TooltipMovesDesc).to_string();
+        } else if opt_cores.is_some() {
+            trigger.title = lang.tr(TrKey::TooltipCoresTitle).to_string();
+            trigger.description = lang.tr(TrKey::TooltipCoresDesc).to_string();
+        } else if opt_lives.is_some() {
+            trigger.title = lang.tr(TrKey::TooltipLifeTitle).to_string();
+            trigger.description = lang.tr(TrKey::TooltipLifeDesc).to_string();
+        } else if let Some(btn) = opt_special {
+            let item = btn.0;
+            let t = get_item_tooltip(item, lang);
+            trigger.title = t.title;
+            trigger.description = t.description;
+        } else if let Some(btn) = opt_buy {
+            let item = btn.0;
+            let (title, desc) = match lang {
+                Language::Spanish => match item {
+                    ShopItem::Swap => ("Comprar: Cambiar", "Compra +1 habilidad de intercambiar por 20 núcleos."),
+                    ShopItem::Eliminate => ("Comprar: Eliminar", "Compra +1 habilidad de eliminar por 45 núcleos."),
+                    ShopItem::Upgrade => ("Comprar: Mejorar", "Compra +1 habilidad de mejorar por 90 núcleos."),
+                    ShopItem::Life => ("Comprar: +1 Vida", "Compra +1 vida extra por 80 núcleos."),
+                    _ => ("", ""),
+                },
+                Language::English => match item {
+                    ShopItem::Swap => ("Buy: Swap", "Buy +1 swap ability for 20 cores."),
+                    ShopItem::Eliminate => ("Buy: Eliminate", "Buy +1 eliminate ability for 45 cores."),
+                    ShopItem::Upgrade => ("Buy: Upgrade", "Buy +1 upgrade ability for 90 cores."),
+                    ShopItem::Life => ("Buy: +1 Life", "Buy +1 extra life for 80 cores."),
+                    _ => ("", ""),
+                },
+            };
+            trigger.title = title.to_string();
+            trigger.description = desc.to_string();
         }
     }
 }
