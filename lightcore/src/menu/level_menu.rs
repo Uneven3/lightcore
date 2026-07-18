@@ -1273,7 +1273,7 @@ fn restart_button_system(
             run.abandon();
             reserve.0 = 0;
             spent.0 = 0;
-            run.save_to_disk(0);
+            run.save_to_disk();
             *progress = CampaignProgress::default();
             *mode = GameMode::Run(1);
             next.set(Screen::Match);

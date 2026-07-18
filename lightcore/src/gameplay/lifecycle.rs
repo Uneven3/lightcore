@@ -405,6 +405,8 @@ pub(crate) fn setup_match(
             *level = make_level(level_n);
             moves.0 = level.total_moves;
             shadow_count.0 = 0;
+            // Standalone Classic matches have no run wallet. If a run is active in the
+            // background, its canonical reserve remains protected inside `RunState`.
             reserve.0 = 0;
             spent.0 = 0;
             *level_timer = level_timer_for(&level.goal);
@@ -430,6 +432,8 @@ pub(crate) fn setup_match(
             if new_run {
                 reserve.0 = 0;
                 spent.0 = 0;
+            } else {
+                reserve.0 = run.reserve();
             }
             *level_timer = level_timer_for(&level.goal);
             let hollow_chance = run.hollow_spawn_chance(HOLLOW_BASE_CHANCE);
@@ -1002,6 +1006,7 @@ pub(crate) fn show_game_over(
     let ends_run = mode.is_run() && run.active && run.lives == 0;
     if ends_run {
         run.active = false;
+        run.set_reserve(0);
     }
 
     let outcome = goal_outcome_summary(&level, score.0, sparks.0, shadow_count.0, &collected_cores);
@@ -1127,13 +1132,14 @@ pub(crate) fn handle_restart(
     if mode.is_run() {
         if run.lives > 0 {
             run.lives -= 1;
-            run.save_to_disk(res.reserve.0);
+            run.set_reserve(res.reserve.0);
+            run.save_to_disk();
         } else {
             run.abandon();
             res.reserve.0 = 0;
             res.spent.0 = 0;
             res.special_moves.clear();
-            run.save_to_disk(0);
+            run.save_to_disk();
             next_screen.set(Screen::LevelMenu);
             return;
         }

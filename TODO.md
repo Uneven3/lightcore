@@ -6,6 +6,14 @@ Esta lista realiza un seguimiento del progreso para estabilizar, mejorar y pulir
 
 ## 📝 Estado de la sesión — 2026-07-18 (build Android)
 
+- [x] **Reserva protegida, boons responsivos y economía reajustada**
+  - `RunState` es ahora el dueño canónico de la reserva, junto a vidas y boons. Partidas Classic/sandbox/debug usan un saldo local y no pueden sobrescribirla; abandonar, terminar o reiniciar el run elimina su billetera.
+  - La suma usa saturación en el límite numérico de `u32`, evitando cualquier wrap a un valor pequeño incluso con cantidades extremas o modificadas.
+  - Los saves nativos se escriben a un temporal y se reemplazan atómicamente, evitando que un cierre/crash durante la escritura convierta el run guardado en un archivo parcial.
+  - La bandeja de boons dispone de un área exclusiva a la derecha del botón de pausa y envuelve sus iconos en varias filas cuando se acumulan.
+  - Vida y habilidades especiales cuestan ×10: `800c`, `200c`, `450c` y `900c`.
+  - *Archivos:* `core/run.rs`, `gameplay/lifecycle.rs`, `gameplay/shop.rs`, `ui/mod.rs`.
+
 - [x] **Primer build/deploy funcional en Android (Nokia 5.1 Plus)**
   - `Cargo.toml` no tenía `assets = "assets"` bajo `[package.metadata.android]` → cargo-apk nunca empaquetaba `assets/` en el APK, dejando iconos/fuentes/tutorial rotos en silencio. Agregado.
   - Faltaba el entry point `android_main` en el crate `cdylib`: `#[bevy_main] fn main()` vivía implícito solo en `main.rs` (target `bin`, no empaquetado por cargo-apk). Agregado a `lib.rs`.

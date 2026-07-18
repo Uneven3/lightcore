@@ -598,10 +598,14 @@ fn setup_ui(
                     Node {
                         position_type: PositionType::Absolute,
                         top: Val::Px(12.0),
+                        left: Val::Px(60.0),
                         right: Val::Px(12.0),
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        justify_content: JustifyContent::FlexEnd,
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(6.0),
+                        row_gap: Val::Px(4.0),
                         ..default()
                     },
                     Visibility::Hidden,

@@ -114,7 +114,13 @@ pub(super) fn apply_removal_rewards(
         });
     } else {
         economy.score.0 += points + score_bonus;
-        economy.reserve.0 += points + reserve_bonus;
+        // There is no gameplay cap on the wallet. Saturation only guards the numeric u32 ceiling
+        // so even an extreme/modded value can never wrap around to a small number or zero.
+        economy.reserve.0 = economy
+            .reserve
+            .0
+            .saturating_add(points)
+            .saturating_add(reserve_bonus);
     }
 
     economy.stats.max_cascade = economy.stats.max_cascade.max(cascade);

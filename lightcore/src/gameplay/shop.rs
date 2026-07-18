@@ -26,8 +26,7 @@ use crate::ui::TutorialState;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::particles::{ParticleSettings, spawn_burst};
 
-/// The three boosters the shop sells. Costs are deliberately cheap so boosters are part of normal
-/// play, not an end-game splurge.
+/// The three boosters and the extra life sold by the in-match shop.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ShopItem {
     Swap,
@@ -49,10 +48,10 @@ impl ShopItem {
 
     pub(crate) fn cost(self, run: &RunState) -> Option<u32> {
         match self {
-            ShopItem::Swap => Some(20),
-            ShopItem::Eliminate => Some(45),
-            ShopItem::Upgrade => Some(90),
-            ShopItem::Life => Some(80),
+            ShopItem::Swap => Some(200),
+            ShopItem::Eliminate => Some(450),
+            ShopItem::Upgrade => Some(900),
+            ShopItem::Life => Some(800),
             ShopItem::Boon(boon) => run.boon_cost(boon),
         }
     }
@@ -484,10 +483,20 @@ mod tests {
     }
 
     #[test]
+    fn special_move_and_life_prices_are_scaled_by_ten() {
+        let run = RunState::default();
+
+        assert_eq!(ShopItem::Swap.cost(&run), Some(200));
+        assert_eq!(ShopItem::Eliminate.cost(&run), Some(450));
+        assert_eq!(ShopItem::Upgrade.cost(&run), Some(900));
+        assert_eq!(ShopItem::Life.cost(&run), Some(800));
+    }
+
+    #[test]
     fn special_move_purchase_requires_a_second_confirmation_press() {
         let mut app = App::new();
         app.init_resource::<Shop>()
-            .insert_resource(CoreReserve(100))
+            .insert_resource(CoreReserve(1_000))
             .insert_resource(CoresSpent(0))
             .init_resource::<RunState>()
             .init_resource::<SpecialMoveInventory>()
@@ -503,7 +512,7 @@ mod tests {
             app.world().resource::<Shop>().pending_purchase_item(),
             Some(ShopItem::Swap)
         );
-        assert_eq!(app.world().resource::<CoreReserve>().0, 100);
+        assert_eq!(app.world().resource::<CoreReserve>().0, 1_000);
         assert_eq!(
             app.world()
                 .resource::<SpecialMoveInventory>()
@@ -528,7 +537,7 @@ mod tests {
             app.world().resource::<Shop>().pending_purchase_item(),
             None
         );
-        assert_eq!(app.world().resource::<CoreReserve>().0, 80);
+        assert_eq!(app.world().resource::<CoreReserve>().0, 800);
         assert_eq!(
             app.world()
                 .resource::<SpecialMoveInventory>()

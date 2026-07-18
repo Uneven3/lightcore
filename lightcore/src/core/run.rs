@@ -5,6 +5,7 @@ use rand::{Rng, SeedableRng};
 use super::light::{LightColor, LightKind};
 use super::locale::{Language, TrKey};
 use super::storage;
+use crate::gameplay::GameMode;
 
 pub(crate) const RUN_LEVELS: u32 = 13;
 const MAX_BOON_LEVEL: u8 = 3;
@@ -17,7 +18,12 @@ impl Plugin for RunPlugin {
         app.init_resource::<RunState>()
             .init_resource::<CoreReserve>()
             .add_systems(Startup, load_run_progress)
-            .add_systems(Update, save_run_progress);
+            .add_systems(
+                Update,
+                (sync_run_reserve, save_run_progress)
+                    .chain()
+                    .run_if(resource_exists::<GameMode>),
+            );
     }
 }
 
@@ -134,10 +140,9 @@ impl BoonKind {
     }
 }
 
-/// Lightcores currently available to bend the rules with boosters. This is the spendable reserve:
-/// it grows when lights are captured, but unlike `Score` it goes down when the player buys help.
-/// Owned here (not in `gameplay`) because it's part of the persisted run save — `load_run_progress`
-/// / `save_run_progress` below read and write it alongside `RunState` in the same save file.
+/// Match-local projection of the active run's spendable reserve. Gameplay systems mutate this
+/// lightweight resource; [`sync_run_reserve`] copies it into [`RunState`], which is the canonical
+/// owner persisted to disk alongside lives and boons.
 #[derive(Resource, Default)]
 pub(crate) struct CoreReserve(pub(crate) u32);
 
@@ -147,6 +152,8 @@ pub(crate) struct RunState {
     pub(crate) seed: u64,
     pub(crate) depth: u32,
     pub(crate) lives: u32,
+    /// Canonical wallet for this run. It starts and ends with the run, just like lives and boons.
+    reserve: u32,
     boons: [u8; BoonKind::ALL.len()],
     blue_meter: u32,
 }
@@ -158,6 +165,7 @@ impl Default for RunState {
             seed: 0xC0DE_51A7_5EED,
             depth: 1,
             lives: 2,
+            reserve: 0,
             boons: [0; BoonKind::ALL.len()],
             blue_meter: 0,
         }
@@ -170,6 +178,7 @@ impl RunState {
         self.seed = rand::random();
         self.depth = 1;
         self.lives = 2;
+        self.reserve = 0;
         self.boons = [0; BoonKind::ALL.len()];
         self.blue_meter = 0;
     }
@@ -178,6 +187,7 @@ impl RunState {
         self.active = false;
         self.depth = 1;
         self.lives = 2;
+        self.reserve = 0;
         self.boons = [0; BoonKind::ALL.len()];
         self.blue_meter = 0;
     }
@@ -199,12 +209,21 @@ impl RunState {
             self.depth = self.depth.max(depth.saturating_add(1));
             if depth >= RUN_LEVELS {
                 self.active = false;
+                self.reserve = 0;
             }
         }
     }
 
     pub(crate) fn level(&self, boon: BoonKind) -> u8 {
         self.boons[boon.index()]
+    }
+
+    pub(crate) fn reserve(&self) -> u32 {
+        self.reserve
+    }
+
+    pub(crate) fn set_reserve(&mut self, reserve: u32) {
+        self.reserve = reserve;
     }
 
     pub(crate) fn can_buy(&self, boon: BoonKind) -> bool {
@@ -287,9 +306,8 @@ impl RunState {
         moves
     }
 
-    pub(crate) fn save_to_disk(&self, reserve: u32) {
-        let reserve_value = if self.active { reserve } else { 0 };
-        if let Err(err) = storage::write_save_file("run.txt", &self.encode(reserve_value)) {
+    pub(crate) fn save_to_disk(&self) {
+        if let Err(err) = storage::write_save_file("run.txt", &self.encode()) {
             bevy::log::warn!("No se pudo guardar el run: {err}");
         }
     }
@@ -331,14 +349,14 @@ impl RunState {
         }
     }
 
-    fn encode(&self, reserve: u32) -> String {
+    fn encode(&self) -> String {
         format!(
             "{RUN_SAVE_VERSION}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
             if self.active { 1 } else { 0 },
             self.seed,
             self.depth,
             self.blue_meter,
-            reserve,
+            if self.active { self.reserve } else { 0 },
             self.lives,
             self.boons
                 .iter()
@@ -348,7 +366,7 @@ impl RunState {
         )
     }
 
-    fn decode(raw: &str) -> Option<(Self, u32)> {
+    fn decode(raw: &str) -> Option<Self> {
         let mut lines = raw.lines();
         let ver = lines.next()?;
         if ver != "lightcore-run-v1" && ver != "lightcore-run-v2" {
@@ -373,35 +391,43 @@ impl RunState {
         for (idx, raw_level) in raw_boons.split(',').enumerate().take(boons.len()) {
             boons[idx] = raw_level.parse::<u8>().ok()?.min(MAX_BOON_LEVEL);
         }
-        Some((
-            Self {
-                active,
-                seed,
-                depth,
-                lives,
-                boons,
-                blue_meter,
-            },
-            if active { reserve } else { 0 },
-        ))
+        Some(Self {
+            active,
+            seed,
+            depth,
+            lives,
+            reserve: if active { reserve } else { 0 },
+            boons,
+            blue_meter,
+        })
     }
 }
 
 fn load_run_progress(mut run: ResMut<RunState>, mut reserve: ResMut<CoreReserve>) {
-    let Some((saved_run, saved_reserve)) =
+    let Some(saved_run) =
         storage::load_save_file("run.txt").and_then(|raw| RunState::decode(&raw))
     else {
         return;
     };
+    reserve.0 = saved_run.reserve();
     *run = saved_run;
-    reserve.0 = saved_reserve;
 }
 
-fn save_run_progress(run: Res<RunState>, reserve: Res<CoreReserve>) {
-    if !run.is_changed() && !reserve.is_changed() {
+fn sync_run_reserve(
+    mode: Res<GameMode>,
+    mut run: ResMut<RunState>,
+    reserve: Res<CoreReserve>,
+) {
+    if mode.is_run() && run.active && reserve.is_changed() && run.reserve() != reserve.0 {
+        run.set_reserve(reserve.0);
+    }
+}
+
+fn save_run_progress(run: Res<RunState>) {
+    if !run.is_changed() {
         return;
     }
-    run.save_to_disk(reserve.0);
+    run.save_to_disk();
 }
 
 #[cfg(test)]
@@ -460,17 +486,56 @@ mod tests {
     }
 
     #[test]
+    fn non_run_matches_cannot_overwrite_the_run_wallet() {
+        let mut app = App::new();
+        app.insert_resource(GameMode::Run(2))
+            .insert_resource(RunState {
+                active: true,
+                ..default()
+            })
+            .insert_resource(CoreReserve(432))
+            .add_systems(Update, sync_run_reserve);
+
+        app.update();
+        assert_eq!(app.world().resource::<RunState>().reserve(), 432);
+
+        *app.world_mut().resource_mut::<GameMode>() = GameMode::Classic(1);
+        app.world_mut().resource_mut::<CoreReserve>().0 = 0;
+        app.update();
+
+        assert_eq!(app.world().resource::<RunState>().reserve(), 432);
+    }
+
+    #[test]
+    fn reserve_starts_and_ends_with_its_run() {
+        let mut abandoned = RunState::default();
+        abandoned.start_new();
+        abandoned.set_reserve(275);
+        abandoned.abandon();
+        assert!(!abandoned.active);
+        assert_eq!(abandoned.reserve(), 0);
+
+        let mut completed = RunState::default();
+        completed.start_new();
+        completed.set_reserve(640);
+        completed.complete_depth(RUN_LEVELS);
+        assert!(!completed.active);
+        assert_eq!(completed.reserve(), 0);
+    }
+
+    #[test]
     fn run_progress_round_trips_through_save_text() {
         let mut run = RunState::default();
         run.start_new();
         run.depth = 4;
+        run.set_reserve(123);
         run.grant(BoonKind::RedValue);
 
-        let (decoded, reserve) = RunState::decode(&run.encode(123)).unwrap();
+        let decoded = RunState::decode(&run.encode()).unwrap();
 
         assert!(decoded.active);
         assert_eq!(decoded.depth, 4);
         assert_eq!(decoded.level(BoonKind::RedValue), 1);
-        assert_eq!(reserve, 123);
+        assert_eq!(decoded.reserve(), 123);
     }
 }

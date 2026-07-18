@@ -27,6 +27,7 @@ pub(crate) fn write_save_file(file_name: &str, contents: &str) -> Result<(), Str
 #[cfg(not(target_arch = "wasm32"))]
 mod backend {
     use super::save_file_path;
+    use std::io::Write;
 
     pub(super) fn load(file_name: &str) -> Option<String> {
         std::fs::read_to_string(save_file_path(file_name)).ok()
@@ -37,7 +38,31 @@ mod backend {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
-        std::fs::write(path, contents).map_err(|err| err.to_string())
+
+        // Never truncate the live save in place. If the app or device dies halfway through a
+        // write, the previous complete file remains available instead of decoding as "no run"
+        // on the next launch (which used to look exactly like the reserve resetting to zero).
+        let temporary = path.with_extension("tmp");
+        let mut file = std::fs::File::create(&temporary).map_err(|err| err.to_string())?;
+        file.write_all(contents.as_bytes())
+            .map_err(|err| err.to_string())?;
+        file.sync_all().map_err(|err| err.to_string())?;
+        drop(file);
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::fs::rename(temporary, path).map_err(|err| err.to_string())
+        }
+
+        // Windows does not replace an existing destination with `rename`; native Unix/Android
+        // targets above retain the fully atomic replacement semantics.
+        #[cfg(target_os = "windows")]
+        {
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|err| err.to_string())?;
+            }
+            std::fs::rename(temporary, path).map_err(|err| err.to_string())
+        }
     }
 }
 
