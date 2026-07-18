@@ -105,7 +105,7 @@ fn gather_input(
     mouse_motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
     touches: Res<bevy::input::touch::Touches>,
-    state: Res<State<crate::state::GameState>>,
+    state: Option<Res<State<crate::state::MatchPhase>>>,
 ) {
     let mut a = InputActions::default();
 
@@ -120,13 +120,15 @@ fn gather_input(
 
     let pointer_just_pressed =
         mouse.just_pressed(MouseButton::Left) || touches.iter_just_pressed().next().is_some();
-    if pointer_just_pressed {
-        let current_state = state.get();
-        if *current_state == crate::state::GameState::LevelComplete
-            || *current_state == crate::state::GameState::GameOver
-        {
-            a.confirm = true;
-        }
+    if pointer_just_pressed
+        && state.is_some_and(|s| {
+            matches!(
+                s.get(),
+                crate::state::MatchPhase::LevelComplete | crate::state::MatchPhase::GameOver
+            )
+        })
+    {
+        a.confirm = true;
     }
 
     // ── Gamepad buttons (OR across all connected pads) ──────────────────────

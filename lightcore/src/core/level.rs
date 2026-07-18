@@ -41,6 +41,12 @@ pub(crate) struct LevelConfig {
     pub(crate) hard_shadow_positions: Vec<GridPos>,
     pub(crate) blocker_positions: Vec<GridPos>,
     pub(crate) grade_baseline: u32,
+    /// Base score value of one captured lightcore of each color, indexed by `LightColor::index()`.
+    /// `[1; 5]` in every level today — this is the seam for modes where colors are worth different
+    /// amounts (color-themed goals, future story dates à la HuniePop). Applied per core in
+    /// `gameplay::rewards::apply_removal_rewards`, multiplied by the cascade depth; `RunState`
+    /// boons (`score_bonus_for_color`) add on top of this base, they don't replace it.
+    pub(crate) color_values: [u32; 5],
 }
 
 pub(crate) fn make_level(n: u32) -> LevelConfig {
@@ -54,6 +60,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
+            color_values: [1; 5],
         },
         2 => LevelConfig {
             level: 2,
@@ -64,6 +71,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 360,
+            color_values: [1; 5],
         },
         3 => LevelConfig {
             level: 3,
@@ -78,6 +86,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![GridPos { x: 4, y: 2 }, GridPos { x: 4, y: 3 }],
             blocker_positions: vec![],
             grade_baseline: 420,
+            color_values: [1; 5],
         },
         4 => LevelConfig {
             level: 4,
@@ -92,6 +101,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 520,
+            color_values: [1; 5],
         },
         5 => LevelConfig {
             level: 5,
@@ -105,6 +115,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
+            color_values: [1; 5],
         },
         6 => LevelConfig {
             level: 6,
@@ -118,6 +129,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 300,
+            color_values: [1; 5],
         },
         7 => LevelConfig {
             level: 7,
@@ -128,6 +140,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 520,
+            color_values: [1; 5],
         },
         8 => LevelConfig {
             level: 8,
@@ -145,6 +158,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
                 GridPos { x: 4, y: 5 },
             ],
             grade_baseline: 520,
+            color_values: [1; 5],
         },
         9 => LevelConfig {
             level: 9,
@@ -165,6 +179,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
                 GridPos { x: 4, y: 4 },
             ],
             grade_baseline: 560,
+            color_values: [1; 5],
         },
         10 => LevelConfig {
             level: 10,
@@ -179,6 +194,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![],
             grade_baseline: 200,
+            color_values: [1; 5],
         },
         11 => LevelConfig {
             level: 11,
@@ -196,6 +212,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
                 GridPos { x: 5, y: 5 },
             ],
             grade_baseline: 800,
+            color_values: [1; 5],
         },
         12 => LevelConfig {
             level: 12,
@@ -228,6 +245,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             ],
             blocker_positions: vec![],
             grade_baseline: 900,
+            color_values: [1; 5],
         },
         13 => LevelConfig {
             level: 13,
@@ -241,6 +259,7 @@ pub(crate) fn make_level(n: u32) -> LevelConfig {
             hard_shadow_positions: vec![],
             blocker_positions: vec![GridPos { x: 1, y: 3 }, GridPos { x: 6, y: 3 }],
             grade_baseline: 1000,
+            color_values: [1; 5],
         },
         _ => make_level(1),
     }
@@ -296,6 +315,7 @@ pub(crate) fn make_generated_level(depth: u32, seed: u64) -> LevelConfig {
         hard_shadow_positions: vec![],
         blocker_positions,
         grade_baseline: 260 + depth * 58,
+        color_values: [1; 5],
     }
 }
 

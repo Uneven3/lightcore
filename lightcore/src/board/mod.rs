@@ -156,6 +156,7 @@ pub(crate) fn spawn_stasis_cover(commands: &mut Commands, cache: &VisualCache, p
 
 /// Future deep shadow: an opaque cell with no lightcore that needs `hits` orthogonally adjacent
 /// matches to clear — see `HardShadow` and `clear_shadow_at`.
+#[allow(dead_code)]
 pub(crate) fn spawn_hard_shadow(
     commands: &mut Commands,
     cache: &VisualCache,

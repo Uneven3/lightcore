@@ -63,6 +63,10 @@ impl GridLayout {
         self.cells.contains(&pos)
     }
 
+    pub(crate) fn cells(&self) -> &HashSet<GridPos> {
+        &self.cells
+    }
+
     /// Adds a directed gravity route. A portal is one presentation of this rule; the gravity
     /// system only knows that a piece at `from` continues falling at `to`.
     pub(crate) fn add_fall_route(&mut self, from: GridPos, to: GridPos) {

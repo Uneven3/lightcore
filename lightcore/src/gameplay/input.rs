@@ -6,14 +6,14 @@ use crate::core::easing::damped_squash;
 use crate::core::prelude::*;
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
-use crate::state::GameState;
+use crate::state::{MatchPhase, Overlay};
 use crate::ui::TutorialState;
 
 pub(crate) fn handle_input(
     mut commands: Commands,
     mut pending: ResMut<PendingSwap>,
     mut drag: ResMut<DragState>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     pointer: Res<PointerInput>,
     shop: Res<Shop>,
     tutorial: Res<TutorialState>,
@@ -187,11 +187,14 @@ pub(crate) fn highlight_selected(
     mut lights: Query<(&mut Transform, Has<Selected>), (With<FallPhysics>, Without<SelectJelly>)>,
 ) {
     for (mut t, sel) in &mut lights {
-        t.scale = if sel {
+        let target = if sel {
             Vec3::splat(SELECTED_SCALE)
         } else {
             Vec3::ONE
         };
+        if t.scale != target {
+            t.scale = target;
+        }
     }
 }
 
@@ -255,7 +258,7 @@ pub(crate) fn tick_select_jelly(
 /// an empty cell, which the downstream pipeline already handles.
 pub(crate) fn commit_swap(
     pending: &mut PendingSwap,
-    next_state: &mut NextState<GameState>,
+    next_state: &mut NextState<MatchPhase>,
     lights: &mut Query<
         (Entity, &mut GridPos, Has<Selected>),
         (With<Light>, Without<Spark>, Without<BlocksInteraction>),
@@ -288,7 +291,7 @@ pub(crate) fn commit_swap(
             pos.set_if_neq(start_gp);
         }
     }
-    next_state.set(GameState::SwapAnimating);
+    next_state.set(MatchPhase::SwapAnimating);
 }
 
 /// The keyboard/gamepad cursor over the board: a highlighted cell the player moves with nav, picks
@@ -356,7 +359,7 @@ pub(crate) fn board_cursor_input(
     mut cursor: ResMut<BoardCursor>,
     mut commands: Commands,
     mut pending: ResMut<PendingSwap>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     tutorial: Res<TutorialState>,
     layout: Res<GridLayout>,
     movable: Query<(), With<Movable>>,
@@ -489,12 +492,15 @@ pub(crate) fn setup_board_cursor(
 pub(crate) fn update_board_cursor(
     cursor: Res<BoardCursor>,
     last: Res<LastInputDevice>,
-    state: Res<State<GameState>>,
+    state: Option<Res<State<MatchPhase>>>,
+    overlay: Res<State<Overlay>>,
     time: Res<Time>,
     highlight: Single<(&mut Transform, &mut Visibility), With<CursorHighlight>>,
 ) {
     let (mut t, mut vis) = highlight.into_inner();
-    let show = *state.get() == GameState::Playing && *last == LastInputDevice::Cursor;
+    let show = state.is_some_and(|s| *s.get() == MatchPhase::Playing)
+        && *overlay.get() == Overlay::None
+        && *last == LastInputDevice::Cursor;
     *vis = if show {
         Visibility::Visible
     } else {
@@ -516,7 +522,7 @@ pub(crate) fn check_swap_visual_done(
     mut commands: Commands,
     pending: Res<PendingSwap>,
     mut reverting: ResMut<RevertingSwap>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     lights: Query<(&GridPos, &VisualPos), With<Light>>,
     fallables: Query<(&GridPos, &VisualPos), With<Spark>>,
 ) {
@@ -530,7 +536,7 @@ pub(crate) fn check_swap_visual_done(
             .all(|&e| visual_at_grid(e, &lights, &fallables));
         if done {
             reverting.0.clear();
-            next_state.set(GameState::Playing);
+            next_state.set(MatchPhase::Playing);
         }
         return;
     };

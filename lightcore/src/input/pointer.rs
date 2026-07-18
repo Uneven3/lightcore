@@ -65,7 +65,7 @@ pub(crate) fn gather_pointer_input(
         next.just_pressed = press_pos.is_some();
         next.just_released = release_pos.is_some();
         next.held = held_pos.is_some();
-        let win_pos = press_pos.or(held_pos).or(release_pos);
+        let win_pos = press_pos.or(release_pos).or(held_pos);
         next.position_window = win_pos;
         if let Some(pos) = win_pos {
             next.position_world = window_point_to_world(cam, cam_t, vp_pos, vp_size, pos);

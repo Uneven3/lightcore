@@ -7,6 +7,19 @@ use super::light::{LightColor, LightKind};
 pub(crate) type Grid = HashMap<GridPos, (Entity, LightColor, LightKind)>;
 pub(crate) type EntityInfo = HashMap<Entity, (GridPos, LightColor, LightKind)>;
 
+pub(crate) fn build_grid_info<I>(iter: I) -> (Grid, EntityInfo)
+where
+    I: IntoIterator<Item = (Entity, GridPos, LightColor, LightKind)>,
+{
+    let mut grid = Grid::new();
+    let mut entity_info = EntityInfo::new();
+    for (e, p, c, k) in iter {
+        grid.insert(p, (e, c, k));
+        entity_info.insert(e, (p, c, k));
+    }
+    (grid, entity_info)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MatchKey {
     Color(LightColor),

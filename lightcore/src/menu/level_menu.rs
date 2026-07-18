@@ -11,7 +11,7 @@ use crate::gameplay::{CoreReserve, CoresSpent, GameMode};
 use crate::input::pointer::PointerInput;
 use crate::input::{InputActions, LastInputDevice};
 use crate::menu::options::{DeviceMode, WindowSettings};
-use crate::state::GameState;
+use crate::state::Screen;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::render_target::WorldCamera;
 
@@ -20,8 +20,8 @@ pub(crate) struct LevelMenuPlugin;
 impl Plugin for LevelMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LevelMapState>()
-            .add_systems(OnEnter(GameState::LevelMenu), spawn_level_menu)
-            .add_systems(OnExit(GameState::LevelMenu), despawn_level_menu)
+            .add_systems(OnEnter(Screen::LevelMenu), spawn_level_menu)
+            .add_systems(OnExit(Screen::LevelMenu), despawn_level_menu)
             .add_systems(
                 Update,
                 (
@@ -45,7 +45,7 @@ impl Plugin for LevelMenuPlugin {
                     keyboard_launch_selected_system,
                     back_button_system,
                 )
-                    .run_if(in_state(GameState::LevelMenu)),
+                    .run_if(in_state(Screen::LevelMenu)),
             );
     }
 }
@@ -1129,11 +1129,19 @@ fn update_play_button_text_system(
         return;
     };
     let lang = settings.language;
-    text.0 = if run.active && entry_level(map_state.selected) == Some(run.depth.clamp(1, RUN_LEVELS)) {
+    let selected_level = entry_level(map_state.selected);
+    
+    text.0 = if run.active && selected_level == Some(run.depth.clamp(1, RUN_LEVELS)) {
         if lang == Language::English {
             "Continue Run".to_string()
         } else {
             "Continuar run".to_string()
+        }
+    } else if !run.active && selected_level == Some(1) {
+        if lang == Language::English {
+            "Start Run".to_string()
+        } else {
+            "Iniciar run".to_string()
         }
     } else {
         lang.tr(TrKey::Play).to_string()
@@ -1167,7 +1175,7 @@ fn play_button_system(
     run: Res<RunState>,
     map_state: Res<LevelMapState>,
     mut mode: ResMut<GameMode>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
     if !entry_is_unlocked(map_state.selected, &progress) {
         return;
@@ -1175,7 +1183,7 @@ fn play_button_system(
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
             *mode = entry_mode(map_state.selected, &run);
-            next.set(GameState::Loading);
+            next.set(Screen::Match);
         }
     }
 }
@@ -1186,27 +1194,27 @@ fn keyboard_launch_selected_system(
     run: Res<RunState>,
     map_state: Res<LevelMapState>,
     mut mode: ResMut<GameMode>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
     if !actions.confirm {
         return;
     }
     if entry_is_unlocked(map_state.selected, &progress) {
         *mode = entry_mode(map_state.selected, &run);
-        next.set(GameState::Loading);
+        next.set(Screen::Match);
     }
 }
 
 fn back_button_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<BackButton>)>,
     actions: Res<InputActions>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
     let clicked = interactions
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed);
     if clicked || actions.menu_back() {
-        next.set(GameState::MainMenu);
+        next.set(Screen::MainMenu);
     }
 }
 
@@ -1258,16 +1266,17 @@ fn restart_button_system(
     mut spent: ResMut<CoresSpent>,
     mut progress: ResMut<CampaignProgress>,
     mut mode: ResMut<GameMode>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
             run.abandon();
             reserve.0 = 0;
             spent.0 = 0;
+            run.save_to_disk(0);
             *progress = CampaignProgress::default();
             *mode = GameMode::Run(1);
-            next.set(GameState::Loading);
+            next.set(Screen::Match);
         }
     }
 }
@@ -1393,7 +1402,8 @@ fn entry_mode(index: usize, run: &RunState) -> GameMode {
         MenuEntryKind::Campaign(level) => {
             // Only the node for the active depth resumes the run. Selecting any other campaign
             // node must honour that choice instead of silently replacing it with Continue Run.
-            if run.active && level == run.depth.clamp(1, RUN_LEVELS) {
+            // If the run is NOT active, playing Level 1 starts a new run!
+            if (run.active && level == run.depth.clamp(1, RUN_LEVELS)) || (!run.active && level == 1) {
                 GameMode::Run(level)
             } else {
                 GameMode::Classic(level)

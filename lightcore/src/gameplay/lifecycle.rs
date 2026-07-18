@@ -16,12 +16,15 @@ use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RUN_LEVELS, RunState};
 use crate::input::InputActions;
 use crate::menu::options::WindowSettings;
-use crate::state::GameState;
+use crate::state::{MatchPhase, Screen};
 use crate::visuals::EffectAnim;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::light_trail::{LaserBolt, TravelingLight};
 use crate::visuals::particles::Particle;
 use crate::visuals::score_light::{ScoreShard, ScoreShardAbsorb, ScoreShardScatter};
+
+#[derive(Component)]
+pub(crate) struct GridCellTile;
 
 /// Every transient entity kind spawned during a match — board pieces, shadows, VFX, score shards
 /// in every phase (capture flight, drain flight, drain scatter), and the end-of-match overlays.
@@ -44,6 +47,7 @@ type TransientMatchEntity = Or<(
     With<LevelCompleteOverlay>,
     With<IngredientExit>,
     With<StasisCover>,
+    With<GridCellTile>,
 )>;
 
 /// `LevelTimer` value a level should start with, derived from its goal — `Some` (ticking down)
@@ -69,7 +73,7 @@ pub(crate) fn tick_level_timer(
     level: Res<LevelConfig>,
     score: Res<Score>,
     collected_cores: Res<CollectedCores>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
 ) {
     let Some(t) = level_timer.0.as_mut() else {
         return;
@@ -79,16 +83,16 @@ pub(crate) fn tick_level_timer(
         match &level.goal {
             LevelGoal::TimedScore { target, .. } => {
                 if score.0 >= *target {
-                    next_state.set(GameState::LevelComplete);
+                    next_state.set(MatchPhase::LevelComplete);
                 } else {
-                    next_state.set(GameState::GameOver);
+                    next_state.set(MatchPhase::GameOver);
                 }
             }
             LevelGoal::TimedCollectColor { color, target, .. } => {
                 if collected_cores.0[color.index()] >= *target {
-                    next_state.set(GameState::LevelComplete);
+                    next_state.set(MatchPhase::LevelComplete);
                 } else {
-                    next_state.set(GameState::GameOver);
+                    next_state.set(MatchPhase::GameOver);
                 }
             }
             _ => {}
@@ -105,10 +109,10 @@ pub(crate) fn tick_level_timer(
 pub(crate) fn check_board_consumed(
     mode: Res<GameMode>,
     lights: Query<(), With<Light>>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
 ) {
     if *mode == GameMode::ConsumeAll && lights.is_empty() {
-        next_state.set(GameState::LevelComplete);
+        next_state.set(MatchPhase::LevelComplete);
     }
 }
 
@@ -393,7 +397,7 @@ pub(crate) fn setup_match(
     mut spent: ResMut<CoresSpent>,
     mut level_timer: ResMut<LevelTimer>,
     mut layout: ResMut<GridLayout>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
 ) {
     *layout = GridLayout::default();
     match *mode {
@@ -454,6 +458,7 @@ pub(crate) fn setup_match(
                 hard_shadow_positions: vec![],
                 blocker_positions: vec![],
                 grade_baseline: 0,
+                color_values: [1; 5],
             };
             moves.0 = u32::MAX;
             reserve.0 = 0;
@@ -468,7 +473,21 @@ pub(crate) fn setup_match(
             }
         }
     }
-    next_state.set(GameState::Playing);
+
+    // Spawn grid background tiles matching the finalized GridLayout (including subgrids)
+    for &pos in layout.cells() {
+        commands.spawn((
+            GridCellTile,
+            Sprite {
+                image: cache.grid_cell_image.clone(),
+                custom_size: Some(Vec2::splat(TILE)),
+                ..default()
+            },
+            Transform::from_translation(to_world(pos).with_z(-5.0)),
+        ));
+    }
+
+    next_state.set(MatchPhase::Playing);
 }
 
 fn populate_teleport_board(commands: &mut Commands, layout: &mut GridLayout) {
@@ -955,14 +974,14 @@ fn level_complete_meta(
 pub(crate) fn handle_level_advance(
     actions: Res<InputActions>,
     mode: Res<GameMode>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_screen: ResMut<NextState<Screen>>,
 ) {
     if !actions.confirm {
         return;
     }
 
     if mode.is_sandbox() || matches!(*mode, GameMode::Classic(_) | GameMode::Run(_)) {
-        next_state.set(GameState::LevelMenu);
+        next_screen.set(Screen::LevelMenu);
     }
 }
 
@@ -1091,7 +1110,8 @@ pub(crate) fn handle_restart(
     mut run: ResMut<RunState>,
     mut level: ResMut<LevelConfig>,
     mut res: ResetParams,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     cache: Res<VisualCache>,
     layout: Res<GridLayout>,
     match_entities: Query<Entity, TransientMatchEntity>,
@@ -1101,14 +1121,20 @@ pub(crate) fn handle_restart(
     }
 
     if mode.is_sandbox() {
-        next_state.set(GameState::LevelMenu);
+        next_screen.set(Screen::LevelMenu);
         return;
     }
     if mode.is_run() {
         if run.lives > 0 {
             run.lives -= 1;
+            run.save_to_disk(res.reserve.0);
         } else {
-            next_state.set(GameState::LevelMenu);
+            run.abandon();
+            res.reserve.0 = 0;
+            res.spent.0 = 0;
+            res.special_moves.clear();
+            run.save_to_disk(0);
+            next_screen.set(Screen::LevelMenu);
             return;
         }
     }
@@ -1142,7 +1168,7 @@ pub(crate) fn handle_restart(
         weights,
         &layout,
     );
-    next_state.set(GameState::Playing);
+    next_state.set(MatchPhase::Playing);
 }
 
 fn goal_outcome_summary(

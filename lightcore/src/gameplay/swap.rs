@@ -13,10 +13,11 @@ use crate::board::clear_shadow_at;
 use crate::core::prelude::*;
 use crate::visuals::RaySettings;
 use crate::core::run::RunState;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 #[derive(SystemParam)]
 pub(crate) struct SwapScoreParams<'w> {
+    level: Res<'w, LevelConfig>,
     score: ResMut<'w, Score>,
     displayed: ResMut<'w, DisplayedScore>,
     reserve: ResMut<'w, CoreReserve>,
@@ -32,7 +33,7 @@ pub(crate) fn on_swap_happened(
     mut pending: ResMut<PendingSwap>,
     mut score_res: SwapScoreParams,
     mut moves: ResMut<MovesLeft>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     mut cascade: ResMut<CascadeDepth>,
     mut shadow_count: ResMut<ShadowCount>,
     mut shadow_q: Query<
@@ -55,14 +56,7 @@ pub(crate) fn on_swap_happened(
     cascade.0 = 1;
     power.queue.0.clear();
 
-    let grid: Grid = lights
-        .iter()
-        .map(|(e, p, c, k)| (*p, (e, *c, *k)))
-        .collect();
-    let entity_info: EntityInfo = lights
-        .iter()
-        .map(|(e, p, c, k)| (e, (*p, *c, *k)))
-        .collect();
+    let (grid, entity_info) = build_grid_info(lights.iter().map(|(e, p, c, k)| (e, *p, *c, *k)));
 
     let Some(swap) = pending.0.as_ref() else {
         return;
@@ -138,7 +132,7 @@ fn handle_power_combo_swap(
     pending: &mut PendingSwap,
     score_res: &mut SwapScoreParams,
     moves: &mut MovesLeft,
-    next_state: &mut NextState<GameState>,
+    next_state: &mut NextState<MatchPhase>,
     cascade_depth: u32,
     shadow_count: &mut ShadowCount,
     shadow_q: &mut Query<
@@ -266,8 +260,9 @@ fn handle_power_combo_swap(
             reserve: &mut score_res.reserve,
             collected_cores: &mut score_res.collected_cores,
             stats: &mut score_res.stats,
-            moves: moves,
+            moves,
             run: &mut score_res.run,
+            color_values: score_res.level.color_values,
         },
     );
 
@@ -292,7 +287,7 @@ fn handle_power_combo_swap(
             .collect(),
     });
 
-    next_state.set(GameState::Popping);
+    next_state.set(MatchPhase::Popping);
     true
 }
 
@@ -301,7 +296,7 @@ fn handle_normal_match_swap(
     pending: &mut PendingSwap,
     score_res: &mut SwapScoreParams,
     moves: &mut MovesLeft,
-    next_state: &mut NextState<GameState>,
+    next_state: &mut NextState<MatchPhase>,
     cascade_depth: u32,
     shadow_count: &mut ShadowCount,
     shadow_q: &mut Query<
@@ -350,9 +345,9 @@ fn handle_normal_match_swap(
             pending.0 = None;
         }
         next_state.set(if reverting.0.is_empty() {
-            GameState::Playing
+            MatchPhase::Playing
         } else {
-            GameState::SwapAnimating
+            MatchPhase::SwapAnimating
         });
         return;
     }
@@ -389,7 +384,8 @@ fn handle_normal_match_swap(
             stats: &mut score_res.stats,
             moves,
             run: &mut score_res.run,
+            color_values: score_res.level.color_values,
         },
     );
-    next_state.set(GameState::Popping);
+    next_state.set(MatchPhase::Popping);
 }

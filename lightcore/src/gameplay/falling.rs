@@ -5,7 +5,7 @@ use super::{FallComplete, GameMode, GravitySettled, SparksCollected};
 use crate::core::components::PopAnim;
 use crate::core::grid::GravityBlockSet;
 use crate::core::prelude::*;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 /// Marks an entity actively dropping under gravity — stays inserted through the visual
 /// settle period between rows, not just the instant a row-step happens. Read by
@@ -37,6 +37,7 @@ fn choose_fall_target(
         .or_else(|| diagonal_fall_target(pos, occupied, shadow_set))
 }
 
+#[allow(dead_code)]
 fn straight_fall_target(
     pos: GridPos,
     occupied: &HashSet<(i32, i32)>,
@@ -69,6 +70,7 @@ fn straight_fall_target_in(
     }
 }
 
+#[allow(dead_code)]
 fn diagonal_fall_target(
     pos: GridPos,
     occupied: &HashSet<(i32, i32)>,
@@ -672,7 +674,7 @@ mod tests {
 pub(crate) fn on_fall_complete(
     _: On<FallComplete>,
     mut commands: Commands,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     mut collected: ResMut<SparksCollected>,
     mut settled: ResMut<GravitySettled>,
     mode: Res<GameMode>,
@@ -695,9 +697,9 @@ pub(crate) fn on_fall_complete(
     }
     if any_collected {
         // Removing the spark leaves a hole; let apply_gravity run again next frame
-        // (still in GameState::Falling) so the column above drops to fill it.
+        // (still in MatchPhase::Falling) so the column above drops to fill it.
         settled.0 = false;
     } else {
-        next_state.set(GameState::Spawning);
+        next_state.set(MatchPhase::Spawning);
     }
 }

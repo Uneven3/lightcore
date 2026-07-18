@@ -33,6 +33,8 @@ pub(crate) struct EconomyState<'a> {
     pub(crate) stats: &'a mut StatsBook,
     pub(crate) moves: &'a mut MovesLeft,
     pub(crate) run: &'a mut RunState,
+    /// `LevelConfig::color_values` — the per-color base worth of a captured core.
+    pub(crate) color_values: [u32; 5],
 }
 
 /// Applies the full economy of a removal wave: base points, per-color `RunState` bonuses, the
@@ -54,20 +56,7 @@ pub(super) fn apply_removal_rewards(
     power_bonus_for_upgrades: u32,
     economy: &mut EconomyState,
 ) -> u32 {
-    let points = if score_reset {
-        0
-    } else {
-        to_remove
-            .iter()
-            .filter(|e| {
-                entity_info
-                    .get(e)
-                    .is_some_and(|(_, _, kind)| !kind.is_hollow())
-            })
-            .count() as u32
-            * cascade
-    };
-
+    let mut points = 0;
     let mut score_bonus = if score_reset {
         0
     } else {
@@ -82,6 +71,9 @@ pub(super) fn apply_removal_rewards(
             }
             economy.collected_cores.0[color.index()] += cascade;
             if !score_reset {
+                // Each captured core is worth its level-defined color value × the cascade depth
+                // (was a flat 1 per core before `LevelConfig::color_values` existed).
+                points += economy.color_values[color.index()] * cascade;
                 score_bonus += economy.run.score_bonus_for_color(*color, cascade);
                 reserve_bonus += economy.run.reserve_bonus_for_color(*color, cascade);
                 // Star bounty duplicates the capture itself, not merely a side score bonus. The

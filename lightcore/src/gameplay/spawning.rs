@@ -6,7 +6,7 @@ use super::{GameMode, SpawnComplete, SuperComboPending};
 use crate::board::{HOLLOW_BASE_CHANCE, random_basic_kind, spawn_light};
 use crate::core::prelude::*;
 use crate::core::run::RunState;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 /// Tiles above the grid's top edge that new lights enter from — shared by every light in
 /// a column's refill, so they all come from near the visible top, never from deep inside
@@ -215,7 +215,7 @@ pub(crate) fn wait_for_spawn_settle(
 
 pub(crate) fn on_spawn_complete(
     _: On<SpawnComplete>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
 ) {
-    next_state.set(GameState::CheckingChain);
+    next_state.set(MatchPhase::CheckingChain);
 }

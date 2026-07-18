@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::core::components::Light;
-use crate::state::GameState;
+use crate::state::{MatchPhase, Overlay};
 
 pub(crate) mod additive_material;
 pub(crate) mod assets;
@@ -77,21 +77,22 @@ impl Plugin for VisualsPlugin {
                 (motion::lerp_visual_pos, bounce::detect_landing)
                     .chain()
                     .run_if(
-                        in_state(GameState::Falling)
-                            .or_else(in_state(GameState::Spawning))
-                            .or_else(in_state(GameState::SwapAnimating)),
+                        in_state(MatchPhase::Falling)
+                            .or_else(in_state(MatchPhase::Spawning))
+                            .or_else(in_state(MatchPhase::SwapAnimating)),
                     ),
             )
             .add_systems(
                 Update,
-                motion::update_drag_constrained.run_if(in_state(GameState::Playing)),
+                motion::update_drag_constrained
+                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
             )
             .add_systems(
                 Update,
                 motion::sync_transforms
                     .after(motion::lerp_visual_pos)
                     .after(motion::update_drag_constrained)
-                    .run_if(not(in_state(GameState::GameOver))),
+                    .run_if(not(in_state(MatchPhase::GameOver))),
             )
             .add_systems(
                 Update,
@@ -109,7 +110,7 @@ impl Plugin for VisualsPlugin {
                     core_motion::despawn_cores_on_pop,
                     hard_shadow::update_hard_shadow_label,
                 )
-                    .run_if(not(in_state(GameState::GameOver))),
+                    .run_if(not(in_state(MatchPhase::GameOver))),
             )
             .add_systems(
                 Update,

@@ -4,21 +4,22 @@ use crate::core::prelude::*;
 use crate::gameplay::{
     CascadeDepth, ChainPop, PowerCombo, PowerConsumed, PowerCreated, ScoreDrained, SwapFailed,
 };
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 pub(crate) struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_sounds)
+            .add_systems(Update, tick_delayed_sounds)
             .add_observer(on_chain_pop)
             .add_observer(on_power_consumed)
             .add_observer(on_power_combo)
             .add_observer(on_score_drained)
             .add_observer(on_swap_failed)
             .add_observer(on_power_created)
-            .add_systems(OnEnter(GameState::LevelComplete), on_level_complete)
-            .add_systems(OnEnter(GameState::GameOver), on_game_over);
+            .add_systems(OnEnter(MatchPhase::LevelComplete), on_level_complete)
+            .add_systems(OnEnter(MatchPhase::GameOver), on_game_over);
     }
 }
 
@@ -170,6 +171,29 @@ fn on_power_consumed(
     play(&mut commands, handle, virtual_time.relative_speed());
 }
 
+#[derive(Component)]
+pub(crate) struct DelayedSound {
+    pub(crate) handle: Handle<AudioSource>,
+    pub(crate) timer: Timer,
+}
+
+fn tick_delayed_sounds(
+    mut commands: Commands,
+    mut q: Query<(Entity, &mut DelayedSound)>,
+    virtual_time: Res<Time<Virtual>>,
+) {
+    for (entity, mut delayed) in &mut q {
+        if delayed.timer.tick(virtual_time.delta()).is_finished() {
+            play(
+                &mut commands,
+                delayed.handle.clone(),
+                virtual_time.relative_speed(),
+            );
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 fn on_power_combo(
     trigger: On<PowerCombo>,
     sounds: Res<SoundAssets>,
@@ -188,7 +212,14 @@ fn on_power_combo(
         Blackhole => sounds.combo_blackhole.clone(),
         SuperCombo => sounds.combo_super_combo.clone(),
     };
-    play(&mut commands, handle, virtual_time.relative_speed());
+    if trigger.delay_secs > 0.0 {
+        commands.spawn(DelayedSound {
+            handle,
+            timer: Timer::from_seconds(trigger.delay_secs, TimerMode::Once),
+        });
+    } else {
+        play(&mut commands, handle, virtual_time.relative_speed());
+    }
 }
 
 fn on_score_drained(

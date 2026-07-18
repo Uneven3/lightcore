@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
 use crate::core::locale::TrKey;
 use crate::menu::options::{DeviceMode, WindowSettings};
-use crate::state::GameState;
+use crate::state::{Overlay, Screen};
 
 /// Title screen — the app boots here. Only "Jugar" and "Opciones". Persistence (continuing an
 /// active run, seeing it dynamically labeled "Continuar run", or abandoning/restarting it) lives
@@ -14,8 +14,19 @@ pub(crate) struct MainMenuPlugin;
 
 impl Plugin for MainMenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
-            .add_systems(OnExit(GameState::MainMenu), despawn_main_menu)
+        app.add_systems(OnEnter(Screen::MainMenu), spawn_main_menu)
+            .add_systems(OnExit(Screen::MainMenu), despawn_main_menu)
+            // Options overlays the title screen. Despawn/respawn the title UI around the overlay
+            // so `menu_nav`'s global `MenuButton` query only ever sees one screen's buttons
+            // (`spawn_main_menu` guards against the double OnEnter at boot).
+            .add_systems(
+                OnEnter(Overlay::Options),
+                despawn_main_menu.run_if(in_state(Screen::MainMenu)),
+            )
+            .add_systems(
+                OnEnter(Overlay::None),
+                spawn_main_menu.run_if(in_state(Screen::MainMenu)),
+            )
             .add_systems(
                 Update,
                 (
@@ -25,7 +36,7 @@ impl Plugin for MainMenuPlugin {
                     main_menu_tutorial_button_system,
                     update_main_menu_tutorial_text,
                 )
-                    .run_if(in_state(GameState::MainMenu)),
+                    .run_if(in_state(Screen::MainMenu).and_then(in_state(Overlay::None))),
             );
     }
 }
@@ -33,8 +44,11 @@ impl Plugin for MainMenuPlugin {
 #[derive(Component)]
 struct MainMenuRoot;
 
-#[derive(Component, Clone)]
-struct NavButton(GameState);
+#[derive(Component, Clone, Copy, PartialEq)]
+enum NavButton {
+    Play,
+    Options,
+}
 
 #[derive(Component)]
 struct QuitButton;
@@ -43,7 +57,12 @@ fn spawn_main_menu(
     mut commands: Commands,
     settings: Res<WindowSettings>,
     asset_server: Res<AssetServer>,
+    existing: Query<(), With<MainMenuRoot>>,
 ) {
+    // Both OnEnter(Screen::MainMenu) and OnEnter(Overlay::None) fire on boot — spawn once.
+    if !existing.is_empty() {
+        return;
+    }
     let compact = settings.device_mode == DeviceMode::Mobile;
     let desktop = settings.device_mode == DeviceMode::Desktop;
     let row_gap = if compact { 10.0 } else { 26.0 };
@@ -93,7 +112,7 @@ fn spawn_main_menu(
                 // Play Button
                 row.spawn((
                     Button,
-                    NavButton(GameState::LevelMenu),
+                    NavButton::Play,
                     MenuButton { index },
                     Node {
                         width: Val::Px(78.0),
@@ -126,7 +145,7 @@ fn spawn_main_menu(
                 // Options Button
                 row.spawn((
                     Button,
-                    NavButton(GameState::Options),
+                    NavButton::Options,
                     MenuButton { index },
                     Node {
                         width: Val::Px(78.0),
@@ -226,16 +245,20 @@ fn spawn_main_menu(
 fn nav_button_system(
     interactions: Query<(Entity, Ref<Interaction>, &NavButton)>,
     menu_activated: Res<MenuActivated>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next_screen: ResMut<NextState<Screen>>,
+    mut next_overlay: ResMut<NextState<Overlay>>,
     mut options_return: ResMut<OptionsReturn>,
 ) {
     for (entity, interaction, btn) in &interactions {
         if activated(&interaction, entity, &menu_activated) {
-            // Options opened from the title returns to the title (the paused match sets its own).
-            if btn.0 == GameState::Options {
-                options_return.0 = GameState::MainMenu;
+            match btn {
+                NavButton::Play => next_screen.set(Screen::LevelMenu),
+                NavButton::Options => {
+                    // Options opened from the title returns to it (the paused match sets its own).
+                    options_return.0 = Overlay::None;
+                    next_overlay.set(Overlay::Options);
+                }
             }
-            next.set(btn.0.clone());
         }
     }
 }

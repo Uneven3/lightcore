@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::input::{InputActions, LastInputDevice};
-use crate::state::GameState;
+use crate::state::{Overlay, Screen};
 
 mod level_menu;
 mod main_menu;
@@ -25,34 +25,36 @@ impl Plugin for MenuPlugin {
                 options::OptionsPlugin,
                 pause::PausePlugin,
             ))
-            // Reset focus to the first button whenever a menu screen opens.
-            .add_systems(OnEnter(GameState::MainMenu), reset_focus)
-            .add_systems(OnEnter(GameState::LevelMenu), reset_focus)
-            .add_systems(OnEnter(GameState::Options), reset_focus)
-            .add_systems(OnEnter(GameState::AdvancedOptions), reset_focus)
-            .add_systems(OnEnter(GameState::Paused), reset_focus)
+            // Reset focus to the first button whenever a menu screen or overlay opens —
+            // `Overlay::None` included, because closing Options over the title screen respawns
+            // the main menu buttons.
+            .add_systems(OnEnter(Screen::MainMenu), reset_focus)
+            .add_systems(OnEnter(Screen::LevelMenu), reset_focus)
+            .add_systems(OnEnter(Overlay::Options), reset_focus)
+            .add_systems(OnEnter(Overlay::AdvancedOptions), reset_focus)
+            .add_systems(OnEnter(Overlay::Paused), reset_focus)
+            .add_systems(OnEnter(Overlay::None), reset_focus)
             .add_systems(
                 Update,
+                // Any open overlay is navigable; the title screen only while no overlay covers it
+                // (its buttons despawn under Options, but don't run the nav on a stale frame).
                 menu_nav.run_if(
-                    in_state(GameState::MainMenu)
-                        .or_else(in_state(GameState::Options))
-                        .or_else(in_state(GameState::AdvancedOptions))
-                        .or_else(in_state(GameState::Paused)),
+                    not(in_state(Overlay::None)).or_else(in_state(Screen::MainMenu)),
                 ),
             );
     }
 }
 
-/// Where the Options screen should return to when the player backs out — set by whoever opened it
-/// (`MainMenu` or the in-match `Paused` overlay), read by `options::back_button_system`. Opening
-/// Options from a paused match must come back to the pause overlay (and the live board), not the
-/// title screen.
+/// Which overlay the Options screen should return to when the player backs out — set by whoever
+/// opened it, read by `options::back_button_system`. From the title screen that's `Overlay::None`
+/// (revealing the main menu again); from a paused match it's `Overlay::Paused`, so backing out
+/// lands on the pause panel (and the live board), not the title screen.
 #[derive(Resource)]
-pub(super) struct OptionsReturn(pub(super) GameState);
+pub(super) struct OptionsReturn(pub(super) Overlay);
 
 impl Default for OptionsReturn {
     fn default() -> Self {
-        Self(GameState::MainMenu)
+        Self(Overlay::None)
     }
 }
 

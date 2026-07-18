@@ -4,7 +4,7 @@ use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, butto
 use crate::core::locale::TrKey;
 use crate::input::InputActions;
 use crate::menu::options::WindowSettings;
-use crate::state::GameState;
+use crate::state::{MatchPhase, Overlay, Screen};
 
 /// In-match pause overlay. `pause` (Esc / Start) from `Playing` opens it; the board is left intact
 /// behind a dimming panel, so Options can be tuned with the board visible. Buttons: Reanudar
@@ -14,13 +14,16 @@ pub(crate) struct PausePlugin;
 
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Paused), spawn_pause)
-            .add_systems(OnExit(GameState::Paused), despawn_pause)
-            .add_systems(Update, open_pause.run_if(in_state(GameState::Playing)))
+        app.add_systems(OnEnter(Overlay::Paused), spawn_pause)
+            .add_systems(OnExit(Overlay::Paused), despawn_pause)
+            .add_systems(
+                Update,
+                open_pause.run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+            )
             .add_systems(
                 Update,
                 (button_hover_system, pause_button_system, close_pause)
-                    .run_if(in_state(GameState::Paused)),
+                    .run_if(in_state(Overlay::Paused)),
             );
     }
 }
@@ -35,16 +38,16 @@ enum PauseButton {
     Quit,
 }
 
-fn open_pause(actions: Res<InputActions>, mut next: ResMut<NextState<GameState>>) {
+fn open_pause(actions: Res<InputActions>, mut next: ResMut<NextState<Overlay>>) {
     if actions.pause {
-        next.set(GameState::Paused);
+        next.set(Overlay::Paused);
     }
 }
 
-fn close_pause(actions: Res<InputActions>, mut next: ResMut<NextState<GameState>>) {
+fn close_pause(actions: Res<InputActions>, mut next: ResMut<NextState<Overlay>>) {
     // Esc/Start (pause) or B/Backspace (cancel) both resume.
     if actions.pause || actions.cancel {
-        next.set(GameState::Playing);
+        next.set(Overlay::None);
     }
 }
 
@@ -133,18 +136,24 @@ fn spawn_pause(
 fn pause_button_system(
     interactions: Query<(Entity, Ref<Interaction>, &PauseButton)>,
     menu_activated: Res<MenuActivated>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next_overlay: ResMut<NextState<Overlay>>,
+    mut next_screen: ResMut<NextState<Screen>>,
     mut options_return: ResMut<OptionsReturn>,
 ) {
     for (entity, interaction, btn) in &interactions {
         if activated(&interaction, entity, &menu_activated) {
             match btn {
-                PauseButton::Resume => next.set(GameState::Playing),
+                PauseButton::Resume => next_overlay.set(Overlay::None),
                 PauseButton::Options => {
-                    options_return.0 = GameState::Paused;
-                    next.set(GameState::Options);
+                    options_return.0 = Overlay::Paused;
+                    next_overlay.set(Overlay::Options);
                 }
-                PauseButton::Quit => next.set(GameState::LevelMenu),
+                PauseButton::Quit => {
+                    // Leaving the match must also drop the overlay, or the next match would
+                    // start "paused" with no pause panel on screen.
+                    next_overlay.set(Overlay::None);
+                    next_screen.set(Screen::LevelMenu);
+                }
             }
         }
     }

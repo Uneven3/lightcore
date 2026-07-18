@@ -4,7 +4,7 @@ use crate::core::prelude::*;
 use crate::gameplay::falling::Dropping;
 use crate::gameplay::{DragState, PendingSwap, RevertingSwap};
 use crate::input::pointer::PointerInput;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 const BASE_FALL_SPEED: f32 = TILE * 6.0;
 const FALL_ACCEL: f32 = TILE * 12.0; // per second spent continuously falling
@@ -25,12 +25,12 @@ pub(crate) fn lerp_visual_pos(
         (With<FallPhysics>, Without<PopAnim>),
     >,
     time: Res<Time>,
-    state: Res<State<GameState>>,
+    state: Res<State<MatchPhase>>,
     pending: Res<PendingSwap>,
     reverting: Res<RevertingSwap>,
 ) {
     let dt = time.delta_secs();
-    let in_swap = *state.get() == GameState::SwapAnimating;
+    let in_swap = *state.get() == MatchPhase::SwapAnimating;
     let (swap_a, swap_b) = if in_swap {
         pending
             .0

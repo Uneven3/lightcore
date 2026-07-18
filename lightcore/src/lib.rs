@@ -25,7 +25,10 @@ impl Plugin for GamePlugin {
         // already-despawned entity) — preferable to crashing for a non-critical game.
         app.set_error_handler(bevy::ecs::error::warn);
         embedded_asset!(app, "", "../assets/bevy_bird_dark.png");
-        app.init_state::<state::GameState>().add_plugins((
+        app.init_state::<state::Screen>()
+            .add_sub_state::<state::MatchPhase>()
+            .init_state::<state::Overlay>()
+            .add_plugins((
             core::run::RunPlugin,
             core::campaign::CampaignPlugin,
             platform::PlatformPlugin,

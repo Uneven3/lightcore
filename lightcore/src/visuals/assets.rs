@@ -22,9 +22,9 @@ use crate::core::prelude::*;
 pub(crate) struct VisualCache {
     /// Membrane ring mesh + material per `LightColor`, indexed by `LightColor::index()`. The ring
     /// material is constant per color (selection scales the `Transform`, it never recolors).
-    ring_mesh: [Handle<Mesh>; 5],
-    ring_mat: [Handle<ColorMaterial>; 5],
-    hollow_mesh: Handle<Mesh>,
+    pub(crate) ring_mesh: [Handle<Mesh>; 5],
+    pub(crate) ring_mat: [Handle<ColorMaterial>; 5],
+    pub(crate) hollow_mesh: Handle<Mesh>,
     pub(crate) hollow_mat: Handle<ColorMaterial>,
     pub(crate) spark_mesh: Handle<Mesh>,
     pub(crate) spark_mat: Handle<ColorMaterial>,
@@ -45,11 +45,11 @@ pub(crate) struct VisualCache {
     pub(crate) glow_image: Handle<Image>,
     /// Per-`LightColor` hot-core disc for score shards: white at the center, fading to the light's
     /// hue at the rim. Score shards are deliberately round even when their source core is shaped.
-    shard_core_image: [Handle<Image>; 5],
+    pub(crate) shard_core_image: [Handle<Image>; 5],
     /// Per-`LightColor` shaped core disc for a light's own `LightCore` nucleus dots (see
     /// `shaped_core_image`) — circle/triangle/square/diamond/pentagon matching that color's ring,
     /// instead of a plain circular dot.
-    light_core_image: [Handle<Image>; 5],
+    pub(crate) light_core_image: [Handle<Image>; 5],
     /// Plain 1×1 quad, UVs 0..1: the `Mesh2d` counterpart of a `Sprite`'s implicit quad, for
     /// entities that need a custom `Material2d` (e.g. `AdditiveMaterial`) instead of `Sprite`'s
     /// hardcoded alpha blend. Scale the `Transform` to size it, same as `Sprite::custom_size` did.
@@ -65,15 +65,16 @@ pub(crate) struct VisualCache {
     /// distinguishes them at a glance: Cross = a 4-bladed shuriken, Starburst = a 5-pointed star,
     /// Blackhole = a clean circle. Color is still carried by the per-color `ring_mat` material, so a
     /// red Cross is a red shuriken, etc. Everything else keeps its per-color shape (`ring_mesh`).
-    cross_mesh: Handle<Mesh>,
-    starburst_mesh: Handle<Mesh>,
-    blackhole_mesh: Handle<Mesh>,
+    pub(crate) cross_mesh: Handle<Mesh>,
+    pub(crate) starburst_mesh: Handle<Mesh>,
+    pub(crate) blackhole_mesh: Handle<Mesh>,
     /// Blast meshes for RayH / RayV / Supernova / Starburst (Normal has none).
-    effect: [Handle<Mesh>; 4],
+    pub(crate) effect: [Handle<Mesh>; 4],
     /// Blackhole's own detonation meshes — a dark void disc and a brighter rim riding its edge,
     /// both scaled up together by `EffectAnim` (see `visuals::effects::spawn_power_effect`).
     pub(crate) blackhole_void_mesh: Handle<Mesh>,
     pub(crate) blackhole_rim_mesh: Handle<Mesh>,
+    pub(crate) grid_cell_image: Handle<Image>,
 }
 
 impl VisualCache {
@@ -425,7 +426,50 @@ pub(crate) fn build_cache(
         effect,
         blackhole_void_mesh: meshes.add(Circle::new(TILE * 0.5)),
         blackhole_rim_mesh: meshes.add(Annulus::new(TILE * 0.5, TILE * 0.62)),
+        grid_cell_image: make_grid_cell_image(&mut images, 64, 64),
     });
+}
+
+fn make_grid_cell_image(images: &mut Assets<Image>, width: u32, height: u32) -> Handle<Image> {
+    let mut data = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let idx = ((y * width + x) * 4) as usize;
+            
+            let is_border_pixel = x == 0 || x == width - 1 || y == 0 || y == height - 1;
+            let on_border = is_border_pixel && (
+                ((x == 0 || x == width - 1) && y % 6 < 2) ||
+                ((y == 0 || y == height - 1) && x % 6 < 2)
+            );
+            let in_corner = (x <= 2 || x >= width - 3) && (y <= 2 || y >= height - 3);
+            
+            let color = if in_corner {
+                Color::srgba(0.3, 0.75, 1.0, 0.7)
+            } else if on_border {
+                Color::srgba(0.15, 0.45, 0.85, 0.5)
+            } else {
+                Color::srgba(0.005, 0.015, 0.04, 0.35)
+            };
+            
+            let srgba = color.to_srgba();
+            data[idx] = (srgba.red * 255.0) as u8;
+            data[idx + 1] = (srgba.green * 255.0) as u8;
+            data[idx + 2] = (srgba.blue * 255.0) as u8;
+            data[idx + 3] = (srgba.alpha * 255.0) as u8;
+        }
+    }
+    
+    images.add(Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    ))
 }
 
 // ─── Mesh Generation Helper Functions ─────────────────────────────────────────

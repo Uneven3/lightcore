@@ -1,6 +1,8 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::core::locale::{Language, TrKey};
 use crate::core::prelude::*;
@@ -15,7 +17,7 @@ use crate::gameplay::{
     ScoreAnchor, ScoreGlow, ShadowCount, SparksCollected, StatsBook, StatsPopupOpen,
 };
 use crate::menu::options::{WindowSettings, DeviceMode};
-use crate::state::GameState;
+use crate::state::{MatchPhase, Overlay, Screen};
 use crate::visuals::assets::VisualCache;
 use crate::visuals::render_target::{
     FinalCamera, InternalRenderTarget, WorldCamera, final_viewport_logical_rect,
@@ -45,87 +47,101 @@ impl Plugin for UiPlugin {
             // boots straight into `MainMenu`, so this also covers first launch) and bring it back
             // the moment a mode starts loading, rather than tying it to one specific state's
             // `OnExit` (which would also fire on LevelMenu → MainMenu's "Volver").
-            .add_systems(OnEnter(GameState::MainMenu), hide_hud)
-            .add_systems(OnEnter(GameState::LevelMenu), hide_hud)
-            .add_systems(OnEnter(GameState::Options), hide_hud)
-            .add_systems(OnEnter(GameState::AdvancedOptions), hide_hud)
+            .add_systems(OnEnter(Screen::MainMenu), hide_hud)
+            .add_systems(OnEnter(Screen::LevelMenu), hide_hud)
+            .add_systems(OnEnter(Overlay::Options), hide_hud)
+            .add_systems(OnEnter(Overlay::AdvancedOptions), hide_hud)
             .add_systems(
-                OnEnter(GameState::Loading),
+                OnEnter(MatchPhase::Loading),
                 (show_hud, reset_level_tutorial_shown),
             )
             // The match stays alive while paused — keep the HUD up; this also restores it when
             // returning from Options (which hid it) back to the pause overlay.
-            .add_systems(OnEnter(GameState::Paused), show_hud)
-            .add_systems(OnEnter(GameState::Playing), check_show_tutorial_on_start)
-            .add_systems(OnExit(GameState::Playing), reset_tutorial_state)
+            .add_systems(OnEnter(Overlay::Paused), show_hud)
+            .add_systems(OnEnter(MatchPhase::Playing), check_show_tutorial_on_start)
+            .add_systems(OnExit(MatchPhase::Playing), reset_tutorial_state)
+            .add_systems(Update, update_watermark_fps)
             .add_systems(
                 Update,
                 (
-                    update_score_text.run_if(resource_changed::<DisplayedScore>),
-                    update_score_glow,
-                    position_score,
-                    update_moves_text.run_if(
-                        resource_changed::<MovesLeft>
-                            .or_else(resource_changed::<LevelConfig>)
-                            .or_else(resource_changed::<GameMode>),
-                    ),
-                    update_goal_text.run_if(
-                        resource_changed::<DisplayedScore>
-                            .or_else(resource_changed::<SparksCollected>)
-                            .or_else(resource_changed::<ShadowCount>)
-                            .or_else(resource_changed::<LevelTimer>)
-                            .or_else(resource_changed::<DisplayedCollectedCores>)
-                            .or_else(resource_changed::<LevelConfig>)
-                            .or_else(resource_changed::<GameMode>),
-                    ),
                     pause_button_system,
                     shop_toggle_system,
-                    update_shop_toggle_button.run_if(resource_changed::<Shop>),
-                    update_shop_reserve_text.run_if(resource_changed::<CoreReserve>),
-                    update_shop_bar_visibility.run_if(resource_changed::<Shop>),
-                    update_shop_button_texts.run_if(
-                        resource_changed::<CoreReserve>
-                            .or_else(resource_changed::<RunState>)
-                            .or_else(resource_changed::<Shop>)
-                            .or_else(resource_changed::<WindowSettings>),
-                    ),
-                    update_special_move_counts.run_if(
-                        resource_changed::<SpecialMoveInventory>.or_else(resource_changed::<Shop>),
-                    ),
-                    update_shop_active_badge.run_if(
-                        resource_changed::<Shop>.or_else(resource_changed::<WindowSettings>),
-                    ),
-                    update_slow_mo_badge,
-                    update_watermark_fps,
-                    update_static_hud_labels.run_if(resource_changed::<WindowSettings>),
-                ),
+                    stats_button_system,
+                    sell_boon_button_system,
+                )
+                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
             )
             .add_systems(
                 Update,
                 (
-                    update_goal_hint,
-                    stats_button_system,
-                    update_stats_popup.run_if(
-                        resource_changed::<StatsPopupOpen>
-                            .or_else(resource_changed::<StatsBook>)
-                            .or_else(resource_changed::<WindowSettings>),
+                    (
+                        update_score_text.run_if(resource_changed::<DisplayedScore>),
+                        update_score_glow,
+                        position_score,
+                        update_moves_text.run_if(
+                            resource_changed::<MovesLeft>
+                                .or_else(resource_changed::<LevelConfig>)
+                                .or_else(resource_changed::<GameMode>),
+                        ),
+                        update_goal_text.run_if(
+                            resource_changed::<DisplayedScore>
+                                .or_else(resource_changed::<SparksCollected>)
+                                .or_else(resource_changed::<ShadowCount>)
+                                .or_else(resource_changed::<LevelTimer>)
+                                .or_else(resource_changed::<DisplayedCollectedCores>)
+                                .or_else(resource_changed::<LevelConfig>)
+                                .or_else(resource_changed::<GameMode>),
+                        ),
+                        update_shop_toggle_button.run_if(resource_changed::<Shop>),
+                        update_shop_reserve_text.run_if(resource_changed::<CoreReserve>),
+                        update_shop_bar_visibility.run_if(resource_changed::<Shop>),
+                        update_shop_button_texts.run_if(
+                            resource_changed::<CoreReserve>
+                                .or_else(resource_changed::<RunState>)
+                                .or_else(resource_changed::<Shop>)
+                                .or_else(resource_changed::<WindowSettings>),
+                        ),
+                        update_special_move_counts.run_if(
+                            resource_changed::<SpecialMoveInventory>.or_else(resource_changed::<Shop>),
+                        ),
+                        update_shop_active_badge.run_if(
+                            resource_changed::<Shop>.or_else(resource_changed::<WindowSettings>),
+                        ),
                     ),
-                    update_boon_indicators.run_if(
-                        resource_changed::<RunState>
-                            .or_else(resource_changed::<WindowSettings>)
-                            .or_else(resource_changed::<PendingBoonSale>),
+                    (
+                        update_slow_mo_badge,
+                        update_static_hud_labels.run_if(resource_changed::<WindowSettings>),
+                        update_goal_hint,
+                        update_stats_popup.run_if(
+                            resource_changed::<StatsPopupOpen>
+                                .or_else(resource_changed::<StatsBook>)
+                                .or_else(resource_changed::<WindowSettings>),
+                        ),
+                        update_boon_indicators.run_if(
+                            resource_changed::<RunState>
+                                .or_else(resource_changed::<WindowSettings>)
+                                .or_else(resource_changed::<PendingBoonSale>),
+                        ),
+                        tutorial_close_button_system,
+                        tutorial_overlay_toggle_system,
+                        update_tutorial_overlay_toggle_text.run_if(resource_changed::<WindowSettings>),
+                        update_tutorial_visibility.run_if(resource_changed::<TutorialState>),
+                        update_lives_text
+                            .run_if(resource_changed::<RunState>.or_else(resource_changed::<GameMode>)),
+                        update_tooltip_system,
+                        toggle_hud_descriptions_on_hover,
                     ),
-                    sell_boon_button_system.run_if(in_state(GameState::Playing)),
-                    tutorial_close_button_system,
-                    tutorial_overlay_toggle_system,
-                    update_tutorial_overlay_toggle_text.run_if(resource_changed::<WindowSettings>),
-                    update_tutorial_visibility.run_if(resource_changed::<TutorialState>),
-                    update_lives_text
-                        .run_if(resource_changed::<RunState>.or_else(resource_changed::<GameMode>)),
-                    update_tooltip_system,
-                ),
+                )
+                    .run_if(in_gameplay_state),
             );
     }
+}
+
+fn in_gameplay_state(screen: Res<State<Screen>>, overlay: Res<State<Overlay>>) -> bool {
+    // The HUD is live during the whole match, pause overlay included — but not under the
+    // fullscreen Options overlays, which hide it.
+    *screen.get() == Screen::Match
+        && !matches!(overlay.get(), Overlay::Options | Overlay::AdvancedOptions)
 }
 
 #[derive(Component)]
@@ -213,7 +229,125 @@ struct SlowMoBadgeState {
     last_tenths: i32,
 }
 
-fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<WindowSettings>) {
+#[derive(Resource, Clone)]
+pub(crate) struct HudIcons {
+    pub(crate) heart: Handle<Image>,
+    pub(crate) moves: Handle<Image>,
+    pub(crate) swap: Handle<Image>,
+    pub(crate) eliminate: Handle<Image>,
+    pub(crate) upgrade: Handle<Image>,
+}
+
+fn make_procedural_icon<F>(width: u32, height: u32, draw_fn: F) -> Image
+where
+    F: Fn(f32, f32) -> Color,
+{
+    let mut data = vec![0; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let nx = (x as f32 / (width - 1) as f32) * 2.0 - 1.0;
+            let ny = (y as f32 / (height - 1) as f32) * 2.0 - 1.0;
+            let color = draw_fn(nx, ny);
+            let srgba = color.to_srgba();
+            let idx = ((y * width + x) * 4) as usize;
+            data[idx] = (srgba.red * 255.0) as u8;
+            data[idx + 1] = (srgba.green * 255.0) as u8;
+            data[idx + 2] = (srgba.blue * 255.0) as u8;
+            data[idx + 3] = (srgba.alpha * 255.0) as u8;
+        }
+    }
+    Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
+
+fn setup_ui(
+    mut commands: Commands,
+    cache: Res<VisualCache>,
+    settings: Res<WindowSettings>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let heart = images.add(make_procedural_icon(32, 32, |x, y| {
+        let cx = x * 1.3;
+        let cy = -y * 1.3 + 0.1;
+        let lhs = cx * cx + cy * cy - 1.0;
+        let val = lhs * lhs * lhs - cx * cx * cy * cy * cy;
+        if val <= 0.0 {
+            Color::srgb(1.0, 0.35, 0.35)
+        } else {
+            Color::NONE
+        }
+    }));
+    let moves = images.add(make_procedural_icon(32, 32, |x, y| {
+        let px = x;
+        let py = y;
+        let line_h = py.abs() < 0.08 && px.abs() < 0.7;
+        let line_v = px.abs() < 0.08 && py.abs() < 0.7;
+        let head_r = px >= 0.4 && px <= 0.7 && py.abs() <= (0.7 - px) * 0.8;
+        let head_l = px >= -0.7 && px <= -0.4 && py.abs() <= (px - (-0.7)) * 0.8;
+        let head_t = py >= -0.7 && py <= -0.4 && px.abs() <= (py - (-0.7)) * 0.8;
+        let head_b = py >= 0.4 && py <= 0.7 && px.abs() <= (0.7 - py) * 0.8;
+        if line_h || line_v || head_r || head_l || head_t || head_b {
+            Color::srgb(1.0, 0.85, 0.4)
+        } else {
+            Color::NONE
+        }
+    }));
+    let swap = images.add(make_procedural_icon(32, 32, |x, y| {
+        let px = x;
+        let py = y;
+        let on_top_line = (py - (-0.35)).abs() < 0.08 && px >= -0.6 && px <= 0.5;
+        let on_top_head = px >= 0.3 && px <= 0.6 && (py - (-0.35)).abs() <= (0.6 - px) * 0.8;
+        let on_bot_line = (py - 0.35).abs() < 0.08 && px >= -0.5 && px <= 0.6;
+        let on_bot_head = px >= -0.6 && px <= -0.3 && (py - 0.35).abs() <= (px - (-0.6)) * 0.8;
+        if on_top_line || on_top_head || on_bot_line || on_bot_head {
+            Color::srgb(0.5, 0.8, 1.0)
+        } else {
+            Color::NONE
+        }
+    }));
+    let eliminate = images.add(make_procedural_icon(32, 32, |x, y| {
+        let px = x;
+        let py = y;
+        let r = (px * px + py * py).sqrt();
+        let on_circle = (r - 0.6).abs() < 0.08;
+        let on_dot = r < 0.15;
+        let on_horiz = py.abs() < 0.06 && px.abs() >= 0.25 && px.abs() <= 0.75;
+        let on_vert = px.abs() < 0.06 && py.abs() >= 0.25 && py.abs() <= 0.75;
+        if on_circle || on_dot || on_horiz || on_vert {
+            Color::srgb(1.0, 0.4, 0.4)
+        } else {
+            Color::NONE
+        }
+    }));
+    let upgrade = images.add(make_procedural_icon(32, 32, |x, y| {
+        let px = x;
+        let py = y;
+        let on_upper = (py - (-0.3 + px.abs() * 0.7)).abs() < 0.08 && px.abs() < 0.6;
+        let on_lower = (py - (0.1 + px.abs() * 0.7)).abs() < 0.08 && px.abs() < 0.6;
+        if on_upper || on_lower {
+            Color::srgb(0.4, 1.0, 0.4)
+        } else {
+            Color::NONE
+        }
+    }));
+    let icons = HudIcons {
+        heart: heart.clone(),
+        moves: moves.clone(),
+        swap: swap.clone(),
+        eliminate: eliminate.clone(),
+        upgrade: upgrade.clone(),
+    };
+    commands.insert_resource(icons.clone());
+
     // ScoreText is in world space (Text2d), so keep it independent of Bevy UI HudRoot.
     commands.spawn((
         ScoreText,
@@ -331,153 +465,255 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                         TextColor(Color::WHITE),
                     ));
                 });
-
-                // MovesText
-                // One contiguous status/economy panel. Its three controls remain independent ECS
-                // entities so their resources can update separately, but they are presented as a
-                // single HUD unit rather than three unrelated badges.
+                // PlayerStatusPanel (the vertical container)
                 hud.spawn((
                     PlayerStatusPanel,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(8.0),
-                        right: Val::Px(8.0),
-                        width: Val::Px(258.0),
-                        height: Val::Px(94.0),
-                        border: UiRect::all(Val::Px(1.5)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.32)),
-                    BackgroundColor(Color::srgba(0.035, 0.06, 0.11, 0.92)),
-                ));
-
-                hud.spawn((
-                    MovesText,
+                    Interaction::default(),
                     Node {
                         position_type: PositionType::Absolute,
                         top: Val::Px(12.0),
-                        // Status cluster: moves | lives | core reserve/shop.
-                        right: Val::Px(180.0),
-                        width: Val::Px(78.0),
-                        height: Val::Px(48.0),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                        border: UiRect::all(Val::Px(1.5)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::NONE),
-                    BackgroundColor(Color::NONE),
-                    Visibility::Hidden,
-                ))
-                .with_children(|m| {
-                    m.spawn((
-                        MovesNumberText,
-                        Text::new("30"),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                    m.spawn((
-                        MovesUnitLabel,
-                        Text::new("moves"),
-                        TextFont {
-                            font_size: FontSize::Px(9.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
-                    ));
-                });
-
-                // LivesText
-                hud.spawn((
-                    LivesText,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(12.0),
-                        right: Val::Px(96.0),
-                        width: Val::Px(78.0),
-                        height: Val::Px(48.0),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                        border: UiRect::all(Val::Px(1.5)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::NONE),
-                    BackgroundColor(Color::NONE),
-                    Visibility::Hidden,
-                ))
-                .with_children(|l| {
-                    l.spawn((
-                        LivesNumberText,
-                        Text::new("2"),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(1.0, 0.45, 0.45)),
-                    ));
-                    l.spawn((
-                        LivesUnitLabel,
-                        Text::new("vidas"),
-                        TextFont {
-                            font_size: FontSize::Px(9.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
-                    ));
-                });
-
-                // Owned special-move counters live inside the same status panel. A counter is a
-                // button: tapping it arms one owned copy, while buying happens in the drawer.
-                hud.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(62.0),
                         right: Val::Px(12.0),
-                        width: Val::Px(246.0),
-                        height: Val::Px(30.0),
-                        flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::SpaceEvenly,
+                        width: Val::Px(84.0),
+                        height: Val::Auto,
+                        flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
+                        justify_content: JustifyContent::FlexStart,
+                        padding: UiRect::all(Val::Px(8.0)),
+                        row_gap: Val::Px(10.0),
                         ..default()
                     },
+                    BorderColor::all(Color::NONE),
+                    BackgroundColor(Color::srgba(0.035, 0.06, 0.11, 0.5)),
+                    Visibility::Hidden,
                 ))
-                .with_children(|moves| {
-                    for (item, label) in [
-                        (ShopItem::Swap, "SWP"),
-                        (ShopItem::Eliminate, "POP"),
-                        (ShopItem::Upgrade, "UP"),
+                .with_children(|panel| {
+                    // Moves Container
+                    panel.spawn((
+                        MovesText,
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                        Visibility::Inherited,
+                    ))
+                    .with_children(|m| {
+                        m.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                ImageNode {
+                                    image: icons.moves.clone(),
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(18.0),
+                                    height: Val::Px(18.0),
+                                    ..default()
+                                },
+                            ));
+                            row.spawn((
+                                MovesNumberText,
+                                Text::new("30"),
+                                TextFont {
+                                    font_size: FontSize::Px(16.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                        m.spawn((
+                            MovesUnitLabel,
+                            HudDescriptionLabel,
+                            Text::new("moves"),
+                            TextFont {
+                                font_size: FontSize::Px(9.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                            Visibility::Hidden,
+                        ));
+                    });
+
+                    // Lives Container
+                    panel.spawn((
+                        LivesText,
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                        Visibility::Inherited,
+                    ))
+                    .with_children(|l| {
+                        l.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                ImageNode {
+                                    image: icons.heart.clone(),
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(18.0),
+                                    height: Val::Px(18.0),
+                                    ..default()
+                                },
+                            ));
+                            row.spawn((
+                                LivesNumberText,
+                                Text::new("2"),
+                                TextFont {
+                                    font_size: FontSize::Px(16.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(1.0, 0.45, 0.45)),
+                            ));
+                        });
+                        l.spawn((
+                            LivesUnitLabel,
+                            HudDescriptionLabel,
+                            Text::new("vidas"),
+                            TextFont {
+                                font_size: FontSize::Px(9.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgba(1.0, 0.6, 0.6, 0.5)),
+                            Visibility::Hidden,
+                        ));
+                    });
+
+                    // Shop Toggle Button (integrated)
+                    panel.spawn((
+                        Button,
+                        ShopToggleButton,
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            padding: UiRect::vertical(Val::Px(4.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::NONE),
+                        BackgroundColor(Color::NONE),
+                        Visibility::Inherited,
+                    ))
+                    .with_children(|b| {
+                        b.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                ImageNode {
+                                    image: cache.core_image.clone(),
+                                    color: Color::srgb(0.70, 0.86, 1.0),
+                                    ..default()
+                                },
+                                Node {
+                                    width: Val::Px(18.0),
+                                    height: Val::Px(18.0),
+                                    ..default()
+                                },
+                            ));
+                            row.spawn((
+                                ShopReserveText,
+                                Text::new("0"),
+                                TextFont {
+                                    font_size: FontSize::Px(16.0),
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                        b.spawn((
+                            ShopHeaderLabel,
+                            HudDescriptionLabel,
+                            Text::new("SHOP"),
+                            TextFont {
+                                font_size: FontSize::Px(8.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.70, 0.86, 1.0)),
+                            Visibility::Hidden,
+                        ));
+                    });
+
+                    // Special Moves Buttons
+                    for (item, label, icon) in [
+                        (ShopItem::Swap, "SWAP", icons.swap.clone()),
+                        (ShopItem::Eliminate, "ELIM", icons.eliminate.clone()),
+                        (ShopItem::Upgrade, "UPGRD", icons.upgrade.clone()),
                     ] {
-                        moves.spawn((
+                        panel.spawn((
                             Button,
                             SpecialMoveButton(item),
                             Node {
-                                min_width: Val::Px(68.0),
-                                height: Val::Px(26.0),
-                                justify_content: JustifyContent::Center,
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Column,
                                 align_items: AlignItems::Center,
-                                padding: UiRect::axes(Val::Px(5.0), Val::Px(2.0)),
+                                justify_content: JustifyContent::Center,
+                                padding: UiRect::vertical(Val::Px(4.0)),
                                 border: UiRect::all(Val::Px(1.0)),
                                 ..default()
                             },
-                            BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.18)),
+                            BorderColor::all(Color::NONE),
                             BackgroundColor(Color::NONE),
                         ))
                         .with_children(|button| {
+                            button.spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(4.0),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn((
+                                    ImageNode {
+                                        image: icon,
+                                        ..default()
+                                    },
+                                    Node {
+                                        width: Val::Px(18.0),
+                                        height: Val::Px(18.0),
+                                        ..default()
+                                    },
+                                ));
+                                row.spawn((
+                                    SpecialMoveCountText(item),
+                                    Text::new("0"),
+                                    TextFont {
+                                        font_size: FontSize::Px(14.0),
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
+                                ));
+                            });
                             button.spawn((
-                                SpecialMoveCountText(item),
-                                Text::new(format!("{label} 0")),
+                                HudDescriptionLabel,
+                                Text::new(label),
                                 TextFont {
-                                    font_size: FontSize::Px(10.0),
+                                    font_size: FontSize::Px(8.0),
                                     ..default()
                                 },
                                 TextColor(Color::srgba(0.68, 0.80, 0.94, 0.58)),
+                                Visibility::Hidden,
                             ));
                         });
                     }
@@ -487,7 +723,7 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     SlowMoBadge,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(132.0),
+                        top: Val::Px(280.0),
                         right: Val::Px(12.0),
                         padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
                         border: UiRect::all(Val::Px(1.5)),
@@ -624,57 +860,6 @@ fn setup_ui(mut commands: Commands, cache: Res<VisualCache>, settings: Res<Windo
                     ));
                 });
 
-                // ShopToggleButton
-                hud.spawn((
-                    Button,
-                    ShopToggleButton,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(12.0),
-                        right: Val::Px(12.0),
-                        width: Val::Px(78.0),
-                        height: Val::Px(48.0),
-                        flex_direction: FlexDirection::Column,
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(0.0),
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                        border: UiRect::all(Val::Px(1.5)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::NONE),
-                    BackgroundColor(Color::NONE),
-                    Visibility::Hidden,
-                ))
-                .with_children(|b| {
-                    b.spawn((
-                        ShopHeaderLabel,
-                        Text::new("SHOP"),
-                        TextFont {
-                            font_size: FontSize::Px(8.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.70, 0.86, 1.0)),
-                    ));
-                    b.spawn((
-                        ShopReserveText,
-                        Text::new("0"),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                    b.spawn((
-                        ShopCoresLabel,
-                        Text::new("cores"),
-                        TextFont {
-                            font_size: FontSize::Px(8.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.58)),
-                    ));
-                });
             })
             .id();
     });
@@ -1064,6 +1249,7 @@ type HideHudFilter = Or<(
     With<MovesText>,
     With<GoalText>,
     With<LivesText>,
+    With<PlayerStatusPanel>,
     // The booster bar root — its children inherit visibility, so hiding the root hides the bar.
     With<ShopBar>,
     With<PauseButton>,
@@ -1084,6 +1270,7 @@ type ShowHudFilter = Or<(
     With<MovesText>,
     With<GoalText>,
     With<LivesText>,
+    With<PlayerStatusPanel>,
     With<PauseButton>,
     With<ShopToggleButton>,
     With<StatsButton>,
@@ -1381,7 +1568,8 @@ fn update_goal_hint(
     time: Res<Time>,
     mode: Res<GameMode>,
     level: Res<LevelConfig>,
-    state: Res<State<GameState>>,
+    state: Res<State<MatchPhase>>,
+    overlay: Res<State<Overlay>>,
     settings: Res<WindowSettings>,
     mut touch_timer: ResMut<GoalHintTouchTimer>,
     interaction: Single<&Interaction, With<GoalText>>,
@@ -1389,7 +1577,7 @@ fn update_goal_hint(
     mut hint_text: Single<&mut Text, With<GoalHintText>>,
 ) {
     let (mut visibility, mut node) = hint.into_inner();
-    if *state.get() != GameState::Playing {
+    if *state.get() != MatchPhase::Playing || *overlay.get() != Overlay::None {
         *visibility = Visibility::Hidden;
         node.display = Display::None;
         touch_timer.0 = None;
@@ -1437,12 +1625,8 @@ fn goal_hint_text(mode: &GameMode, level: &LevelConfig, lang: Language) -> Strin
 fn stats_button_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<StatsButton>)>,
     mut open: ResMut<StatsPopupOpen>,
-    state: Res<State<GameState>>,
     mouse: Res<ButtonInput<MouseButton>>,
 ) {
-    if *state.get() != GameState::Playing {
-        return;
-    }
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
@@ -1493,27 +1677,25 @@ fn update_stats_popup(
 
 fn pause_button_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<PauseButton>)>,
-    state: Res<State<GameState>>,
     tutorial: Res<TutorialState>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Overlay>>,
 ) {
-    if *state.get() != GameState::Playing || tutorial.open {
+    if tutorial.open {
         return;
     }
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
-            next.set(GameState::Paused);
+            next.set(Overlay::Paused);
         }
     }
 }
 
 fn shop_toggle_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<ShopToggleButton>)>,
-    state: Res<State<GameState>>,
     tutorial: Res<TutorialState>,
     mut shop: ResMut<Shop>,
 ) {
-    if *state.get() != GameState::Playing || tutorial.open {
+    if tutorial.open {
         return;
     }
     for interaction in &interactions {
@@ -1544,14 +1726,8 @@ fn update_special_move_counts(
     mut buttons: Query<(&SpecialMoveButton, &mut BorderColor, &mut BackgroundColor)>,
 ) {
     for (marker, mut text, mut color) in &mut texts {
-        let label = match marker.0 {
-            ShopItem::Swap => "SWP",
-            ShopItem::Eliminate => "POP",
-            ShopItem::Upgrade => "UP",
-            ShopItem::Life | ShopItem::Boon(_) => continue,
-        };
         let count = inventory.count(marker.0);
-        text.0 = format!("{label} {count}");
+        text.0 = format!("{count}");
         color.0 = if shop.armed_item() == Some(marker.0) {
             Color::srgb(1.0, 0.90, 0.55)
         } else if count > 0 {
@@ -1565,7 +1741,7 @@ fn update_special_move_counts(
             *border = BorderColor::all(BTN_BORDER_ARMED);
             background.0 = Color::srgba(0.25, 0.18, 0.04, 0.42);
         } else {
-            *border = BorderColor::all(Color::srgba(0.50, 0.74, 1.0, 0.18));
+            *border = BorderColor::all(Color::NONE);
             background.0 = Color::NONE;
         }
     }
@@ -2003,15 +2179,15 @@ pub(crate) struct LivesNumberText;
 fn update_lives_text(
     mode: Res<GameMode>,
     run: Res<RunState>,
-    mut q_root: Query<&mut Visibility, With<LivesText>>,
+    mut q_root: Query<&mut Node, With<LivesText>>,
     mut q_text: Query<&mut Text, With<LivesNumberText>>,
 ) {
     let lives_visible = mode.is_run();
-    for mut v in &mut q_root {
-        *v = if lives_visible {
-            Visibility::Visible
+    for mut node in &mut q_root {
+        node.display = if lives_visible {
+            Display::Flex
         } else {
-            Visibility::Hidden
+            Display::None
         };
     }
     if lives_visible {
@@ -2225,6 +2401,24 @@ fn update_tooltip_system(
             *border = BorderColor::all(Color::srgba(0.85, 0.65, 0.18, 0.75));
         } else {
             *vis = Visibility::Hidden;
+        }
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct HudDescriptionLabel;
+
+fn toggle_hud_descriptions_on_hover(
+    panel: Query<&Interaction, (With<PlayerStatusPanel>, Changed<Interaction>)>,
+    mut labels: Query<&mut Visibility, With<HudDescriptionLabel>>,
+) {
+    for interaction in &panel {
+        let visible = match *interaction {
+            Interaction::Hovered => Visibility::Visible,
+            _ => Visibility::Hidden,
+        };
+        for mut visibility in &mut labels {
+            *visibility = visible;
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::core::prelude::*;
 use crate::core::grid::GravityBlockSet;
 pub(crate) use crate::core::run::CoreReserve;
 use crate::core::run::RunState;
-use crate::state::GameState;
+use crate::state::{MatchPhase, Overlay, Screen};
 use crate::visuals::motion::lerp_visual_pos;
 
 pub(crate) mod chain;
@@ -64,22 +64,22 @@ impl Plugin for GameplayPlugin {
             .add_observer(swap::on_swap_happened)
             .add_observer(falling::on_fall_complete)
             .add_observer(spawning::on_spawn_complete)
-            .add_systems(OnEnter(GameState::Loading), lifecycle::setup_match)
-            .add_systems(OnEnter(GameState::LevelMenu), lifecycle::teardown_match)
+            .add_systems(OnEnter(MatchPhase::Loading), lifecycle::setup_match)
+            .add_systems(OnEnter(Screen::LevelMenu), lifecycle::teardown_match)
             .add_systems(
-                OnEnter(GameState::Falling),
+                OnEnter(MatchPhase::Falling),
                 // Win-check first: in ConsumeAll, a fully cleared board ends the level here,
                 // before gravity/refill runs (see `lifecycle::check_board_consumed`).
                 (lifecycle::check_board_consumed, falling::reset_gravity).chain(),
             )
-            .add_systems(OnEnter(GameState::Spawning), spawning::spawn_new_lights)
+            .add_systems(OnEnter(MatchPhase::Spawning), spawning::spawn_new_lights)
             .add_systems(
-                OnEnter(GameState::CheckingChain),
+                OnEnter(MatchPhase::CheckingChain),
                 chain::check_chain_matches,
             )
-            .add_systems(OnEnter(GameState::GameOver), lifecycle::show_game_over)
+            .add_systems(OnEnter(MatchPhase::GameOver), lifecycle::show_game_over)
             .add_systems(
-                OnEnter(GameState::LevelComplete),
+                OnEnter(MatchPhase::LevelComplete),
                 lifecycle::show_level_complete,
             )
             .add_systems(
@@ -95,8 +95,7 @@ impl Plugin for GameplayPlugin {
                     input::highlight_selected,
                 )
                     .chain()
-                    .before(lerp_visual_pos)
-                    .run_if(in_state(GameState::Playing)),
+                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
             )
             .add_systems(
                 Update,
@@ -109,12 +108,15 @@ impl Plugin for GameplayPlugin {
                             .or_else(resource_changed::<shop::Shop>),
                     ),
                 )
-                    .run_if(in_state(GameState::Playing)),
+                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
             )
-            .add_systems(OnExit(GameState::Playing), shop::reset_shop)
+            .add_systems(OnExit(MatchPhase::Playing), shop::reset_shop)
+            // Pausing used to leave `Playing` (disarming any armed booster via the OnExit above);
+            // now that pause is an overlay the phase stays `Playing`, so disarm explicitly.
+            .add_systems(OnEnter(Overlay::Paused), shop::reset_shop)
             .add_systems(
                 Update,
-                input::check_swap_visual_done.run_if(in_state(GameState::SwapAnimating)),
+                input::check_swap_visual_done.run_if(in_state(MatchPhase::SwapAnimating)),
             )
             .add_systems(
                 Update,
@@ -124,11 +126,11 @@ impl Plugin for GameplayPlugin {
                     popping::check_popping_done,
                 )
                     .chain()
-                    .run_if(in_state(GameState::Popping)),
+                    .run_if(in_state(MatchPhase::Popping)),
             )
             .add_systems(
                 Update,
-                vfx::tick_pending_light_transform.run_if(in_state(GameState::Popping)),
+                vfx::tick_pending_light_transform.run_if(in_state(MatchPhase::Popping)),
             )
             // Impact jelly can deliberately outlive Popping: a Supernova's outer shockwave
             // starts only after its destroyed cells have finished dissolving.
@@ -136,7 +138,7 @@ impl Plugin for GameplayPlugin {
             .add_systems(
                 Update,
                 falling::apply_gravity
-                    .run_if(in_state(GameState::Falling))
+                    .run_if(in_state(MatchPhase::Falling))
                     .after(lerp_visual_pos),
             )
             .add_systems(
@@ -148,11 +150,11 @@ impl Plugin for GameplayPlugin {
                         .after(lerp_visual_pos),
                 )
                     .chain()
-                    .run_if(in_state(GameState::Spawning)),
+                    .run_if(in_state(MatchPhase::Spawning)),
             )
             .add_systems(
                 Update,
-                lifecycle::handle_restart.run_if(in_state(GameState::GameOver)),
+                lifecycle::handle_restart.run_if(in_state(MatchPhase::GameOver)),
             )
             .add_systems(
                 Update,
@@ -161,15 +163,16 @@ impl Plugin for GameplayPlugin {
                     lifecycle::handle_level_advance,
                 )
                     .chain()
-                    .run_if(in_state(GameState::LevelComplete)),
+                    .run_if(in_state(MatchPhase::LevelComplete)),
             )
             .add_systems(
                 Update,
                 lifecycle::tick_level_timer.run_if(
-                    not(in_state(GameState::GameOver))
-                        .and_then(not(in_state(GameState::LevelComplete)))
-                        // Pausing must stop the Contrarreloj clock — don't tick behind the overlay.
-                        .and_then(not(in_state(GameState::Paused))),
+                    not(in_state(MatchPhase::GameOver))
+                        .and_then(not(in_state(MatchPhase::LevelComplete)))
+                        // Any overlay must stop the Contrarreloj clock — pause, and also Options
+                        // opened from pause (which previously kept ticking behind both panels).
+                        .and_then(in_state(Overlay::None)),
                 ),
             );
     }
@@ -431,6 +434,7 @@ pub(crate) struct PowerCombo {
     pub(crate) a_pos: GridPos,
     pub(crate) b_pos: GridPos,
     pub(crate) color: Option<LightColor>,
+    pub(crate) delay_secs: f32,
 }
 
 #[derive(Event, Clone)]

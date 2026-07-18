@@ -216,6 +216,22 @@ impl LightKind {
         }
     }
 
+    /// Position on the canonical tier table above, as the number of **corelights** the player
+    /// reads on the light (`Hollow` is 0: no core at all). Chained detonations resolve in salvos
+    /// of descending corelights (see `chain::check_chain_matches` FASE 1), so this is a gameplay
+    /// ordering, not just flavor.
+    pub(crate) fn corelights(self) -> u32 {
+        match self {
+            LightKind::Hollow => 0,
+            LightKind::Normal => 1,
+            LightKind::RayH | LightKind::RayV => 2,
+            LightKind::Supernova => 3,
+            LightKind::Cross => 4,
+            LightKind::Starburst => 5,
+            LightKind::Blackhole => 6,
+        }
+    }
+
     /// The next power up the tier ladder, or `None` if already at the top (`Blackhole`). Used only
     /// by the shop's "subir tier" booster — it walks one rung up the table above, picking a default
     /// orientation (`RayH`) for the Normal→Ray step. Both rays share the next rung (Supernova).
@@ -229,5 +245,37 @@ impl LightKind {
             LightKind::Starburst => LightKind::Blackhole,
             LightKind::Blackhole => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `corelights` and `next_tier` describe the same ladder from two angles — climbing one rung
+    /// must always mean strictly more corelights, or the descending-salvo ordering in
+    /// `chain::check_chain_matches` would fire tiers out of sequence.
+    #[test]
+    fn corelights_ascend_the_next_tier_ladder() {
+        let all = [
+            LightKind::Normal,
+            LightKind::Hollow,
+            LightKind::RayH,
+            LightKind::RayV,
+            LightKind::Supernova,
+            LightKind::Cross,
+            LightKind::Starburst,
+            LightKind::Blackhole,
+        ];
+        for kind in all {
+            if let Some(next) = kind.next_tier() {
+                assert!(
+                    next.corelights() > kind.corelights(),
+                    "{kind:?} ({}) -> {next:?} ({}) no asciende",
+                    kind.corelights(),
+                    next.corelights(),
+                );
+            }
+        }
     }
 }

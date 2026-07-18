@@ -287,6 +287,13 @@ impl RunState {
         moves
     }
 
+    pub(crate) fn save_to_disk(&self, reserve: u32) {
+        let reserve_value = if self.active { reserve } else { 0 };
+        if let Err(err) = storage::write_save_file("run.txt", &self.encode(reserve_value)) {
+            bevy::log::warn!("No se pudo guardar el run: {err}");
+        }
+    }
+
     /// A Starburst's normal capture is duplicated at rank one, tripled at rank two, etc.
     pub(crate) fn star_capture_bonus(&self, kind: LightKind, capture_value: u32) -> u32 {
         if kind == LightKind::Starburst {
@@ -394,10 +401,7 @@ fn save_run_progress(run: Res<RunState>, reserve: Res<CoreReserve>) {
     if !run.is_changed() && !reserve.is_changed() {
         return;
     }
-    let reserve_value = if run.active { reserve.0 } else { 0 };
-    if let Err(err) = storage::write_save_file("run.txt", &run.encode(reserve_value)) {
-        bevy::log::warn!("No se pudo guardar el run: {err}");
-    }
+    run.save_to_disk(reserve.0);
 }
 
 #[cfg(test)]

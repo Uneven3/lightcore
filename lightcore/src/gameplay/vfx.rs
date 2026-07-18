@@ -241,11 +241,29 @@ pub(crate) fn trigger_combo(
     } else {
         None
     };
+    let mut delay_secs = 0.0;
+    if matches!(kind, ComboKind::StarLine | ComboKind::StarSupernova) {
+        let star_activation = PowerActivation {
+            pos: origin.pos,
+            kind: Starburst,
+            partner_color: color,
+        };
+        let targets = blast_path(&star_activation, entity_info);
+        let same_color_cells = &targets[1..];
+        let last_index = same_color_cells.len();
+        let max_arrival = if last_index == 0 {
+            0.0
+        } else {
+            (ray.stagger_secs * (last_index - 1) as f32).min(ray.stagger_max) + ray.trail_duration
+        };
+        delay_secs = max_arrival + ray.combo_hold_secs;
+    }
     commands.trigger(PowerCombo {
         kind,
         a_pos: origin.pos,
         b_pos: partner.pos,
         color,
+        delay_secs,
     });
 
     // StarLine/StarSupernova share the two-phase choreography (see
@@ -594,6 +612,7 @@ pub(crate) fn trigger_super_combo_vfx(
         a_pos: center,
         b_pos: center,
         color: None,
+        delay_secs: 0.0,
     });
     for p in powers {
         accumulate_pop_delays(pop_delays, p, grid, entity_info, settings);

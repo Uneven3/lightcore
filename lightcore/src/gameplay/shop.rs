@@ -21,14 +21,14 @@ use crate::core::locale::{Language, TrKey};
 use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::input::pointer::PointerInput;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 use crate::ui::TutorialState;
 use crate::visuals::assets::VisualCache;
 use crate::visuals::particles::{ParticleSettings, spawn_burst};
 
 /// The three boosters the shop sells. Costs are deliberately cheap so boosters are part of normal
 /// play, not an end-game splurge.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ShopItem {
     Swap,
     Eliminate,
@@ -290,7 +290,7 @@ pub(crate) fn shop_targeting(
     mut shop: ResMut<Shop>,
     mut inventory: ResMut<SpecialMoveInventory>,
     mut cascade: ResMut<CascadeDepth>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     mut pending: ResMut<PendingSwap>,
     pointer: Res<PointerInput>,
     cache: Res<VisualCache>,
@@ -363,7 +363,7 @@ pub(crate) fn shop_targeting(
             });
             inventory.consume(item);
             disarm(&mut commands, &mut shop, &selected);
-            next_state.set(GameState::Popping);
+            next_state.set(MatchPhase::Popping);
         }
         ShopItem::Upgrade => {
             if let Ok((_, _, _, mut kind)) = lights.get_mut(target) {
@@ -388,8 +388,14 @@ pub(crate) fn shop_targeting(
             Some(first) => {
                 // Force the trade via a `free` SwapData: no move cost, no revert on no-match. The
                 // existing swap pipeline (combos, cascades) takes it from here.
-                let Ok((_, a_pos_ref, _, _)) = lights.get(first) else { return; };
-                let Ok((_, b_pos_ref, _, _)) = lights.get(target) else { return; };
+                let Ok((_, a_pos_ref, _, _)) = lights.get(first) else {
+                    clear_pick(&mut commands, &mut shop, &selected);
+                    return;
+                };
+                let Ok((_, b_pos_ref, _, _)) = lights.get(target) else {
+                    clear_pick(&mut commands, &mut shop, &selected);
+                    return;
+                };
                 let (a_pos, b_pos) = (*a_pos_ref, *b_pos_ref);
 
                 if let Ok((_, mut p, _, _)) = lights.get_mut(first) {
@@ -408,7 +414,7 @@ pub(crate) fn shop_targeting(
                 inventory.consume(item);
                 clear_pick(&mut commands, &mut shop, &selected);
                 shop.armed = None;
-                next_state.set(GameState::SwapAnimating);
+                next_state.set(MatchPhase::SwapAnimating);
             }
         },
     }
@@ -450,6 +456,7 @@ pub(crate) fn reset_shop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visuals::breathing::BreathPhase;
 
     #[test]
     fn special_moves_are_inventory_until_they_are_used() {
@@ -472,5 +479,144 @@ mod tests {
 
         assert_eq!(inventory.count(ShopItem::Life), 0);
         assert_eq!(inventory.count(ShopItem::Boon(BoonKind::RedValue)), 0);
+    }
+
+    #[test]
+    fn upgrade_booster_system_upgrades_targeted_light() {
+        let mut app = App::new();
+        app.init_resource::<Shop>();
+        app.init_resource::<SpecialMoveInventory>();
+        app.init_resource::<CascadeDepth>();
+        app.init_resource::<PendingSwap>();
+        app.init_resource::<PointerInput>();
+        app.insert_resource(VisualCache {
+            ring_mesh: Default::default(),
+            ring_mat: Default::default(),
+            hollow_mesh: Default::default(),
+            hollow_mat: Default::default(),
+            spark_mesh: Default::default(),
+            spark_mat: Default::default(),
+            shadow_mesh: Default::default(),
+            shadow_mat: Default::default(),
+            hard_shadow_mat: Default::default(),
+            blocker_mesh: Default::default(),
+            blocker_mat: Default::default(),
+            burst_mesh: Default::default(),
+            membrane_mesh: Default::default(),
+            core_image: Default::default(),
+            glow_image: Default::default(),
+            shard_core_image: Default::default(),
+            light_core_image: Default::default(),
+            unit_quad_mesh: Default::default(),
+            beam_image: Default::default(),
+            square_image: Default::default(),
+            cross_mesh: Default::default(),
+            starburst_mesh: Default::default(),
+            blackhole_mesh: Default::default(),
+            effect: Default::default(),
+            blackhole_void_mesh: Default::default(),
+            blackhole_rim_mesh: Default::default(),
+            grid_cell_image: Default::default(),
+        });
+        app.init_resource::<ParticleSettings>();
+        app.init_resource::<TutorialState>();
+        app.insert_resource(NextState::<MatchPhase>::default());
+        
+        app.add_systems(Update, (
+            shop_targeting,
+            crate::visuals::core_motion::rebuild_cores,
+        ).chain());
+        
+        let target_entity = app.world_mut().spawn((
+            Light,
+            GridPos { x: 2, y: 3 },
+            LightColor::Red,
+            LightKind::Normal,
+            BreathPhase(0.0),
+        )).id();
+        
+        // 1. Upgrade: Normal -> RayH
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::RayH);
+        
+        // 2. Upgrade: RayH -> Supernova
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::Supernova);
+
+        // 3. Upgrade: Supernova -> Cross
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::Cross);
+
+        // 4. Upgrade: Cross -> Starburst
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::Starburst);
+
+        // 5. Upgrade: Starburst -> Blackhole
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::Blackhole);
+        
+        // 6. Upgrade: Blackhole -> should not change (top tier)
+        {
+            let mut inventory = app.world_mut().resource_mut::<SpecialMoveInventory>();
+            inventory.add(ShopItem::Upgrade);
+            let mut shop = app.world_mut().resource_mut::<Shop>();
+            shop.armed = Some(ShopItem::Upgrade);
+            shop.ignore_board_press = false;
+            let mut pointer = app.world_mut().resource_mut::<PointerInput>();
+            pointer.just_pressed = true;
+            pointer.position_world = Some(to_world(GridPos { x: 2, y: 3 }).xy());
+        }
+        app.update();
+        assert_eq!(*app.world().get::<LightKind>(target_entity).unwrap(), LightKind::Blackhole);
     }
 }

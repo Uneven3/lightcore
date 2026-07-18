@@ -11,7 +11,7 @@ use crate::core::locale::{Language, TrKey};
 use crate::visuals::RaySettings;
 use crate::input::InputActions;
 use crate::platform::PlatformProfile;
-use crate::state::GameState;
+use crate::state::Overlay;
 use crate::visuals::camera::FpsTarget;
 use crate::visuals::glow::GlowSettings;
 use crate::visuals::grid_water::GridWaterSettings;
@@ -28,10 +28,10 @@ impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(slider_self_update)
             .init_resource::<WindowSettings>()
-            .add_systems(OnEnter(GameState::Options), spawn_options)
-            .add_systems(OnExit(GameState::Options), despawn_options)
-            .add_systems(OnEnter(GameState::AdvancedOptions), spawn_advanced_options)
-            .add_systems(OnExit(GameState::AdvancedOptions), despawn_options)
+            .add_systems(OnEnter(Overlay::Options), spawn_options)
+            .add_systems(OnExit(Overlay::Options), despawn_options)
+            .add_systems(OnEnter(Overlay::AdvancedOptions), spawn_advanced_options)
+            .add_systems(OnExit(Overlay::AdvancedOptions), despawn_options)
             .add_systems(
                 Update,
                 (
@@ -54,8 +54,8 @@ impl Plugin for OptionsPlugin {
                     scroll_drag_system,
                 )
                     .run_if(
-                        in_state(GameState::Options)
-                            .or_else(in_state(GameState::AdvancedOptions)),
+                        in_state(Overlay::Options)
+                            .or_else(in_state(Overlay::AdvancedOptions)),
                     ),
             );
     }
@@ -935,17 +935,17 @@ fn back_button_system(
     actions: Res<InputActions>,
     menu_activated: Res<MenuActivated>,
     options_return: Res<OptionsReturn>,
-    state: Res<State<GameState>>,
-    mut next: ResMut<NextState<GameState>>,
+    state: Res<State<Overlay>>,
+    mut next: ResMut<NextState<Overlay>>,
 ) {
     let clicked = interactions
         .iter()
         .any(|(e, i)| activated(&i, e, &menu_activated));
     if clicked || actions.menu_back() {
-        if *state.get() == GameState::AdvancedOptions {
-            next.set(GameState::Options);
+        if *state.get() == Overlay::AdvancedOptions {
+            next.set(Overlay::Options);
         } else {
-            next.set(options_return.0.clone());
+            next.set(options_return.0);
         }
     }
 }
@@ -953,13 +953,13 @@ fn back_button_system(
 fn advanced_options_button_system(
     interactions: Query<(Entity, Ref<Interaction>), With<AdvancedOptionsButton>>,
     menu_activated: Res<MenuActivated>,
-    mut next: ResMut<NextState<GameState>>,
+    mut next: ResMut<NextState<Overlay>>,
 ) {
     if interactions
         .iter()
         .any(|(entity, interaction)| activated(&interaction, entity, &menu_activated))
     {
-        next.set(GameState::AdvancedOptions);
+        next.set(Overlay::AdvancedOptions);
     }
 }
 

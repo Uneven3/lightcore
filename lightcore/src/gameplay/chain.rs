@@ -12,7 +12,7 @@ use crate::board::{HOLLOW_BASE_CHANCE, clear_shadow_at, shuffle_board};
 use crate::core::prelude::*;
 use crate::visuals::RaySettings;
 use crate::core::run::RunState;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 
 #[derive(SystemParam)]
 pub(crate) struct ChainParams<'w> {
@@ -35,7 +35,7 @@ pub(crate) struct ChainParams<'w> {
 pub(crate) fn check_chain_matches(
     mut commands: Commands,
     mut res: ChainParams,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
     mut shadow_q: Query<
         (Entity, &GridPos, Option<&mut HardShadow>),
         With<AdjacentMatchDamage>,
@@ -47,20 +47,33 @@ pub(crate) fn check_chain_matches(
     ray_settings: Res<RaySettings>,
 ) {
     res.cascade.0 += 1;
-    let grid: Grid = lights
-        .iter()
-        .map(|(e, p, c, k)| (*p, (e, *c, *k)))
-        .collect();
-    let mut entity_info: EntityInfo = lights
-        .iter()
-        .map(|(e, p, c, k)| (e, (*p, *c, *k)))
-        .collect();
+    let (grid, mut entity_info) = build_grid_info(lights.iter().map(|(e, p, c, k)| (e, *p, *c, *k)));
 
-    // FASE 1: Drenar TODA la queue de una vez contra el mismo snapshot — evita pagar
-    // un ciclo completo Popping→Falling→Spawning→CheckingChain por cada activación
-    // encolada, y deja que FASE 2 (abajo) se alcance mucho antes en cascadas largas.
+    // FASE 1: Drenar la queue UNA activación por ciclo, en orden de tier descendente — dispara
+    // la primera activación encolada del tier más alto presente; todas las demás esperan su
+    // propio ciclo completo Popping→Falling→Spawning→CheckingChain. Antes se drenaba TODO de
+    // una vez y una cadena grande detonaba como un único flash simultáneo ilegible; así cada
+    // detonación es un beat individual de la cascada (Blackholes primero, Rays al final), con
+    // sus propios VFX/pops/refill. Nada de esto pierde combos: las activaciones encoladas
+    // nunca se combinan en pares de todos modos, porque para cuando la queue drena sus celdas
+    // ya fueron repobladas por el refill y `resolve_wave` ve ocupantes Normal (los pares solo
+    // se forman en la ola inicial de `resolve_match_sequence`, donde los powers siguen vivos).
     if !res.queue.0.is_empty() {
-        let activations: Vec<PowerActivation> = res.queue.0.drain(..).collect();
+        let top_tier = res
+            .queue
+            .0
+            .iter()
+            .map(|a| a.kind.corelights())
+            .max()
+            .expect("queue no vacía");
+        let idx = res
+            .queue
+            .0
+            .iter()
+            .position(|a| a.kind.corelights() == top_tier)
+            .expect("top_tier proviene de esta misma queue");
+        let activations: Vec<PowerActivation> =
+            vec![res.queue.0.remove(idx).expect("idx válido")];
         // Each activation's own cell ends up in its own blast result (e.g. a RayH's row
         // scan includes its own column) — track activators so they aren't mistaken for newly
         // discovered power lights and re-queued against themselves.
@@ -145,6 +158,7 @@ pub(crate) fn check_chain_matches(
                 stats: &mut res.stats,
                 moves: &mut res.moves,
                 run: &mut res.run,
+                color_values: res.level.color_values,
             },
         );
         let (pops, starburst_origins) = rewards::spawn_pops(
@@ -166,7 +180,7 @@ pub(crate) fn check_chain_matches(
                 .map(|activation| to_world(activation.pos).with_z(2.0))
                 .collect(),
         });
-        next_state.set(GameState::Popping);
+        next_state.set(MatchPhase::Popping);
         return;
     }
 
@@ -188,11 +202,11 @@ pub(crate) fn check_chain_matches(
             }
         };
         if level_complete {
-            next_state.set(GameState::LevelComplete);
+            next_state.set(MatchPhase::LevelComplete);
             return;
         }
         if res.moves.0 == 0 {
-            next_state.set(GameState::GameOver);
+            next_state.set(MatchPhase::GameOver);
             return;
         }
         let shadow_set: HashSet<GridPos> = shadow_q.iter().map(|(_, p, _)| *p).collect();
@@ -206,7 +220,7 @@ pub(crate) fn check_chain_matches(
             };
             shuffle_board(&mut commands, &light_pairs, hollow_chance);
         }
-        next_state.set(GameState::Playing);
+        next_state.set(MatchPhase::Playing);
         return;
     }
 
@@ -231,7 +245,8 @@ pub(crate) fn check_chain_matches(
             stats: &mut res.stats,
             moves: &mut res.moves,
             run: &mut res.run,
+            color_values: res.level.color_values,
         },
     );
-    next_state.set(GameState::Popping);
+    next_state.set(MatchPhase::Popping);
 }

@@ -5,7 +5,7 @@ use bevy::diagnostic::{
 use bevy::prelude::*;
 use bevy::window::{PresentMode, PrimaryWindow};
 
-use crate::state::GameState;
+use crate::state::MatchPhase;
 use crate::visuals::particles::Particle;
 
 /// Refresh the readout a few times a second — fast enough to be live, slow enough that the overlay's
@@ -36,7 +36,7 @@ impl Plugin for DebugOverlayPlugin {
             app.add_plugins(SystemInformationDiagnosticsPlugin);
         }
         // Diagnóstico de rendimiento: con MATCH3_LOGFPS=1 vuelca por terminal, cada segundo, un
-        // resumen RICO (FPS medio/mín, frametime medio/peor, el GameState del peor frame y los PICOS
+        // resumen RICO (FPS medio/mín, frametime medio/peor, el MatchPhase del peor frame y los PICOS
         // de conteos: entidades/sprites/mesh2d/partículas + assets material/mesh/imagen). Pensado para
         // jugar 30 s y leer el log: distingue FUGA de entidades (sube monótono) de PICO transitorio
         // (un mal frame puntual) de coste SOSTENIDO. NEUTRAL: no asume un culpable, deja que los
@@ -176,8 +176,8 @@ struct PerfLog {
     /// Frames de la ventana que pasaron de SPIKE_MS — distingue UN pico periódico (spikes≈1) de
     /// jitter sostenido (spikes alto). Decisivo para saber si "los fps bailan" es un stall puntual.
     spikes: u32,
-    /// GameState en el peor frame de la ventana — para correlacionar el pico con la fase de juego.
-    worst_state: Option<GameState>,
+    /// MatchPhase en el peor frame de la ventana — para correlacionar el pico con la fase de juego.
+    worst_state: Option<MatchPhase>,
     ent_max: usize,
     sprite_max: usize,
     mesh2d_max: usize,
@@ -204,12 +204,12 @@ impl Default for PerfLog {
 }
 
 /// Volcado RICO por terminal: una línea por segundo con FPS medio/mín, frametime medio/peor, el
-/// GameState del peor frame y los picos de conteos. Solo activo con `MATCH3_LOGFPS=1`.
+/// MatchPhase del peor frame y los picos de conteos. Solo activo con `MATCH3_LOGFPS=1`.
 #[expect(clippy::too_many_arguments)]
 fn perf_log(
     time: Res<Time>,
     mut log: ResMut<PerfLog>,
-    state: Res<State<GameState>>,
+    state: Option<Res<State<MatchPhase>>>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<ColorMaterial>>,
     images: Res<Assets<Image>>,
@@ -230,7 +230,7 @@ fn perf_log(
     }
     if dt_ms > log.ms_max {
         log.ms_max = dt_ms;
-        log.worst_state = Some(state.get().clone());
+        log.worst_state = state.as_ref().map(|s| *s.get());
     }
     // Picos de conteos dentro de la ventana (no el valor del último frame): así un burst breve no se
     // nos escapa entre dos muestreos.

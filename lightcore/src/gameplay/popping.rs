@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use super::LightPopped;
 use crate::core::components::{PopAnim, PopDelay};
 use crate::core::prelude::*;
-use crate::state::GameState;
+use crate::state::MatchPhase;
 use crate::visuals::RaySettings;
 
 /// Accumulates, per light hit by `activation`, the delay until the power's effect *reaches* it —
@@ -138,9 +138,9 @@ pub(crate) fn tick_pop_anim(
 
 pub(crate) fn check_popping_done(
     q: Query<(), With<PopAnim>>,
-    mut next_state: ResMut<NextState<GameState>>,
+    mut next_state: ResMut<NextState<MatchPhase>>,
 ) {
     if q.is_empty() {
-        next_state.set(GameState::Falling);
+        next_state.set(MatchPhase::Falling);
     }
 }

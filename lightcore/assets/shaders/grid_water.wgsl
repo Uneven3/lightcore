@@ -17,11 +17,15 @@ struct GridWaterMaterial {
     time: f32,
     tile: f32,
     enabled: f32,
-    _pad: f32,
+    mask_low: u32,
+    mask_high: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
     half_size: vec4<f32>,
 };
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> material: GridWaterMaterial;
+@group(1) @binding(0) var<uniform> material: GridWaterMaterial;
 
 fn saturate(v: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
@@ -37,6 +41,20 @@ fn point_alpha(coord: vec2<f32>) -> f32 {
     let cell = fract(coord) - vec2<f32>(0.5);
     let d = length(cell);
     return 1.0 - smoothstep(0.025, 0.060, d);
+}
+
+fn is_cell_active(cx: i32, cy: i32) -> bool {
+    let gx = cx + 3;
+    let gy = cy + 3;
+    if (gx < 0 || gx >= 8 || gy < 0 || gy >= 8) {
+        return false;
+    }
+    let bit_idx = u32(gy * 8 + gx);
+    if (bit_idx < 32u) {
+        return ((material.mask_low >> bit_idx) & 1u) != 0u;
+    } else {
+        return ((material.mask_high >> (bit_idx - 32u)) & 1u) != 0u;
+    }
 }
 
 @fragment
@@ -55,13 +73,37 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let warped = world;
     let coord = warped / material.tile + vec2<f32>(0.5, 0.5);
 
-    let lines = line_alpha(coord) * 0.16;
-    let points = point_alpha(coord) * 0.58;
+    let cx = i32(floor(coord.x + 0.5));
+    let cy = i32(floor(coord.y + 0.5));
+
+    let fx = fract(coord.x + 0.5);
+    let fy = fract(coord.y + 0.5);
+
+    var active = is_cell_active(cx, cy);
+    if (fx < 0.05) {
+        active = active || is_cell_active(cx - 1, cy);
+    }
+    if (fx > 0.95) {
+        active = active || is_cell_active(cx + 1, cy);
+    }
+    if (fy < 0.05) {
+        active = active || is_cell_active(cx, cy - 1);
+    }
+    if (fy > 0.95) {
+        active = active || is_cell_active(cx, cy + 1);
+    }
+
+    if (!active) {
+        return vec4<f32>(0.0);
+    }
+
+    let lines = line_alpha(coord) * 0.24;
+    let points = point_alpha(coord) * 0.75;
     let shimmer = 0.88 + 0.12 * sin(material.time * 1.7 + warped.x * 0.018 + warped.y * 0.011);
 
-    let base = vec3<f32>(0.002, 0.010, 0.032);
-    let grid = vec3<f32>(0.025, 0.18, 0.54) * (points + lines) * shimmer;
-    var color = vec4<f32>(base + grid, board_mask * saturate(0.10 + points * 0.45 + lines));
+    let base = vec3<f32>(0.003, 0.012, 0.036);
+    let grid = vec3<f32>(0.045, 0.28, 0.75) * (points + lines) * shimmer;
+    var color = vec4<f32>(base + grid, board_mask * saturate(0.18 + points * 0.50 + lines));
 
 #ifdef TONEMAP_IN_SHADER
     color = tonemapping::tone_mapping(color, view.color_grading);

@@ -36,6 +36,7 @@ impl Language {
 }
 
 /// Every translated string key. Keep alphabetical within each section for maintainability.
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum TrKey {
     // ── Main Menu ─────────────────────────────────────────────────────────────
