@@ -35,8 +35,8 @@ impl Plugin for GamePlugin {
             .add_sub_state::<state::MatchPhase>()
             .init_state::<state::Overlay>()
             .init_resource::<state::TutorialModalState>()
-            .init_resource::<settings::UserSettings>()
             .add_plugins((
+                settings::SettingsPlugin,
                 core::run::RunPlugin,
                 core::campaign::CampaignPlugin,
                 platform::PlatformPlugin,

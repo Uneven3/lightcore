@@ -3,30 +3,23 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    CaptureBatch, CascadeDepth, CollectedCores, CoreReserve, GameMode, MovesLeft,
-    PowerActivationQueue, Score, ShadowCount, SparksCollected, StatsBook, SuperComboPending,
+    CaptureBatch, CascadeDepth, EconomyParams, GameMode, PowerActivationQueue, ShadowCount,
+    SparksCollected, SuperComboPending,
 };
 use super::{rewards, vfx};
 use crate::board::{HOLLOW_BASE_CHANCE, clear_shadow_at, shuffle_board};
 use crate::core::prelude::*;
-use crate::core::run::RunState;
 use crate::gameplay::MatchTiming;
 use crate::state::MatchPhase;
 
 #[derive(SystemParam)]
 pub(crate) struct ChainParams<'w> {
-    pub(crate) score: ResMut<'w, Score>,
-    pub(crate) reserve: ResMut<'w, CoreReserve>,
-    pub(crate) moves: ResMut<'w, MovesLeft>,
+    pub(crate) economy: EconomyParams<'w>,
     pub(crate) cascade: ResMut<'w, CascadeDepth>,
-    pub(crate) level: Res<'w, LevelConfig>,
     pub(crate) collected: Res<'w, SparksCollected>,
     pub(crate) shadow_count: ResMut<'w, ShadowCount>,
     pub(crate) queue: ResMut<'w, PowerActivationQueue>,
     pub(crate) super_combo: ResMut<'w, SuperComboPending>,
-    pub(crate) collected_cores: ResMut<'w, CollectedCores>,
-    pub(crate) stats: ResMut<'w, StatsBook>,
-    pub(crate) run: ResMut<'w, RunState>,
     pub(crate) mode: Res<'w, GameMode>,
 }
 
@@ -145,15 +138,7 @@ pub(crate) fn check_chain_matches(
             res.cascade.0,
             false,
             0,
-            &mut rewards::EconomyState {
-                score: &mut res.score,
-                reserve: &mut res.reserve,
-                collected_cores: &mut res.collected_cores,
-                stats: &mut res.stats,
-                moves: &mut res.moves,
-                run: &mut res.run,
-                color_values: res.level.color_values,
-            },
+            &mut res.economy.state(),
         );
         let pops = rewards::spawn_pops(
             &mut commands,
@@ -161,7 +146,7 @@ pub(crate) fn check_chain_matches(
             &entity_info,
             &pop_delays,
             ray_settings.pop_duration,
-            &res.run,
+            &res.economy.run,
             res.cascade.0,
             false,
         );
@@ -181,12 +166,13 @@ pub(crate) fn check_chain_matches(
     if result.to_remove.is_empty() && result.to_upgrade.is_empty() {
         // FASE 3: No hay más matches — revisar condición de nivel
         let level_complete = res
+            .economy
             .level
             .goal_status(GoalFacts {
-                score: res.score.0,
+                score: res.economy.score.0,
                 sparks: res.collected.0,
                 shadows: res.shadow_count.0,
-                collected_cores: res.collected_cores.0,
+                collected_cores: res.economy.collected_cores.0,
                 ..default()
             })
             .complete;
@@ -194,7 +180,7 @@ pub(crate) fn check_chain_matches(
             next_state.set(MatchPhase::LevelComplete);
             return;
         }
-        if res.moves.0 == 0 {
+        if res.economy.moves.0 == 0 {
             next_state.set(MatchPhase::GameOver);
             return;
         }
@@ -203,7 +189,7 @@ pub(crate) fn check_chain_matches(
             let light_pairs: Vec<(Entity, GridPos)> =
                 lights.iter().map(|(e, p, _, _)| (e, *p)).collect();
             let hollow_chance = if res.mode.is_run() {
-                res.run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
+                res.economy.run.hollow_spawn_chance(HOLLOW_BASE_CHANCE)
             } else {
                 HOLLOW_BASE_CHANCE
             };
@@ -226,15 +212,7 @@ pub(crate) fn check_chain_matches(
         &mut res.shadow_count.0,
         &mut res.queue,
         &mut res.super_combo,
-        &mut rewards::EconomyState {
-            score: &mut res.score,
-            reserve: &mut res.reserve,
-            collected_cores: &mut res.collected_cores,
-            stats: &mut res.stats,
-            moves: &mut res.moves,
-            run: &mut res.run,
-            color_values: res.level.color_values,
-        },
+        &mut res.economy.state(),
     );
     next_state.set(MatchPhase::Popping);
 }

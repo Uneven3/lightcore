@@ -5,7 +5,7 @@ use bevy::ui_widgets::{
 };
 use bevy::window::{MonitorSelection, WindowMode};
 
-use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, button_hover_system};
+use super::{BTN_HOVER, BTN_IDLE, OptionsReturn};
 use crate::core::grid::TILE;
 use crate::core::locale::{Language, TrKey};
 use crate::gameplay::MatchTiming;
@@ -16,109 +16,115 @@ use crate::settings::UserSettings;
 use crate::state::Overlay;
 use crate::visuals::camera::FpsTarget;
 use crate::visuals::glow::GlowSettings;
-use crate::visuals::grid_water::GridWaterSettings;
 use crate::visuals::particles::ParticleSettings;
 use crate::visuals::score_light::ShardSettings;
 
-/// Settings screen — glow and particle parameters (otherwise hardcoded constants)
-/// plus volume, all edited live via Bevy's native headless `Slider` widget. Changes apply
-/// immediately to the underlying resources; nothing is persisted to disk this pass.
+/// Tabbed settings screen — Audio / Graphics / Interface, each a panel toggled by the tab bar. The
+/// technical visual/timing sliders live in a collapsible "Advanced" section inside Graphics rather
+/// than a separate screen. Every label is routed through `lang.tr(...)` so switching language
+/// re-localizes the whole screen. Pointer-driven (mouse + touch) so it works identically on desktop
+/// and mobile; sliders are the native headless `Slider` widget. Changes apply live to the
+/// underlying resources; `UserSettings` persists via its own plugin.
 pub(crate) struct OptionsPlugin;
 
 impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(slider_self_update)
+        app.init_resource::<OptionsTab>()
+            .init_resource::<AdvancedExpanded>()
+            .add_observer(slider_self_update)
             .add_systems(OnEnter(Overlay::Options), spawn_options)
             .add_systems(OnExit(Overlay::Options), despawn_options)
-            .add_systems(OnEnter(Overlay::AdvancedOptions), spawn_advanced_options)
-            .add_systems(OnExit(Overlay::AdvancedOptions), despawn_options)
             .add_systems(
                 Update,
                 (
-                    button_hover_system,
+                    option_button_hover,
                     back_button_system,
-                    advanced_options_button_system,
-                    position_thumbs,
-                    apply_slider_values,
-                    update_slider_value_labels,
+                    tab_button_system,
+                    apply_tab_visibility,
+                    advanced_toggle_system,
+                    apply_advanced_visibility,
                     fps_button_system,
                     show_fps_button_system,
                     internal_resolution_button_system,
-                    grid_water_button_system,
                     fullscreen_button_system,
                     device_button_system,
                     tutorial_button_system,
                     language_button_system,
-                    update_settings_labels,
-                    update_options_static_labels,
+                    position_thumbs,
+                    apply_slider_values,
+                    update_slider_value_labels,
+                    refresh_option_labels,
+                    refresh_slider_labels,
                     scroll_drag_system,
                 )
-                    .run_if(in_state(Overlay::Options).or_else(in_state(Overlay::AdvancedOptions))),
+                    .run_if(in_state(Overlay::Options)),
             );
     }
 }
 
+/// Which options tab is showing. Persists across open/close so reopening returns to the last tab.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+enum OptionsTab {
+    Audio,
+    #[default]
+    Graphics,
+    Interface,
+}
+
+/// Whether the collapsible technical-sliders section inside Graphics is expanded.
+#[derive(Resource, Default)]
+struct AdvancedExpanded(bool);
+
 #[derive(Component)]
 struct OptionsRoot;
-
 #[derive(Component)]
 struct BackButton;
-
+/// Marker for every pointer-driven button in the screen (tabs, toggles, back) so one hover system
+/// paints them all — except tab buttons, whose active/idle colour is owned by `apply_tab_visibility`.
 #[derive(Component)]
-struct AdvancedOptionsButton;
-
+struct OptionButton;
 #[derive(Component)]
-struct AdvancedOptionsLabel;
+struct TabButton(OptionsTab);
+#[derive(Component)]
+struct TabPanel(OptionsTab);
+#[derive(Component)]
+struct AdvancedToggleButton;
+#[derive(Component)]
+struct AdvancedContainer;
 
 #[derive(Component)]
 struct FpsButton;
-
-#[derive(Component)]
-struct FpsLabel;
-
 #[derive(Component)]
 struct ShowFpsButton;
-
-#[derive(Component)]
-struct ShowFpsLabel;
-
 #[derive(Component)]
 struct InternalResolutionButton;
-
 #[derive(Component)]
-struct InternalResolutionLabel;
-
+struct FullscreenButton;
 #[derive(Component)]
-struct GridWaterButton;
-
-#[derive(Component)]
-struct GridWaterLabel;
+struct DeviceButton;
 #[derive(Component)]
 struct TutorialButton;
 #[derive(Component)]
-struct TutorialLabel;
-#[derive(Component)]
 struct LanguageButton;
-#[derive(Component)]
-struct LanguageLabel;
 
-#[derive(Component)]
-struct OptionsTitleLabel;
+/// The kind of dynamic label a `Text` node carries, so a single system re-localizes them all from
+/// current state instead of one disjoint `Query` per label type.
+#[derive(Component, Clone, Copy)]
+enum OptLabel {
+    Title,
+    Tab(OptionsTab),
+    Fullscreen,
+    InternalResolution,
+    FpsLimit,
+    ShowFps,
+    Device,
+    Tutorial,
+    Language,
+    AdvancedToggle,
+}
 
 #[derive(Component)]
 struct SliderLabel(SliderTarget);
-
-#[derive(Component)]
-struct FullscreenButton;
-
-#[derive(Component)]
-struct FullscreenLabel;
-
-#[derive(Component)]
-struct DeviceButton;
-
-#[derive(Component)]
-struct DeviceLabel;
 
 /// Marker on the numeric `Text` shown to the right of each slider track.
 #[derive(Component, Clone, Copy)]
@@ -163,6 +169,11 @@ enum SliderTarget {
     ShardHold,
 }
 
+fn on_off(v: bool) -> &'static str {
+    if v { "ON" } else { "OFF" }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_options(
     mut commands: Commands,
     settings: Res<UserSettings>,
@@ -171,7 +182,13 @@ fn spawn_options(
     fps_target: Res<FpsTarget>,
     profile: Res<PlatformProfile>,
     asset_server: Res<AssetServer>,
+    glow: Res<GlowSettings>,
+    particles: Res<ParticleSettings>,
+    ray: Res<MatchTiming>,
+    shards: Res<ShardSettings>,
 ) {
+    let lang = settings.language;
+    let desktop = profile.show_desktop_options;
     let back_icon = asset_server.load(crate::embedded::back_icon_path());
     commands
         .spawn((
@@ -184,33 +201,34 @@ fn spawn_options(
                 justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(10.0),
-                padding: UiRect::axes(Val::Px(0.0), Val::Px(28.0)),
+                padding: UiRect::axes(Val::Px(0.0), Val::Px(24.0)),
                 ..default()
             },
             ScrollArea,
             bevy::ui::ScrollPosition::default(),
         ))
         .with_children(|root| {
+            // Title
             root.spawn((
-                OptionsTitleLabel,
-                Text::new("Opciones"),
+                OptLabel::Title,
+                Text::new(lang.tr(TrKey::OptionsTitle)),
                 TextFont {
-                    font_size: FontSize::Px(40.0),
+                    font_size: FontSize::Px(38.0),
                     ..default()
                 },
                 TextColor(Color::srgb(1.4, 1.6, 2.2)),
             ));
 
+            // Back button (icon)
             root.spawn((
                 Button,
                 BackButton,
-                MenuButton { index: 0 },
+                OptionButton,
                 Node {
-                    width: Val::Px(180.0),
-                    height: Val::Px(46.0),
+                    width: Val::Px(150.0),
+                    height: Val::Px(42.0),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    margin: UiRect::bottom(Val::Px(10.0)),
                     border: UiRect::all(Val::Px(1.5)),
                     border_radius: BorderRadius::all(Val::Px(6.0)),
                     ..default()
@@ -226,313 +244,286 @@ fn spawn_options(
                         ..default()
                     },
                     Node {
-                        width: Val::Px(26.0),
-                        height: Val::Px(26.0),
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
                         ..default()
                     },
                 ));
             });
 
-            let mut button_index = 1;
-            spawn_text_button(
-                root,
-                DeviceButton,
-                DeviceLabel,
-                button_index,
-                "Dispositivo: Escritorio",
-            );
-            button_index += 1;
-            if profile.show_desktop_options {
-                spawn_text_button(
-                    root,
-                    FullscreenButton,
-                    FullscreenLabel,
-                    button_index,
-                    "Fullscreen: OFF",
-                );
-                button_index += 1;
-            }
-            spawn_text_button(root, FpsButton, FpsLabel, button_index, fps_target.label());
-            button_index += 1;
-            spawn_text_button(
-                root,
-                InternalResolutionButton,
-                InternalResolutionLabel,
-                button_index,
-                presentation.internal_resolution.label(),
-            );
-            button_index += 1;
-            spawn_text_button(
-                root,
-                ShowFpsButton,
-                ShowFpsLabel,
-                button_index,
-                "Mostrar FPS: ON",
-            );
-            button_index += 1;
-            spawn_text_button(
-                root,
-                GridWaterButton,
-                GridWaterLabel,
-                button_index,
-                "Grid agua: ON",
-            );
-            button_index += 1;
-            spawn_text_button(
-                root,
-                TutorialButton,
-                TutorialLabel,
-                button_index,
-                if settings.tutorial_enabled {
-                    "Tutorial: ON"
-                } else {
-                    "Tutorial: OFF"
-                },
-            );
-            button_index += 1;
-            spawn_text_button(
-                root,
-                LanguageButton,
-                LanguageLabel,
-                button_index,
-                settings.language.label(),
-            );
-            spawn_slider(
-                root,
-                "Volumen",
-                SliderTarget::Volume,
-                0.0,
-                1.5,
-                gv.volume.to_linear(),
-            );
-            button_index += 1;
-            spawn_text_button(
-                root,
-                AdvancedOptionsButton,
-                AdvancedOptionsLabel,
-                button_index,
-                "Opciones avanzadas",
-            );
+            // Tab bar
+            root.spawn((Node {
+                width: Val::Percent(92.0),
+                max_width: Val::Px(360.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(6.0),
+                justify_content: JustifyContent::Center,
+                margin: UiRect::vertical(Val::Px(4.0)),
+                ..default()
+            },))
+                .with_children(|bar| {
+                    for tab in [
+                        OptionsTab::Audio,
+                        OptionsTab::Graphics,
+                        OptionsTab::Interface,
+                    ] {
+                        spawn_tab(bar, tab, tab_label(tab, lang));
+                    }
+                });
+
+            // Content: the three panels stacked, only the active one displayed.
+            root.spawn((Node {
+                width: Val::Percent(92.0),
+                max_width: Val::Px(360.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Stretch,
+                row_gap: Val::Px(8.0),
+                ..default()
+            },))
+                .with_children(|content| {
+                    // ── Audio ──────────────────────────────────────────────
+                    content
+                        .spawn((TabPanel(OptionsTab::Audio), panel_node()))
+                        .with_children(|panel| {
+                            spawn_slider(
+                                panel,
+                                get_slider_label_text(SliderTarget::Volume, lang),
+                                SliderTarget::Volume,
+                                0.0,
+                                1.5,
+                                gv.volume.to_linear(),
+                            );
+                        });
+
+                    // ── Graphics ───────────────────────────────────────────
+                    content
+                        .spawn((TabPanel(OptionsTab::Graphics), panel_node()))
+                        .with_children(|panel| {
+                            if desktop {
+                                spawn_opt_button(
+                                    panel,
+                                    FullscreenButton,
+                                    OptLabel::Fullscreen,
+                                    &format!("{}: OFF", lang.tr(TrKey::Fullscreen)),
+                                );
+                            }
+                            spawn_opt_button(
+                                panel,
+                                InternalResolutionButton,
+                                OptLabel::InternalResolution,
+                                &presentation.internal_resolution.label(lang),
+                            );
+                            spawn_opt_button(
+                                panel,
+                                FpsButton,
+                                OptLabel::FpsLimit,
+                                &fps_target.label(lang),
+                            );
+                            // Collapsible technical sliders.
+                            spawn_opt_button(
+                                panel,
+                                AdvancedToggleButton,
+                                OptLabel::AdvancedToggle,
+                                &format!("{} [+]", lang.tr(TrKey::AdvancedSection)),
+                            );
+                            panel
+                                .spawn((
+                                    AdvancedContainer,
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        flex_direction: FlexDirection::Column,
+                                        align_items: AlignItems::Stretch,
+                                        row_gap: Val::Px(6.0),
+                                        display: Display::None,
+                                        ..default()
+                                    },
+                                ))
+                                .with_children(|adv| {
+                                    spawn_advanced_sliders(adv, lang, &glow, &particles, &ray, &shards);
+                                });
+                        });
+
+                    // ── Interface ──────────────────────────────────────────
+                    content
+                        .spawn((TabPanel(OptionsTab::Interface), panel_node()))
+                        .with_children(|panel| {
+                            spawn_opt_button(
+                                panel,
+                                LanguageButton,
+                                OptLabel::Language,
+                                settings.language.label(),
+                            );
+                            spawn_opt_button(
+                                panel,
+                                TutorialButton,
+                                OptLabel::Tutorial,
+                                &format!(
+                                    "{}: {}",
+                                    lang.tr(TrKey::Tutorial),
+                                    on_off(settings.tutorial_enabled)
+                                ),
+                            );
+                            spawn_opt_button(
+                                panel,
+                                ShowFpsButton,
+                                OptLabel::ShowFps,
+                                &format!(
+                                    "{}: {}",
+                                    lang.tr(TrKey::ShowFps),
+                                    on_off(settings.show_fps_watermark)
+                                ),
+                            );
+                            if desktop {
+                                spawn_opt_button(
+                                    panel,
+                                    DeviceButton,
+                                    OptLabel::Device,
+                                    &presentation.viewport_mode.label(lang),
+                                );
+                            }
+                        });
+                });
         });
 }
 
-/// Technical tuning lives on a separate screen so normal settings stay short and touch-friendly.
-/// It remains a regular UI tree (not a modal) and is entered only from `Options`.
-fn spawn_advanced_options(
-    mut commands: Commands,
-    glow: Res<GlowSettings>,
-    particles: Res<ParticleSettings>,
-    ray: Res<MatchTiming>,
-    shards: Res<ShardSettings>,
-) {
-    commands
+fn tab_label(tab: OptionsTab, lang: Language) -> &'static str {
+    lang.tr(match tab {
+        OptionsTab::Audio => TrKey::TabAudio,
+        OptionsTab::Graphics => TrKey::TabGraphics,
+        OptionsTab::Interface => TrKey::TabInterface,
+    })
+}
+
+fn panel_node() -> Node {
+    Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Column,
+        align_items: AlignItems::Stretch,
+        row_gap: Val::Px(6.0),
+        display: Display::None,
+        ..default()
+    }
+}
+
+fn spawn_tab(parent: &mut ChildSpawnerCommands, tab: OptionsTab, initial: &str) {
+    parent
         .spawn((
-            OptionsRoot,
+            Button,
+            OptionButton,
+            TabButton(tab),
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                overflow: Overflow::scroll_y(),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::FlexStart,
+                flex_grow: 1.0,
+                height: Val::Px(38.0),
+                justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                row_gap: Val::Px(10.0),
-                padding: UiRect::axes(Val::Px(0.0), Val::Px(28.0)),
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            ScrollArea,
-            bevy::ui::ScrollPosition::default(),
+            BackgroundColor(BTN_IDLE),
+            BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
         ))
-        .with_children(|root| {
-            root.spawn((
-                Text::new("Opciones avanzadas"),
+        .with_children(|b| {
+            b.spawn((
+                OptLabel::Tab(tab),
+                Text::new(initial),
                 TextFont {
-                    font_size: FontSize::Px(34.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
-                TextColor(Color::srgb(1.4, 1.6, 2.2)),
+                TextColor(Color::WHITE),
             ));
-            root.spawn((
-                Button,
-                BackButton,
-                MenuButton { index: 0 },
-                Node {
-                    width: Val::Px(180.0),
-                    height: Val::Px(46.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    margin: UiRect::bottom(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(1.5)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+        });
+}
+
+fn spawn_opt_button<M: Component>(
+    parent: &mut ChildSpawnerCommands,
+    marker: M,
+    label: OptLabel,
+    initial: &str,
+) {
+    parent
+        .spawn((
+            Button,
+            OptionButton,
+            marker,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(40.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(BTN_IDLE),
+            BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                label,
+                Text::new(initial),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                BackgroundColor(BTN_IDLE),
-                BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
-            ))
-            .with_children(|button| {
-                button.spawn((
-                    Text::new("←"),
-                    TextFont {
-                        font_size: FontSize::Px(28.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.78, 0.92, 1.0)),
-                ));
-            });
-            spawn_advanced_sliders(root, &glow, &particles, &ray, &shards);
+                TextColor(Color::WHITE),
+            ));
         });
 }
 
 fn spawn_advanced_sliders(
     root: &mut ChildSpawnerCommands,
+    lang: Language,
     glow: &GlowSettings,
     particles: &ParticleSettings,
     ray: &MatchTiming,
     shards: &ShardSettings,
 ) {
-    for (label, target, min, max, value) in [
+    for (target, min, max, value) in [
+        (SliderTarget::GlowBrightness, 0.5, 4.0, glow.brightness),
+        (SliderTarget::GlowOuterRadius, 0.3, 2.5, glow.outer_radius),
+        (SliderTarget::GlowOuterAlpha, 0.0, 0.6, glow.outer_alpha),
+        (SliderTarget::GlowInnerRadius, 0.15, 1.2, glow.inner_radius),
+        (SliderTarget::GlowInnerAlpha, 0.0, 1.0, glow.inner_alpha),
         (
-            "Glow brillo",
-            SliderTarget::GlowBrightness,
-            0.5,
-            4.0,
-            glow.brightness,
-        ),
-        (
-            "Glow radio ext",
-            SliderTarget::GlowOuterRadius,
-            0.3,
-            2.5,
-            glow.outer_radius,
-        ),
-        (
-            "Glow alpha ext",
-            SliderTarget::GlowOuterAlpha,
-            0.0,
-            0.6,
-            glow.outer_alpha,
-        ),
-        (
-            "Glow radio int",
-            SliderTarget::GlowInnerRadius,
-            0.15,
-            1.2,
-            glow.inner_radius,
-        ),
-        (
-            "Glow alpha int",
-            SliderTarget::GlowInnerAlpha,
-            0.0,
-            1.0,
-            glow.inner_alpha,
-        ),
-        (
-            "Pop burst count",
             SliderTarget::PopBurstCount,
             1.0,
             20.0,
             particles.pop_burst_count as f32,
         ),
         (
-            "Burst radius",
             SliderTarget::BurstRadius,
             TILE * 0.01,
             TILE * 0.15,
             particles.burst_radius,
         ),
         (
-            "Membrane radius",
             SliderTarget::MembraneRadius,
             TILE * 0.005,
             TILE * 0.06,
             particles.membrane_radius,
         ),
         (
-            "Trail particles",
             SliderTarget::TrailParticleCount,
             0.0,
             6.0,
             particles.trail_particle_count as f32,
         ),
-        (
-            "Velocidad rayo",
-            SliderTarget::RaySpeed,
-            200.0,
-            1500.0,
-            ray.speed,
-        ),
-        (
-            "Duracion pop",
-            SliderTarget::PopDuration,
-            0.03,
-            0.35,
-            ray.pop_duration,
-        ),
-        (
-            "Stagger estrella",
-            SliderTarget::StarStagger,
-            0.005,
-            0.12,
-            ray.stagger_secs,
-        ),
-        (
-            "Ancho bolt",
-            SliderTarget::BoltWidth,
-            0.2,
-            1.0,
-            ray.bolt_width_frac,
-        ),
-        (
-            "Duracion trail",
-            SliderTarget::TrailDuration,
-            0.1,
-            0.8,
-            ray.trail_duration,
-        ),
+        (SliderTarget::RaySpeed, 200.0, 1500.0, ray.speed),
+        (SliderTarget::PopDuration, 0.03, 0.35, ray.pop_duration),
+        (SliderTarget::StarStagger, 0.005, 0.12, ray.stagger_secs),
+        (SliderTarget::BoltWidth, 0.2, 1.0, ray.bolt_width_frac),
+        (SliderTarget::TrailDuration, 0.1, 0.8, ray.trail_duration),
         // Non-overlapping limits guarantee min < max from the UI itself.
-        (
-            "Shard vel. min",
-            SliderTarget::ShardMinSecs,
-            0.30,
-            0.95,
-            shards.min_secs,
-        ),
-        (
-            "Shard vel. max",
-            SliderTarget::ShardMaxSecs,
-            1.00,
-            2.50,
-            shards.max_secs,
-        ),
-        (
-            "Escala shard",
-            SliderTarget::ShardBaseSize,
-            0.15,
-            1.2,
-            shards.base_size_frac,
-        ),
-        (
-            "Shard curva",
-            SliderTarget::ShardCurve,
-            0.3,
-            3.0,
-            shards.curve_frac,
-        ),
-        (
-            "Shard brillo HDR",
-            SliderTarget::ShardHdrBoost,
-            1.0,
-            8.0,
-            shards.hdr_boost,
-        ),
-        (
-            "Shard pausa",
-            SliderTarget::ShardHold,
-            0.0,
-            0.4,
-            shards.hold_secs,
-        ),
+        (SliderTarget::ShardMinSecs, 0.30, 0.95, shards.min_secs),
+        (SliderTarget::ShardMaxSecs, 1.00, 2.50, shards.max_secs),
+        (SliderTarget::ShardBaseSize, 0.15, 1.2, shards.base_size_frac),
+        (SliderTarget::ShardCurve, 0.3, 3.0, shards.curve_frac),
+        (SliderTarget::ShardHdrBoost, 1.0, 8.0, shards.hdr_boost),
+        (SliderTarget::ShardHold, 0.0, 0.4, shards.hold_secs),
     ] {
-        spawn_slider(root, label, target, min, max, value);
+        spawn_slider(root, get_slider_label_text(target, lang), target, min, max, value);
     }
 }
 
@@ -559,6 +550,7 @@ fn spawn_slider(
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexStart,
             row_gap: Val::Px(3.0),
+            margin: UiRect::top(Val::Px(4.0)),
             ..default()
         })
         .with_children(|col| {
@@ -695,66 +687,86 @@ fn apply_slider_values(
     }
 }
 
-fn spawn_text_button<B: Component, L: Component>(
-    parent: &mut ChildSpawnerCommands,
-    btn: B,
-    label: L,
-    index: usize,
-    text: &str,
+fn option_button_hover(
+    mut q: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<OptionButton>, Without<TabButton>),
+    >,
 ) {
-    parent
-        .spawn((
-            Button,
-            btn,
-            MenuButton { index },
-            Node {
-                width: Val::Px(280.0),
-                height: Val::Px(40.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                margin: UiRect::top(Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.5)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(BTN_IDLE),
-            BorderColor::all(Color::srgba(0.25, 0.6, 1.0, 0.45)),
-        ))
-        .with_children(|b| {
-            b.spawn((
-                label,
-                Text::new(text),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
-        });
+    for (interaction, mut bg) in &mut q {
+        bg.0 = match interaction {
+            Interaction::Hovered | Interaction::Pressed => BTN_HOVER,
+            Interaction::None => BTN_IDLE,
+        };
+    }
+}
+
+fn tab_button_system(
+    interactions: Query<(&Interaction, &TabButton), Changed<Interaction>>,
+    mut tab: ResMut<OptionsTab>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction == Interaction::Pressed {
+            *tab = button.0;
+        }
+    }
+}
+
+fn apply_tab_visibility(
+    tab: Res<OptionsTab>,
+    mut panels: Query<(&TabPanel, &mut Node)>,
+    mut buttons: Query<(&TabButton, &mut BackgroundColor)>,
+) {
+    for (panel, mut node) in &mut panels {
+        node.display = if panel.0 == *tab {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for (button, mut bg) in &mut buttons {
+        bg.0 = if button.0 == *tab { BTN_HOVER } else { BTN_IDLE };
+    }
+}
+
+fn advanced_toggle_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<AdvancedToggleButton>)>,
+    mut expanded: ResMut<AdvancedExpanded>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            expanded.0 = !expanded.0;
+        }
+    }
+}
+
+fn apply_advanced_visibility(
+    expanded: Res<AdvancedExpanded>,
+    mut container: Query<&mut Node, With<AdvancedContainer>>,
+) {
+    for mut node in &mut container {
+        node.display = if expanded.0 {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
 }
 
 fn fps_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<FpsButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<FpsButton>)>,
     mut fps_target: ResMut<FpsTarget>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         *fps_target = fps_target.next();
     }
 }
 
 fn fullscreen_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<FullscreenButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<FullscreenButton>)>,
     mut window: Single<&mut Window>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         window.mode = match window.mode {
             WindowMode::Windowed => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
             _ => WindowMode::Windowed,
@@ -762,211 +774,48 @@ fn fullscreen_button_system(
     }
 }
 
-fn grid_water_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<GridWaterButton>>,
-    menu_activated: Res<MenuActivated>,
-    mut settings: ResMut<GridWaterSettings>,
-) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
-        settings.enabled = !settings.enabled;
-    }
-}
-
 fn show_fps_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<ShowFpsButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<ShowFpsButton>)>,
     mut settings: ResMut<UserSettings>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         settings.show_fps_watermark = !settings.show_fps_watermark;
     }
 }
 
 fn internal_resolution_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<InternalResolutionButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<InternalResolutionButton>)>,
     mut presentation: ResMut<PresentationSettings>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         presentation.internal_resolution = presentation.internal_resolution.next();
     }
 }
 
 fn tutorial_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<TutorialButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<TutorialButton>)>,
     mut settings: ResMut<UserSettings>,
-    mut label: Query<&mut Text, With<TutorialLabel>>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         settings.tutorial_enabled = !settings.tutorial_enabled;
-        for mut t in &mut label {
-            t.0 = format!(
-                "Tutorial: {}",
-                if settings.tutorial_enabled {
-                    "ON"
-                } else {
-                    "OFF"
-                }
-            );
-        }
     }
 }
 
 fn language_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<LanguageButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<LanguageButton>)>,
     mut settings: ResMut<UserSettings>,
-    mut label: Query<&mut Text, With<LanguageLabel>>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         settings.language = settings.language.next();
-        for mut t in &mut label {
-            t.0 = settings.language.label().to_string();
-        }
     }
 }
 
 fn device_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<DeviceButton>>,
-    menu_activated: Res<MenuActivated>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<DeviceButton>)>,
     mut presentation: ResMut<PresentationSettings>,
 ) {
-    if interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated))
-    {
-        let prev = presentation.viewport_mode;
+    if interactions.iter().any(|i| *i == Interaction::Pressed) {
         presentation.viewport_mode = presentation.viewport_mode.next();
-        info!(
-            "Cambiando viewport de {:?} a {:?}",
-            prev, presentation.viewport_mode
-        );
-    }
-}
-
-fn update_settings_labels(
-    window: Single<&Window>,
-    settings: Res<UserSettings>,
-    presentation: Res<PresentationSettings>,
-    grid_water: Res<GridWaterSettings>,
-    fps_target: Res<FpsTarget>,
-    mut fs: Query<
-        &mut Text,
-        (
-            With<FullscreenLabel>,
-            Without<ShowFpsLabel>,
-            Without<GridWaterLabel>,
-            Without<FpsLabel>,
-            Without<DeviceLabel>,
-            Without<InternalResolutionLabel>,
-        ),
-    >,
-    mut gw: Query<
-        &mut Text,
-        (
-            With<GridWaterLabel>,
-            Without<FullscreenLabel>,
-            Without<ShowFpsLabel>,
-            Without<FpsLabel>,
-            Without<DeviceLabel>,
-            Without<InternalResolutionLabel>,
-        ),
-    >,
-    mut show_fps_q: Query<
-        &mut Text,
-        (
-            With<ShowFpsLabel>,
-            Without<FullscreenLabel>,
-            Without<GridWaterLabel>,
-            Without<FpsLabel>,
-            Without<DeviceLabel>,
-            Without<InternalResolutionLabel>,
-        ),
-    >,
-    mut internal_resolution_q: Query<
-        &mut Text,
-        (
-            With<InternalResolutionLabel>,
-            Without<FullscreenLabel>,
-            Without<ShowFpsLabel>,
-            Without<GridWaterLabel>,
-            Without<FpsLabel>,
-            Without<DeviceLabel>,
-        ),
-    >,
-    mut fps_q: Query<
-        &mut Text,
-        (
-            With<FpsLabel>,
-            Without<FullscreenLabel>,
-            Without<ShowFpsLabel>,
-            Without<GridWaterLabel>,
-            Without<DeviceLabel>,
-            Without<InternalResolutionLabel>,
-        ),
-    >,
-    mut ds: Query<
-        &mut Text,
-        (
-            With<DeviceLabel>,
-            Without<FullscreenLabel>,
-            Without<ShowFpsLabel>,
-            Without<GridWaterLabel>,
-            Without<FpsLabel>,
-            Without<InternalResolutionLabel>,
-        ),
-    >,
-) {
-    let lang = settings.language;
-    let fs_on = !matches!(window.mode, WindowMode::Windowed);
-    for mut t in &mut fs {
-        **t = format!(
-            "{}: {}",
-            lang.tr(TrKey::Fullscreen),
-            if fs_on { "ON" } else { "OFF" }
-        );
-    }
-    for mut t in &mut gw {
-        **t = format!(
-            "{}: {}",
-            lang.tr(TrKey::GridWater),
-            if grid_water.enabled { "ON" } else { "OFF" }
-        );
-    }
-    for mut t in &mut show_fps_q {
-        **t = format!(
-            "Mostrar FPS: {}",
-            if settings.show_fps_watermark {
-                "ON"
-            } else {
-                "OFF"
-            }
-        );
-    }
-    for mut t in &mut fps_q {
-        **t = fps_target.label().to_string();
-    }
-    for mut t in &mut internal_resolution_q {
-        **t = presentation.internal_resolution.label().to_string();
-    }
-    for mut t in &mut ds {
-        **t = presentation.viewport_mode.label(lang);
     }
 }
 
@@ -996,50 +845,66 @@ fn get_slider_label_text(target: SliderTarget, lang: Language) -> &'static str {
     }
 }
 
-fn update_options_static_labels(
+#[allow(clippy::too_many_arguments)]
+fn refresh_option_labels(
     settings: Res<UserSettings>,
-    mut title: Query<&mut Text, With<OptionsTitleLabel>>,
-    mut sliders: Query<(&SliderLabel, &mut Text), Without<OptionsTitleLabel>>,
+    window: Single<&Window>,
+    presentation: Res<PresentationSettings>,
+    fps_target: Res<FpsTarget>,
+    expanded: Res<AdvancedExpanded>,
+    mut q: Query<(&OptLabel, &mut Text)>,
 ) {
     let lang = settings.language;
-    for mut t in &mut title {
-        **t = lang.tr(TrKey::OptionsTitle).to_string();
+    let fs_on = !matches!(window.mode, WindowMode::Windowed);
+    for (kind, mut text) in &mut q {
+        **text = match kind {
+            OptLabel::Title => lang.tr(TrKey::OptionsTitle).to_string(),
+            OptLabel::Tab(tab) => tab_label(*tab, lang).to_string(),
+            OptLabel::Fullscreen => {
+                format!("{}: {}", lang.tr(TrKey::Fullscreen), on_off(fs_on))
+            }
+            OptLabel::InternalResolution => presentation.internal_resolution.label(lang),
+            OptLabel::FpsLimit => fps_target.label(lang),
+            OptLabel::ShowFps => format!(
+                "{}: {}",
+                lang.tr(TrKey::ShowFps),
+                on_off(settings.show_fps_watermark)
+            ),
+            OptLabel::Device => presentation.viewport_mode.label(lang),
+            OptLabel::Tutorial => format!(
+                "{}: {}",
+                lang.tr(TrKey::Tutorial),
+                on_off(settings.tutorial_enabled)
+            ),
+            OptLabel::Language => settings.language.label().to_string(),
+            OptLabel::AdvancedToggle => format!(
+                "{} {}",
+                lang.tr(TrKey::AdvancedSection),
+                if expanded.0 { "[-]" } else { "[+]" }
+            ),
+        };
     }
-    for (slider, mut t) in &mut sliders {
-        **t = get_slider_label_text(slider.0, lang).to_string();
+}
+
+fn refresh_slider_labels(
+    settings: Res<UserSettings>,
+    mut sliders: Query<(&SliderLabel, &mut Text)>,
+) {
+    let lang = settings.language;
+    for (slider, mut text) in &mut sliders {
+        **text = get_slider_label_text(slider.0, lang).to_string();
     }
 }
 
 fn back_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<BackButton>>,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<BackButton>)>,
     actions: Res<InputActions>,
-    menu_activated: Res<MenuActivated>,
     options_return: Res<OptionsReturn>,
-    state: Res<State<Overlay>>,
     mut next: ResMut<NextState<Overlay>>,
 ) {
-    let clicked = interactions
-        .iter()
-        .any(|(e, i)| activated(&i, e, &menu_activated));
+    let clicked = interactions.iter().any(|i| *i == Interaction::Pressed);
     if clicked || actions.menu_back() {
-        if *state.get() == Overlay::AdvancedOptions {
-            next.set(Overlay::Options);
-        } else {
-            next.set(options_return.0);
-        }
-    }
-}
-
-fn advanced_options_button_system(
-    interactions: Query<(Entity, Ref<Interaction>), With<AdvancedOptionsButton>>,
-    menu_activated: Res<MenuActivated>,
-    mut next: ResMut<NextState<Overlay>>,
-) {
-    if interactions
-        .iter()
-        .any(|(entity, interaction)| activated(&interaction, entity, &menu_activated))
-    {
-        next.set(Overlay::AdvancedOptions);
+        next.set(options_return.0);
     }
 }
 

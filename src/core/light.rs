@@ -59,6 +59,19 @@ impl LightColor {
         }
     }
 
+    /// Locale key naming this color, so goal/tutorial copy shares one color→string mapping instead
+    /// of repeating the `match` per call site.
+    pub(crate) fn name_key(self) -> crate::core::locale::TrKey {
+        use crate::core::locale::TrKey;
+        match self {
+            Self::Red => TrKey::ColorRed,
+            Self::Green => TrKey::ColorGreen,
+            Self::Blue => TrKey::ColorBlue,
+            Self::Yellow => TrKey::ColorYellow,
+            Self::Purple => TrKey::ColorPurple,
+        }
+    }
+
     /// Number of sides of this color's membrane polygon (a "32-gon" for Red reads as a circle).
     /// Also drives the shape of the light's core dots (see `visuals::assets::shaped_core_image`),
     /// so ring and core silhouettes always agree — same as this game's app icon.

@@ -58,6 +58,19 @@ pub(crate) enum TrKey {
     DeviceLabel,
     DeviceDesktop,
     DeviceMobile,
+    // Tabs + option labels for the tabbed options screen.
+    TabAudio,
+    TabGraphics,
+    TabInterface,
+    ShowFps,
+    Tutorial,
+    AdvancedSection,
+    FpsUnlimited,
+    InternalResolution,
+    ResNative,
+    ResHigh,
+    ResMedium,
+    ResLow,
 
     // ── Sliders ───────────────────────────────────────────────────────────────
     SliderGlowBrightness,
@@ -268,6 +281,18 @@ fn tr_es(key: TrKey) -> &'static str {
         TrKey::DeviceLabel => "Dispositivo",
         TrKey::DeviceDesktop => "Escritorio",
         TrKey::DeviceMobile => "Movil",
+        TrKey::TabAudio => "Audio",
+        TrKey::TabGraphics => "Gráficos",
+        TrKey::TabInterface => "Interfaz",
+        TrKey::ShowFps => "Mostrar FPS",
+        TrKey::Tutorial => "Tutorial",
+        TrKey::AdvancedSection => "Avanzado",
+        TrKey::FpsUnlimited => "Sin límite",
+        TrKey::InternalResolution => "Resolución interna",
+        TrKey::ResNative => "Nativa",
+        TrKey::ResHigh => "Alta",
+        TrKey::ResMedium => "Media",
+        TrKey::ResLow => "Baja",
 
         // Sliders
         TrKey::SliderGlowBrightness => "Glow brillo",
@@ -299,54 +324,54 @@ fn tr_es(key: TrKey) -> &'static str {
         // Shop item labels
         TrKey::ShopSwap => "Mover",
         TrKey::ShopEliminate => "Eliminar",
-        TrKey::ShopUpgrade => "Subir tier",
+        TrKey::ShopUpgrade => "Subir nivel",
         TrKey::ShopLife => "+1 Vida",
         TrKey::BoonRedValue => "Rojo+",
         TrKey::BoonGreenReserve => "Verde+",
         TrKey::BoonBlueMoves => "Azul+",
         TrKey::BoonStarBounty => "Estrella×",
-        TrKey::BoonPowerBounty => "Power+",
+        TrKey::BoonPowerBounty => "Especial+",
         TrKey::BoonHollowWard => "Hollow-",
-        TrKey::BoonRedSpawn => "Frec. Roja",
-        TrKey::BoonGreenSpawn => "Frec. Verde",
-        TrKey::BoonBlueSpawn => "Frec. Azul",
-        TrKey::BoonYellowSpawn => "Frec. Amarilla",
-        TrKey::BoonPurpleSpawn => "Frec. Púrpura",
+        TrKey::BoonRedSpawn => "Más rojas",
+        TrKey::BoonGreenSpawn => "Más verdes",
+        TrKey::BoonBlueSpawn => "Más azules",
+        TrKey::BoonYellowSpawn => "Más amarillas",
+        TrKey::BoonPurpleSpawn => "Más moradas",
         // Shop status lines
-        TrKey::ShopSwapStatus => "Arrastra y teletransporta",
+        TrKey::ShopSwapStatus => "Arrastra y mueve",
         TrKey::ShopEliminateStatus => "Rompe 1 luz",
-        TrKey::ShopUpgradeStatus => "Eleva 1 tier",
+        TrKey::ShopUpgradeStatus => "Sube 1 nivel",
         TrKey::ShopLifeStatus => "Compra 1 vida extra",
-        TrKey::BoonRedValueStatus => "Rojos dan score",
-        TrKey::BoonGreenReserveStatus => "Verdes dan reserve",
-        TrKey::BoonBlueMovesStatus => "Azules devuelven moves",
-        TrKey::BoonStarBountyStatus => "Estrellas dan cores extra",
-        TrKey::BoonPowerBountyStatus => "Powers dan score",
-        TrKey::BoonHollowWardStatus => "Menos hollows",
+        TrKey::BoonRedValueStatus => "Rojas dan puntos",
+        TrKey::BoonGreenReserveStatus => "Verdes dan reserva",
+        TrKey::BoonBlueMovesStatus => "Azules dan movimientos",
+        TrKey::BoonStarBountyStatus => "Estrellas dan doble",
+        TrKey::BoonPowerBountyStatus => "Especiales dan puntos",
+        TrKey::BoonHollowWardStatus => "Menos Hollows",
         TrKey::BoonRedSpawnStatus => "+ luces rojas",
         TrKey::BoonGreenSpawnStatus => "+ luces verdes",
         TrKey::BoonBlueSpawnStatus => "+ luces azules",
         TrKey::BoonYellowSpawnStatus => "+ luces amarillas",
-        TrKey::BoonPurpleSpawnStatus => "+ luces púrpuras",
+        TrKey::BoonPurpleSpawnStatus => "+ luces moradas",
         // Armed badge
         TrKey::ShopModifiers => "MOVIMIENTOS ESPECIALES",
         TrKey::ArmedSwap => "Arrastra una luz",
         TrKey::ArmedSwap1of2 => "Suelta sobre otra luz",
         TrKey::ArmedEliminate => "Eliminar activo",
-        TrKey::ArmedUpgrade => "Subir tier activo",
+        TrKey::ArmedUpgrade => "Subir nivel activo",
         TrKey::ActiveReady => "Activo: listo",
         TrKey::ActiveChooseTarget => "Activo: elige destino",
         // Shop state
-        TrKey::NotEnoughCores => "Sin cores suficientes",
+        TrKey::NotEnoughCores => "Falta reserva",
         // Goal hints
         TrKey::GoalTitle => "Objetivo del nivel",
-        TrKey::GoalFreePlay => "Captura libre",
-        TrKey::GoalReachTarget => "Alcanza meta",
+        TrKey::GoalFreePlay => "Junta las que quieras",
+        TrKey::GoalReachTarget => "Consigue los puntos",
         TrKey::GoalRescueSparks => "Rescata chispas",
         TrKey::GoalClearShadows => "Limpia sombras",
-        TrKey::GoalScoreOnClock => "Score antes del reloj",
+        TrKey::GoalScoreOnClock => "Puntos antes de tiempo",
         TrKey::GoalCollectColor => "Junta este color",
-        TrKey::GoalColorOnClock => "Color antes del reloj",
+        TrKey::GoalColorOnClock => "Color antes de tiempo",
         // Stats
         TrKey::StatsTitle => "--- DETALLES ---",
         TrKey::StatsRed => "Rojo",
@@ -369,84 +394,62 @@ fn tr_es(key: TrKey) -> &'static str {
         // Tooltip titles
         TrKey::TooltipSwapTitle => "Habilidad: Mover",
         TrKey::TooltipEliminateTitle => "Habilidad: Eliminar",
-        TrKey::TooltipUpgradeTitle => "Habilidad: Subir tier",
+        TrKey::TooltipUpgradeTitle => "Habilidad: Subir nivel",
         TrKey::TooltipLifeTitle => "Artículo: +1 Vida",
         TrKey::TooltipMovesTitle => "Estado: Movimientos",
-        TrKey::TooltipCoresTitle => "Reserva: Núcleos",
-        TrKey::TooltipBoonRedTitle => "Boon: Rojos+",
-        TrKey::TooltipBoonGreenTitle => "Boon: Verdes+",
-        TrKey::TooltipBoonBlueTitle => "Boon: Azul+",
-        TrKey::TooltipBoonStarTitle => "Boon: Estrella×",
-        TrKey::TooltipBoonPowerTitle => "Boon: Power+",
-        TrKey::TooltipBoonHollowTitle => "Boon: Hollow-",
-        TrKey::TooltipBoonRedSpawnTitle => "Boon: Roja+",
-        TrKey::TooltipBoonGreenSpawnTitle => "Boon: Verde+",
-        TrKey::TooltipBoonBlueSpawnTitle => "Boon: Azul+",
-        TrKey::TooltipBoonYellowSpawnTitle => "Boon: Amarilla+",
-        TrKey::TooltipBoonPurpleSpawnTitle => "Boon: Púrpura+",
+        TrKey::TooltipCoresTitle => "Tu reserva",
+        TrKey::TooltipBoonRedTitle => "Mejora: Rojas+",
+        TrKey::TooltipBoonGreenTitle => "Mejora: Verdes+",
+        TrKey::TooltipBoonBlueTitle => "Mejora: Azul+",
+        TrKey::TooltipBoonStarTitle => "Mejora: Estrella×",
+        TrKey::TooltipBoonPowerTitle => "Mejora: Especial+",
+        TrKey::TooltipBoonHollowTitle => "Mejora: Hollow-",
+        TrKey::TooltipBoonRedSpawnTitle => "Mejora: Más rojas",
+        TrKey::TooltipBoonGreenSpawnTitle => "Mejora: Más verdes",
+        TrKey::TooltipBoonBlueSpawnTitle => "Mejora: Más azules",
+        TrKey::TooltipBoonYellowSpawnTitle => "Mejora: Más amarillas",
+        TrKey::TooltipBoonPurpleSpawnTitle => "Mejora: Más moradas",
         // Tooltip descriptions
         TrKey::TooltipSwapDesc => {
-            "Arrastra un light sobre otro para teletransportarlos e intercambiar sus posiciones."
+            "Arrastra una luz sobre otra para cambiarlas de lugar."
         }
-        TrKey::TooltipEliminateDesc => {
-            "Destruye un núcleo seleccionado, activando nuevas cascadas."
-        }
-        TrKey::TooltipUpgradeDesc => "Sube el tier del núcleo seleccionado (ej. normal a Rayo).",
-        TrKey::TooltipLifeDesc => {
-            "Otorga una vida de reserva para poder reintentar si fallas un nivel."
-        }
-        TrKey::TooltipMovesDesc => "Movimientos restantes para completar el nivel.",
+        TrKey::TooltipEliminateDesc => "Rompe la luz que toques.",
+        TrKey::TooltipUpgradeDesc => "Convierte una luz normal en una especial.",
+        TrKey::TooltipLifeDesc => "Te da una vida extra para reintentar si pierdes.",
+        TrKey::TooltipMovesDesc => "Movimientos que te quedan.",
         TrKey::TooltipCoresDesc => {
-            "Reserva de núcleos acumulada. Úsalos para comprar habilidades y vidas."
+            "Tu reserva. Gástala en la tienda en habilidades y vidas."
         }
-        TrKey::TooltipBoonRedDesc => "Los núcleos rojos recolectados otorgan +25% de puntuación.",
-        TrKey::TooltipBoonGreenDesc => {
-            "Los núcleos verdes recolectados te dan reserva de cores para la tienda."
-        }
-        TrKey::TooltipBoonBlueDesc => {
-            "Cada 7 cores azules recolectados te devuelven +1 movimiento extra."
-        }
-        TrKey::TooltipBoonStarDesc => {
-            "Romper una estrella entrega el doble de lightcores por rango."
-        }
-        TrKey::TooltipBoonPowerDesc => "Crear núcleos especiales otorga +18 puntos por rango.",
-        TrKey::TooltipBoonHollowDesc => {
-            "Disminuye la probabilidad de aparición de Hollows en el tablero."
-        }
-        TrKey::TooltipBoonRedSpawnDesc => {
-            "Incrementa la probabilidad de aparición de núcleos rojos."
-        }
-        TrKey::TooltipBoonGreenSpawnDesc => {
-            "Incrementa la probabilidad de aparición de núcleos verdes."
-        }
-        TrKey::TooltipBoonBlueSpawnDesc => {
-            "Incrementa la probabilidad de aparición de núcleos azules."
-        }
-        TrKey::TooltipBoonYellowSpawnDesc => {
-            "Incrementa la probabilidad de aparición de núcleos amarillos."
-        }
-        TrKey::TooltipBoonPurpleSpawnDesc => {
-            "Incrementa la probabilidad de aparición de núcleos púrpuras."
-        }
+        TrKey::TooltipBoonRedDesc => "Las luces rojas dan +25% de puntos.",
+        TrKey::TooltipBoonGreenDesc => "Las luces verdes te dan reserva para la tienda.",
+        TrKey::TooltipBoonBlueDesc => "Cada 7 luces azules te dan 1 movimiento.",
+        TrKey::TooltipBoonStarDesc => "Romper una estrella da el doble de luces.",
+        TrKey::TooltipBoonPowerDesc => "Crear luces especiales da +18 puntos.",
+        TrKey::TooltipBoonHollowDesc => "Aparecen menos Hollows.",
+        TrKey::TooltipBoonRedSpawnDesc => "Aparecen más luces rojas.",
+        TrKey::TooltipBoonGreenSpawnDesc => "Aparecen más luces verdes.",
+        TrKey::TooltipBoonBlueSpawnDesc => "Aparecen más luces azules.",
+        TrKey::TooltipBoonYellowSpawnDesc => "Aparecen más luces amarillas.",
+        TrKey::TooltipBoonPurpleSpawnDesc => "Aparecen más luces moradas.",
         // Level menu
         TrKey::Play => "Jugar",
         TrKey::Restart => "Reiniciar Run",
         // Color names
-        TrKey::ColorRed => "rojos",
+        TrKey::ColorRed => "rojas",
         TrKey::ColorGreen => "verdes",
         TrKey::ColorBlue => "azules",
-        TrKey::ColorYellow => "amarillos",
-        TrKey::ColorPurple => "morados",
+        TrKey::ColorYellow => "amarillas",
+        TrKey::ColorPurple => "moradas",
 
         // Level Complete / End screen
         TrKey::LevelCompleteTitle => "Nivel Completado!",
         TrKey::BoardConsumedTitle => "Tablero Consumido!",
-        TrKey::LightcoresCaptured => "Lightcores capturados: {}",
+        TrKey::LightcoresCaptured => "Luces capturadas: {}",
         TrKey::LevelUnlocked => "Nivel {:02} desbloqueado",
-        TrKey::NewHighScore => "Nuevo mejor score registrado",
+        TrKey::NewHighScore => "¡Nuevo récord!",
         TrKey::LevelAlreadyCompleted => "Nivel ya completado",
         TrKey::MatchSummary => "Resumen de partida:",
-        TrKey::ChooseOneModifier => "BOONS DISPONIBLES · compra solo al completar una etapa",
+        TrKey::ChooseOneModifier => "MEJORAS · compra solo al terminar una etapa",
         TrKey::BoonContinueInstruction => "[Click/Tap o Espacio] para continuar",
         TrKey::BoonPurchased => "Comprado",
         TrKey::StatsSparks => "Chispas",
@@ -472,6 +475,18 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::DeviceLabel => "Device",
         TrKey::DeviceDesktop => "Desktop",
         TrKey::DeviceMobile => "Mobile",
+        TrKey::TabAudio => "Audio",
+        TrKey::TabGraphics => "Graphics",
+        TrKey::TabInterface => "Interface",
+        TrKey::ShowFps => "Show FPS",
+        TrKey::Tutorial => "Tutorial",
+        TrKey::AdvancedSection => "Advanced",
+        TrKey::FpsUnlimited => "Unlimited",
+        TrKey::InternalResolution => "Internal resolution",
+        TrKey::ResNative => "Native",
+        TrKey::ResHigh => "High",
+        TrKey::ResMedium => "Medium",
+        TrKey::ResLow => "Low",
 
         // Sliders
         TrKey::SliderGlowBrightness => "Glow Brightness",
@@ -509,24 +524,24 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::BoonGreenReserve => "Green+",
         TrKey::BoonBlueMoves => "Blue+",
         TrKey::BoonStarBounty => "Star×",
-        TrKey::BoonPowerBounty => "Power+",
+        TrKey::BoonPowerBounty => "Special+",
         TrKey::BoonHollowWard => "Hollow-",
-        TrKey::BoonRedSpawn => "Red Freq.",
-        TrKey::BoonGreenSpawn => "Green Freq.",
-        TrKey::BoonBlueSpawn => "Blue Freq.",
-        TrKey::BoonYellowSpawn => "Yellow Freq.",
-        TrKey::BoonPurpleSpawn => "Purple Freq.",
+        TrKey::BoonRedSpawn => "More reds",
+        TrKey::BoonGreenSpawn => "More greens",
+        TrKey::BoonBlueSpawn => "More blues",
+        TrKey::BoonYellowSpawn => "More yellows",
+        TrKey::BoonPurpleSpawn => "More purples",
         // Shop status lines
-        TrKey::ShopSwapStatus => "Drag and teleport",
+        TrKey::ShopSwapStatus => "Drag and move",
         TrKey::ShopEliminateStatus => "Break 1 light",
-        TrKey::ShopUpgradeStatus => "Raise 1 tier",
+        TrKey::ShopUpgradeStatus => "Level up 1",
         TrKey::ShopLifeStatus => "Buy 1 extra life",
-        TrKey::BoonRedValueStatus => "Reds give score",
+        TrKey::BoonRedValueStatus => "Reds give points",
         TrKey::BoonGreenReserveStatus => "Greens give reserve",
-        TrKey::BoonBlueMovesStatus => "Blues return moves",
-        TrKey::BoonStarBountyStatus => "Stars yield extra cores",
-        TrKey::BoonPowerBountyStatus => "Powers give score",
-        TrKey::BoonHollowWardStatus => "Fewer hollows",
+        TrKey::BoonBlueMovesStatus => "Blues give moves",
+        TrKey::BoonStarBountyStatus => "Stars give double",
+        TrKey::BoonPowerBountyStatus => "Specials give points",
+        TrKey::BoonHollowWardStatus => "Fewer Hollows",
         TrKey::BoonRedSpawnStatus => "+ red lights",
         TrKey::BoonGreenSpawnStatus => "+ green lights",
         TrKey::BoonBlueSpawnStatus => "+ blue lights",
@@ -541,14 +556,14 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::ActiveReady => "Active: ready",
         TrKey::ActiveChooseTarget => "Active: pick target",
         // Shop state
-        TrKey::NotEnoughCores => "Not enough cores",
+        TrKey::NotEnoughCores => "Not enough reserve",
         // Goal hints
         TrKey::GoalTitle => "Level objective",
-        TrKey::GoalFreePlay => "Free play",
-        TrKey::GoalReachTarget => "Reach target",
+        TrKey::GoalFreePlay => "Grab any you like",
+        TrKey::GoalReachTarget => "Reach the points",
         TrKey::GoalRescueSparks => "Rescue sparks",
         TrKey::GoalClearShadows => "Clear shadows",
-        TrKey::GoalScoreOnClock => "Score before time",
+        TrKey::GoalScoreOnClock => "Points before time",
         TrKey::GoalCollectColor => "Collect this color",
         TrKey::GoalColorOnClock => "Color before time",
         // Stats
@@ -576,52 +591,38 @@ fn tr_en(key: TrKey) -> &'static str {
         TrKey::TooltipUpgradeTitle => "Ability: Upgrade",
         TrKey::TooltipLifeTitle => "Item: +1 Life",
         TrKey::TooltipMovesTitle => "Status: Moves",
-        TrKey::TooltipCoresTitle => "Reserve: Cores",
-        TrKey::TooltipBoonRedTitle => "Boon: Red+",
-        TrKey::TooltipBoonGreenTitle => "Boon: Green+",
-        TrKey::TooltipBoonBlueTitle => "Boon: Blue+",
-        TrKey::TooltipBoonStarTitle => "Boon: Star×",
-        TrKey::TooltipBoonPowerTitle => "Boon: Power+",
-        TrKey::TooltipBoonHollowTitle => "Boon: Hollow-",
-        TrKey::TooltipBoonRedSpawnTitle => "Boon: Red Spawn+",
-        TrKey::TooltipBoonGreenSpawnTitle => "Boon: Green Spawn+",
-        TrKey::TooltipBoonBlueSpawnTitle => "Boon: Blue Spawn+",
-        TrKey::TooltipBoonYellowSpawnTitle => "Boon: Yellow Spawn+",
-        TrKey::TooltipBoonPurpleSpawnTitle => "Boon: Purple Spawn+",
+        TrKey::TooltipCoresTitle => "Your reserve",
+        TrKey::TooltipBoonRedTitle => "Upgrade: Red+",
+        TrKey::TooltipBoonGreenTitle => "Upgrade: Green+",
+        TrKey::TooltipBoonBlueTitle => "Upgrade: Blue+",
+        TrKey::TooltipBoonStarTitle => "Upgrade: Star×",
+        TrKey::TooltipBoonPowerTitle => "Upgrade: Special+",
+        TrKey::TooltipBoonHollowTitle => "Upgrade: Hollow-",
+        TrKey::TooltipBoonRedSpawnTitle => "Upgrade: More reds",
+        TrKey::TooltipBoonGreenSpawnTitle => "Upgrade: More greens",
+        TrKey::TooltipBoonBlueSpawnTitle => "Upgrade: More blues",
+        TrKey::TooltipBoonYellowSpawnTitle => "Upgrade: More yellows",
+        TrKey::TooltipBoonPurpleSpawnTitle => "Upgrade: More purples",
         // Tooltip descriptions
-        TrKey::TooltipSwapDesc => {
-            "Drag one light onto another to teleport them and exchange their positions."
-        }
-        TrKey::TooltipEliminateDesc => "Destroy a selected light, triggering new cascades.",
-        TrKey::TooltipUpgradeDesc => {
-            "Upgrade the tier of the selected light (e.g. normal to Lightning)."
-        }
-        TrKey::TooltipLifeDesc => "Grants a reserve life to retry if you fail a level.",
-        TrKey::TooltipMovesDesc => "Moves remaining to complete the level.",
+        TrKey::TooltipSwapDesc => "Drag one light onto another to swap them.",
+        TrKey::TooltipEliminateDesc => "Break the light you tap.",
+        TrKey::TooltipUpgradeDesc => "Turns a normal light into a special one.",
+        TrKey::TooltipLifeDesc => "Gives an extra life to retry if you lose.",
+        TrKey::TooltipMovesDesc => "Moves you have left.",
         TrKey::TooltipCoresDesc => {
-            "Cores reserve. Use them to purchase special moves and extra lives."
+            "Your reserve. Spend it in the shop on abilities and lives."
         }
-        TrKey::TooltipBoonRedDesc => "Collected red lights grant +25% score.",
-        TrKey::TooltipBoonGreenDesc => "Collected green lights give cores for the shop.",
-        TrKey::TooltipBoonBlueDesc => "Every 7 blue cores collected return +1 extra move.",
-        TrKey::TooltipBoonStarDesc => "Breaking a Starburst grants double lightcores per rank.",
-        TrKey::TooltipBoonPowerDesc => "Creating special lights grants +18 points per rank.",
-        TrKey::TooltipBoonHollowDesc => "Reduces the chance of Hollows spawning on the board.",
-        TrKey::TooltipBoonRedSpawnDesc => {
-            "Increases the probability of Red lights spawning on the board."
-        }
-        TrKey::TooltipBoonGreenSpawnDesc => {
-            "Increases the probability of Green lights spawning on the board."
-        }
-        TrKey::TooltipBoonBlueSpawnDesc => {
-            "Increases the probability of Blue lights spawning on the board."
-        }
-        TrKey::TooltipBoonYellowSpawnDesc => {
-            "Increases the probability of Yellow lights spawning on the board."
-        }
-        TrKey::TooltipBoonPurpleSpawnDesc => {
-            "Increases the probability of Purple lights spawning on the board."
-        }
+        TrKey::TooltipBoonRedDesc => "Red lights give +25% points.",
+        TrKey::TooltipBoonGreenDesc => "Green lights give reserve for the shop.",
+        TrKey::TooltipBoonBlueDesc => "Every 7 blue lights give 1 move.",
+        TrKey::TooltipBoonStarDesc => "Breaking a star gives double lights.",
+        TrKey::TooltipBoonPowerDesc => "Making special lights gives +18 points.",
+        TrKey::TooltipBoonHollowDesc => "Fewer Hollows appear.",
+        TrKey::TooltipBoonRedSpawnDesc => "More red lights appear.",
+        TrKey::TooltipBoonGreenSpawnDesc => "More green lights appear.",
+        TrKey::TooltipBoonBlueSpawnDesc => "More blue lights appear.",
+        TrKey::TooltipBoonYellowSpawnDesc => "More yellow lights appear.",
+        TrKey::TooltipBoonPurpleSpawnDesc => "More purple lights appear.",
         // Level menu
         TrKey::Play => "Play",
         TrKey::Restart => "Restart Run",
@@ -635,12 +636,12 @@ fn tr_en(key: TrKey) -> &'static str {
         // Level Complete / End screen
         TrKey::LevelCompleteTitle => "Level Completed!",
         TrKey::BoardConsumedTitle => "Board Consumed!",
-        TrKey::LightcoresCaptured => "Lightcores captured: {}",
+        TrKey::LightcoresCaptured => "Lights captured: {}",
         TrKey::LevelUnlocked => "Level {:02} unlocked",
-        TrKey::NewHighScore => "New high score recorded",
+        TrKey::NewHighScore => "New record!",
         TrKey::LevelAlreadyCompleted => "Level already completed",
         TrKey::MatchSummary => "Match summary:",
-        TrKey::ChooseOneModifier => "AVAILABLE BOONS · buy only after completing a stage",
+        TrKey::ChooseOneModifier => "UPGRADES · buy only after finishing a stage",
         TrKey::BoonContinueInstruction => "[Click/Tap or Space] to continue",
         TrKey::BoonPurchased => "Purchased",
         TrKey::StatsSparks => "Sparks",

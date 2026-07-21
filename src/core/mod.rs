@@ -6,6 +6,7 @@ pub(crate) mod level;
 pub(crate) mod light;
 pub(crate) mod locale;
 pub(crate) mod matching;
+pub(crate) mod mode;
 pub(crate) mod run;
 pub(crate) mod storage;
 

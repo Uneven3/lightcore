@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use std::time::Duration;
 use web_time::Instant;
 
+use crate::core::locale::{Language, TrKey};
 use crate::visuals::render_target::{self, WorldCamera};
 
 /// Target frames per second — cycles through presets via the Options screen.
@@ -39,12 +40,12 @@ impl FpsTarget {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self, lang: Language) -> String {
         match self {
-            Self::Unlimited => "FPS: Sin limite",
-            Self::Fps30 => "FPS: 30",
-            Self::Fps60 => "FPS: 60",
-            Self::Fps120 => "FPS: 120",
+            Self::Unlimited => format!("FPS: {}", lang.tr(TrKey::FpsUnlimited)),
+            Self::Fps30 => "FPS: 30".to_string(),
+            Self::Fps60 => "FPS: 60".to_string(),
+            Self::Fps120 => "FPS: 120".to_string(),
         }
     }
 }

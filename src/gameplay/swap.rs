@@ -1,37 +1,23 @@
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use super::popping::accumulate_pop_delays;
 use super::{
-    CaptureBatch, CascadeDepth, CollectedCores, CoreReserve, MovesLeft, PendingSwap,
-    PowerActivationQueue, PowerComboParams, RevertingSwap, Score, ShadowCount, StatsBook,
-    SwapFailed, SwapHappened,
+    CaptureBatch, CascadeDepth, EconomyParams, PendingSwap, PowerActivationQueue, PowerComboParams,
+    RevertingSwap, ShadowCount, SwapFailed, SwapHappened,
 };
 use super::{rewards, vfx};
 use crate::board::clear_shadow_at;
 use crate::core::prelude::*;
-use crate::core::run::RunState;
 use crate::gameplay::MatchTiming;
 use crate::state::MatchPhase;
-
-#[derive(SystemParam)]
-pub(crate) struct SwapScoreParams<'w> {
-    level: Res<'w, LevelConfig>,
-    score: ResMut<'w, Score>,
-    reserve: ResMut<'w, CoreReserve>,
-    collected_cores: ResMut<'w, CollectedCores>,
-    stats: ResMut<'w, StatsBook>,
-    run: ResMut<'w, RunState>,
-}
 
 #[allow(clippy::collapsible_if)]
 pub(crate) fn on_swap_happened(
     _: On<SwapHappened>,
     mut commands: Commands,
     mut pending: ResMut<PendingSwap>,
-    mut score_res: SwapScoreParams,
-    mut moves: ResMut<MovesLeft>,
+    mut economy: EconomyParams,
     mut next_state: ResMut<NextState<MatchPhase>>,
     mut cascade: ResMut<CascadeDepth>,
     mut shadow_count: ResMut<ShadowCount>,
@@ -78,8 +64,7 @@ pub(crate) fn on_swap_happened(
             if handle_power_combo_swap(
                 &mut commands,
                 &mut pending,
-                &mut score_res,
-                &mut moves,
+                &mut economy,
                 &mut next_state,
                 cascade.0,
                 &mut shadow_count,
@@ -105,8 +90,7 @@ pub(crate) fn on_swap_happened(
     handle_normal_match_swap(
         &mut commands,
         &mut pending,
-        &mut score_res,
-        &mut moves,
+        &mut economy,
         &mut next_state,
         cascade.0,
         &mut shadow_count,
@@ -126,8 +110,7 @@ pub(crate) fn on_swap_happened(
 fn handle_power_combo_swap(
     commands: &mut Commands,
     pending: &mut PendingSwap,
-    score_res: &mut SwapScoreParams,
-    moves: &mut MovesLeft,
+    economy: &mut EconomyParams,
     next_state: &mut NextState<MatchPhase>,
     cascade_depth: u32,
     shadow_count: &mut ShadowCount,
@@ -175,7 +158,7 @@ fn handle_power_combo_swap(
 
     pending.0 = None;
     if !free {
-        moves.0 = moves.0.saturating_sub(1);
+        economy.moves.0 = economy.moves.0.saturating_sub(1);
     }
 
     let removed_positions: HashSet<GridPos> = compound
@@ -262,15 +245,7 @@ fn handle_power_combo_swap(
         cascade_depth,
         false,
         0,
-        &mut rewards::EconomyState {
-            score: &mut score_res.score,
-            reserve: &mut score_res.reserve,
-            collected_cores: &mut score_res.collected_cores,
-            stats: &mut score_res.stats,
-            moves,
-            run: &mut score_res.run,
-            color_values: score_res.level.color_values,
-        },
+        &mut economy.state(),
     );
 
     let pops = rewards::spawn_pops(
@@ -279,7 +254,7 @@ fn handle_power_combo_swap(
         entity_info,
         &pop_delays,
         ray_settings.pop_duration,
-        &score_res.run,
+        &economy.run,
         cascade_depth,
         false,
     );
@@ -298,8 +273,7 @@ fn handle_power_combo_swap(
 fn handle_normal_match_swap(
     commands: &mut Commands,
     pending: &mut PendingSwap,
-    score_res: &mut SwapScoreParams,
-    moves: &mut MovesLeft,
+    economy: &mut EconomyParams,
     next_state: &mut NextState<MatchPhase>,
     cascade_depth: u32,
     shadow_count: &mut ShadowCount,
@@ -361,7 +335,7 @@ fn handle_normal_match_swap(
         .map(|(_, c, _)| *c);
     pending.0 = None;
     if !free {
-        moves.0 = moves.0.saturating_sub(1);
+        economy.moves.0 = economy.moves.0.saturating_sub(1);
     }
 
     rewards::resolve_match_sequence(
@@ -377,15 +351,7 @@ fn handle_normal_match_swap(
         &mut shadow_count.0,
         &mut power.queue,
         &mut power.super_combo,
-        &mut rewards::EconomyState {
-            score: &mut score_res.score,
-            reserve: &mut score_res.reserve,
-            collected_cores: &mut score_res.collected_cores,
-            stats: &mut score_res.stats,
-            moves,
-            run: &mut score_res.run,
-            color_values: score_res.level.color_values,
-        },
+        &mut economy.state(),
     );
     next_state.set(MatchPhase::Popping);
 }

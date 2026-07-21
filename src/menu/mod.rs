@@ -31,7 +31,6 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(Screen::MainMenu), reset_focus)
             .add_systems(OnEnter(Screen::LevelMenu), reset_focus)
             .add_systems(OnEnter(Overlay::Options), reset_focus)
-            .add_systems(OnEnter(Overlay::AdvancedOptions), reset_focus)
             .add_systems(OnEnter(Overlay::Paused), reset_focus)
             .add_systems(OnEnter(Overlay::None), reset_focus)
             .add_systems(

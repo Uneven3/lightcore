@@ -4,8 +4,8 @@ use rand::{Rng, SeedableRng};
 
 use super::light::{LightColor, LightKind};
 use super::locale::{Language, TrKey};
+use super::mode::GameMode;
 use super::storage;
-use crate::gameplay::GameMode;
 
 pub(crate) const RUN_LEVELS: u32 = 13;
 const MAX_BOON_LEVEL: u8 = 3;

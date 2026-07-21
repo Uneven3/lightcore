@@ -9,7 +9,8 @@ use crate::core::prelude::*;
 use crate::core::run::{BoonKind, RunState};
 use crate::embedded;
 use crate::gameplay::shop::{
-    Shop, ShopItem, ShopPurchaseRequested, SpecialMoveInventory, SpecialMoveToggleRequested,
+    BoonSellRequested, Shop, ShopItem, ShopPurchaseRequested, SpecialMoveInventory,
+    SpecialMoveToggleRequested,
 };
 use crate::gameplay::{
     CoreReserve, GameMode, LevelTimer, MovesLeft, ScoreGlow, ShadowCount, SparksCollected,
@@ -59,7 +60,6 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(Screen::MainMenu), hide_hud)
             .add_systems(OnEnter(Screen::LevelMenu), hide_hud)
             .add_systems(OnEnter(Overlay::Options), hide_hud)
-            .add_systems(OnEnter(Overlay::AdvancedOptions), hide_hud)
             .add_systems(
                 OnEnter(MatchPhase::Loading),
                 (show_hud, reset_level_tutorial_shown),
@@ -101,7 +101,7 @@ impl Plugin for UiPlugin {
                     emit_shop_purchase_requests,
                     emit_special_move_toggle_requests,
                 )
-                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+                    .run_if(crate::state::match_active),
             )
             .add_systems(
                 Update,
@@ -140,7 +140,7 @@ impl Plugin for UiPlugin {
                     ),
                     (
                         update_slow_mo_badge,
-                        update_static_hud_labels.run_if(resource_changed::<UserSettings>),
+                        update_tutorial_close_label.run_if(resource_changed::<UserSettings>),
                         update_hud_tooltips.run_if(resource_changed::<UserSettings>),
                         update_goal_hint,
                         update_stats_popup.run_if(
@@ -167,7 +167,6 @@ impl Plugin for UiPlugin {
                             resource_changed::<RunState>.or_else(resource_changed::<GameMode>),
                         ),
                         update_tooltip_system,
-                        toggle_hud_descriptions_on_hover,
                     ),
                 )
                     .run_if(in_gameplay_state),
@@ -178,8 +177,7 @@ impl Plugin for UiPlugin {
 fn in_gameplay_state(screen: Res<State<Screen>>, overlay: Res<State<Overlay>>) -> bool {
     // The HUD is live during the whole match, pause overlay included — but not under the
     // fullscreen Options overlays, which hide it.
-    *screen.get() == Screen::Match
-        && !matches!(overlay.get(), Overlay::Options | Overlay::AdvancedOptions)
+    *screen.get() == Screen::Match && *overlay.get() != Overlay::Options
 }
 
 #[derive(Component)]
@@ -233,9 +231,6 @@ pub(crate) struct LivesTooltipMarker;
 pub(crate) struct SpecialMoveCard(pub(crate) ShopItem);
 #[derive(Component)]
 pub(crate) struct LivesCard;
-/// Visual root for the compact economy/status block (moves, lives, core reserve and specials).
-#[derive(Component)]
-struct PlayerStatusPanel;
 #[derive(Component)]
 pub(crate) struct StatsButton;
 #[derive(Component)]
@@ -257,19 +252,10 @@ pub(crate) struct ShopButtonStatusText(pub(crate) ShopItem);
 #[derive(Component)]
 pub(crate) struct ShopButtonCostText(pub(crate) ShopItem);
 
-// Marker components for static labels that must be updated when the language changes.
-#[derive(Component)]
-struct MovesUnitLabel;
-#[derive(Component)]
-struct LivesUnitLabel;
-#[derive(Component)]
-struct ShopHeaderLabel;
-#[derive(Component)]
-struct ShopCoresLabel;
 #[derive(Component)]
 struct SpecialMoveCountText(ShopItem);
-#[derive(Component)]
-struct ShopModifiersLabel;
+/// The tutorial modal's "Entendí" button label — the one static HUD label that still needs
+/// re-localizing when the language changes (see [`update_tutorial_close_label`]).
 #[derive(Component)]
 struct TutorialCloseBtnLabel;
 #[derive(Component)]
@@ -1221,14 +1207,6 @@ fn setup_watermark(mut commands: Commands, asset_server: Res<AssetServer>) {
                     height: Val::Px(18.0),
                     ..default()
                 },
-            ));
-            row.spawn((
-                Text::new("0.19"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(cyan),
             ));
             row.spawn((
                 FpsWatermarkText,
@@ -2269,18 +2247,18 @@ fn check_show_tutorial_on_start(
                 lang.tr(TrKey::TutorialScoreTitle),
                 if lang == crate::core::locale::Language::English {
                     format!(
-                        "• Slide adjacent nuclei to align them in groups of 3 or more of the same color.\n\n\
+                        "• Slide lights next to each other to line up 3 or more of the same color.\n\n\
                          • GOAL: Reach at least {} points.\n\n\
-                         • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                         • You can disable this tutorial with the button below or in Options.",
+                         • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                         • You can turn off this tutorial with the button below or in Options.",
                         target
                     )
                 } else {
                     format!(
-                        "• Desliza núcleos adyacentes para alinearlos en grupos de 3 o más del mismo color.\n\n\
-                         • OBJETIVO: Consigue al menos {} puntos en total.\n\n\
-                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                         • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                        "• Desliza luces de al lado para juntar 3 o más del mismo color.\n\n\
+                         • META: Consigue al menos {} puntos.\n\n\
+                         • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                         • Puedes apagar este tutorial con el botón de abajo o en Opciones.",
                         target
                     )
                 },
@@ -2288,29 +2266,29 @@ fn check_show_tutorial_on_start(
             LevelGoal::Sparks => (
                 lang.tr(TrKey::TutorialSparksTitle),
                 if lang == crate::core::locale::Language::English {
-                    "• GOAL: Bring sparks (hexagonal ingredients) to the bottom row to collect them.\n\n\
-                     • Sparks only fall vertically (they don't slide diagonally like normal pieces).\n\n\
-                     • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                     • You can disable this tutorial with the button below or in Options.".to_string()
+                    "• GOAL: Bring the sparks (hexagon pieces) down to the bottom row to collect them.\n\n\
+                     • Sparks only fall straight down (they don't slide sideways like normal lights).\n\n\
+                     • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                     • You can turn off this tutorial with the button below or in Options.".to_string()
                 } else {
-                    "• OBJETIVO: Lleva las chispas (ingredientes con forma hexagonal) hasta el final de su columna (fila inferior) para recolectarlas.\n\n\
-                     • Las chispas solo caen en vertical (no deslizan diagonalmente como las piezas normales).\n\n\
-                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string()
+                    "• OBJETIVO: Lleva las chispas (piezas con forma de hexágono) hasta la fila de abajo para recogerlas.\n\n\
+                     • Las chispas solo caen hacia abajo (no se deslizan de lado como las luces normales).\n\n\
+                     • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                     • Puedes apagar este tutorial con el botón de abajo o en Opciones.".to_string()
                 },
             ),
             LevelGoal::ClearShadow => (
                 lang.tr(TrKey::TutorialShadowTitle),
                 if lang == crate::core::locale::Language::English {
-                    "• GOAL: Clear all dark tiles (shadows) from the board.\n\n\
-                     • To clear a shadow, make a match of 3 or more pieces on top of it.\n\n\
-                     • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                     • You can disable this tutorial with the button below or in Options.".to_string()
+                    "• GOAL: Clear all the dark tiles (shadows) from the board.\n\n\
+                     • To clear a shadow, make a match of 3 or more on top of it.\n\n\
+                     • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                     • You can turn off this tutorial with the button below or in Options.".to_string()
                 } else {
                     "• OBJETIVO: Limpia todas las casillas oscuras (sombras) del tablero.\n\n\
-                     • Para limpiar una sombra, realiza una combinación de 3 o más piezas sobre ella.\n\n\
-                     • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                     • Puedes desactivar este tutorial con el botón de abajo o en Opciones.".to_string()
+                     • Para limpiar una sombra, junta 3 o más luces encima de ella.\n\n\
+                     • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                     • Puedes apagar este tutorial con el botón de abajo o en Opciones.".to_string()
                 },
             ),
             LevelGoal::TimedScore { target, .. } => (
@@ -2318,74 +2296,62 @@ fn check_show_tutorial_on_start(
                 if lang == crate::core::locale::Language::English {
                     format!(
                         "• GOAL: Reach at least {} points before the timer hits zero.\n\n\
-                         • No move limit! Combine fast to maximize your score.\n\n\
-                         • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                         • You can disable this tutorial with the button below or in Options.",
+                         • No move limit! Match fast to get more points.\n\n\
+                         • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                         • You can turn off this tutorial with the button below or in Options.",
                         target
                     )
                 } else {
                     format!(
-                        "• OBJETIVO: Consigue al menos {} puntos antes de que el reloj de arriba llegue a cero.\n\n\
-                         • ¡No hay límite de movimientos! Combina rápido para maximizar tu puntuación.\n\n\
-                         • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                         • Puedes desactivar este tutorial con el botón de abajo o en Opciones.",
+                        "• OBJETIVO: Consigue al menos {} puntos antes de que el reloj llegue a cero.\n\n\
+                         • ¡Sin límite de movimientos! Junta rápido para sumar más puntos.\n\n\
+                         • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                         • Puedes apagar este tutorial con el botón de abajo o en Opciones.",
                         target
                     )
                 },
             ),
             LevelGoal::CollectColor { color, target } => {
-                let color_name = lang.tr(match color {
-                    LightColor::Red => TrKey::ColorRed,
-                    LightColor::Green => TrKey::ColorGreen,
-                    LightColor::Blue => TrKey::ColorBlue,
-                    LightColor::Yellow => TrKey::ColorYellow,
-                    LightColor::Purple => TrKey::ColorPurple,
-                });
+                let color_name = lang.tr(color.name_key());
                 (
                     lang.tr(TrKey::TutorialCollectColorTitle),
                     if lang == crate::core::locale::Language::English {
                         format!(
-                            "• GOAL: Collect at least {} {} nuclei.\n\n\
-                             • Only nuclei of this color count toward your goal, but you can match others to clear the board.\n\n\
-                             • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                             • You can disable this tutorial with the toggle below.",
+                            "• GOAL: Collect at least {} {} lights.\n\n\
+                             • Only lights of this color count, but you can match the others to clear the board.\n\n\
+                             • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                             • You can turn off this tutorial with the button below.",
                             target, color_name
                         )
                     } else {
                         format!(
-                            "• OBJETIVO: Junta al menos {} núcleos de color {}.\n\n\
-                             • Solo los núcleos de este color sumarán a tu meta, pero puedes combinar los otros para despejar el tablero.\n\n\
-                             • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                             • Puedes desactivar este tutorial con el toggle de abajo.",
+                            "• OBJETIVO: Junta al menos {} luces {}.\n\n\
+                             • Solo cuentan las luces de este color, pero puedes juntar las otras para despejar el tablero.\n\n\
+                             • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                             • Puedes apagar este tutorial con el botón de abajo.",
                             target, color_name
                         )
                     },
                 )
             }
             LevelGoal::TimedCollectColor { color, target, .. } => {
-                let color_name = lang.tr(match color {
-                    LightColor::Red => TrKey::ColorRed,
-                    LightColor::Green => TrKey::ColorGreen,
-                    LightColor::Blue => TrKey::ColorBlue,
-                    LightColor::Yellow => TrKey::ColorYellow,
-                    LightColor::Purple => TrKey::ColorPurple,
-                });
+                let color_name = lang.tr(color.name_key());
                 (
                     lang.tr(TrKey::TutorialTimedColorTitle),
                     if lang == crate::core::locale::Language::English {
                         format!(
-                            "• GOAL: Collect at least {} {} nuclei before the timer hits zero.\n\n\
-                             • No move limit! Combine fast, focused on this color.\n\n\
-                             • After winning or choosing a boon, tap anywhere to advance to the next level.\n\n\
-                             • You can disable this tutorial with the toggle below.",
+                            "• GOAL: Collect at least {} {} lights before the timer hits zero.\n\n\
+                             • No move limit! Match fast, focused on this color.\n\n\
+                             • After winning or picking an upgrade, tap the screen to go to the next level.\n\n\
+                             • You can turn off this tutorial with the button below.",
                             target, color_name
                         )
                     } else {
                         format!(
-                            "• OBJETIVO: Junta al menos {} núcleos de color {} antes de que el reloj llegue a cero.\n\n\
-                             • ¡No hay límite de movimientos! Combina rápido enfocado en este color.\n\n\
-                             • Al ganar o elegir un boon (mejora), haz click/tap en cualquier parte de la pantalla para avanzar al siguiente nivel en el mapa.\n\n\
-                             • Puedes desactivar este tutorial con el toggle de abajo.",
+                            "• OBJETIVO: Junta al menos {} luces {} antes de que el reloj llegue a cero.\n\n\
+                             • ¡Sin límite de movimientos! Junta rápido, enfocado en este color.\n\n\
+                             • Al ganar o elegir una mejora, toca la pantalla para ir al siguiente nivel.\n\n\
+                             • Puedes apagar este tutorial con el botón de abajo.",
                             target, color_name
                         )
                     },
@@ -2610,10 +2576,12 @@ fn boon_peek_button_system(
     }
 }
 
+/// The two-tap sell confirmation is UI state and stays here; the actual economy transaction
+/// (refund + boon rank drop) is owned by gameplay's `on_boon_sell_requested` observer, so this
+/// system never mutates authoritative `RunState`/`CoreReserve` — symmetric with the buy path.
 fn sell_boon_button_system(
     interactions: Query<(&Interaction, &BoonSellButton), Changed<Interaction>>,
-    mut run: ResMut<RunState>,
-    mut reserve: ResMut<CoreReserve>,
+    mut commands: Commands,
     mut pending_sale: ResMut<PendingBoonSale>,
     mut peeked: ResMut<PeekedBoon>,
 ) {
@@ -2622,9 +2590,7 @@ fn sell_boon_button_system(
             continue;
         }
         if pending_sale.0 == Some(button.0) {
-            if let Some(refund) = run.sell(button.0) {
-                reserve.0 = reserve.0.saturating_add(refund);
-            }
+            commands.trigger(BoonSellRequested(button.0));
             pending_sale.0 = None;
             peeked.0 = None;
         } else {
@@ -2697,93 +2663,14 @@ fn update_tutorial_overlay_toggle_text(
     }
 }
 
-/// Refreshes all static HUD labels that are language-tagged whenever `UserSettings` changes
-/// (i.e. when the user cycles the language in Options).
-fn update_static_hud_labels(
+/// Re-localizes the tutorial modal's close button whenever `UserSettings` changes (i.e. when the
+/// user cycles the language in Options). Every other HUD label is either an icon or already
+/// re-localized by its own updater; this is the sole remaining static text label.
+fn update_tutorial_close_label(
     settings: Res<UserSettings>,
-    mut moves_labels: Query<
-        &mut Text,
-        (
-            With<MovesUnitLabel>,
-            Without<LivesUnitLabel>,
-            Without<ShopHeaderLabel>,
-            Without<ShopCoresLabel>,
-            Without<ShopModifiersLabel>,
-            Without<TutorialCloseBtnLabel>,
-        ),
-    >,
-    mut lives_labels: Query<
-        &mut Text,
-        (
-            With<LivesUnitLabel>,
-            Without<MovesUnitLabel>,
-            Without<ShopHeaderLabel>,
-            Without<ShopCoresLabel>,
-            Without<ShopModifiersLabel>,
-            Without<TutorialCloseBtnLabel>,
-        ),
-    >,
-    mut shop_header: Query<
-        &mut Text,
-        (
-            With<ShopHeaderLabel>,
-            Without<MovesUnitLabel>,
-            Without<LivesUnitLabel>,
-            Without<ShopCoresLabel>,
-            Without<ShopModifiersLabel>,
-            Without<TutorialCloseBtnLabel>,
-        ),
-    >,
-    mut shop_cores: Query<
-        &mut Text,
-        (
-            With<ShopCoresLabel>,
-            Without<MovesUnitLabel>,
-            Without<LivesUnitLabel>,
-            Without<ShopHeaderLabel>,
-            Without<ShopModifiersLabel>,
-            Without<TutorialCloseBtnLabel>,
-        ),
-    >,
-    mut shop_modifiers: Query<
-        &mut Text,
-        (
-            With<ShopModifiersLabel>,
-            Without<MovesUnitLabel>,
-            Without<LivesUnitLabel>,
-            Without<ShopHeaderLabel>,
-            Without<ShopCoresLabel>,
-            Without<TutorialCloseBtnLabel>,
-        ),
-    >,
-    mut tutorial_close: Query<
-        &mut Text,
-        (
-            With<TutorialCloseBtnLabel>,
-            Without<MovesUnitLabel>,
-            Without<LivesUnitLabel>,
-            Without<ShopHeaderLabel>,
-            Without<ShopCoresLabel>,
-            Without<ShopModifiersLabel>,
-        ),
-    >,
+    mut tutorial_close: Query<&mut Text, With<TutorialCloseBtnLabel>>,
 ) {
     let lang = settings.language;
-    for mut t in &mut moves_labels {
-        t.0 = lang.tr(TrKey::Moves).to_string();
-    }
-    for mut t in &mut lives_labels {
-        t.0 = lang.tr(TrKey::Lives).to_string();
-    }
-    for mut t in &mut shop_header {
-        t.0 = lang.tr(TrKey::Shop).to_string();
-    }
-    for mut t in &mut shop_cores {
-        t.0 = lang.tr(TrKey::Cores).to_string();
-    }
-    for mut t in &mut shop_modifiers {
-        t.0 = lang.tr(TrKey::ShopModifiers).to_string();
-    }
     for mut t in &mut tutorial_close {
         t.0 = lang.tr(TrKey::TutorialClose).to_string();
     }
@@ -2919,35 +2806,6 @@ fn update_tooltip_system(
     }
 }
 
-#[derive(Component)]
-pub(crate) struct HudDescriptionLabel;
-
-fn toggle_hud_descriptions_on_hover(
-    panel: Query<&Interaction, (With<PlayerStatusPanel>, Changed<Interaction>)>,
-    mut labels: Query<(&mut Visibility, &mut Node), With<HudDescriptionLabel>>,
-) {
-    for interaction in &panel {
-        // `Visibility::Hidden` alone only skips rendering — taffy still lays the node out as if it
-        // were there. On touch there's no `Hovered` state at all, so these labels stay collapsed
-        // (`Display::None`) at all times there, which also fixes the status panel's resting height
-        // on portrait/mobile screens where it otherwise overflowed onto the board (each hidden
-        // label was silently reserving its line height in the column below it).
-        let hovered = *interaction == Interaction::Hovered;
-        for (mut visibility, mut node) in &mut labels {
-            *visibility = if hovered {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
-            node.display = if hovered {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
-}
-
 fn update_hud_tooltips(
     settings: Res<UserSettings>,
     mut q_triggers: Query<(
@@ -2981,26 +2839,26 @@ fn update_hud_tooltips(
                 Language::Spanish => match item {
                     ShopItem::Swap => (
                         "Comprar: Mover",
-                        "Compra +1 teletransporte drag-and-drop por 200 núcleos.",
+                        "Compra 1 movimiento por 200 de reserva.",
                     ),
                     ShopItem::Eliminate => (
                         "Comprar: Eliminar",
-                        "Compra +1 habilidad de eliminar por 450 núcleos.",
+                        "Compra 1 Eliminar por 450 de reserva.",
                     ),
                     ShopItem::Upgrade => (
-                        "Comprar: Mejorar",
-                        "Compra +1 habilidad de mejorar por 900 núcleos.",
+                        "Comprar: Subir nivel",
+                        "Compra 1 Subir nivel por 900 de reserva.",
                     ),
-                    ShopItem::Life => ("Comprar: +1 Vida", "Compra +1 vida extra por 800 núcleos."),
+                    ShopItem::Life => ("Comprar: +1 Vida", "Compra 1 vida extra por 800 de reserva."),
                     _ => ("", ""),
                 },
                 Language::English => match item {
-                    ShopItem::Swap => ("Buy: Move", "Buy +1 drag-and-drop teleport for 200 cores."),
+                    ShopItem::Swap => ("Buy: Move", "Buy 1 Move for 200 reserve."),
                     ShopItem::Eliminate => {
-                        ("Buy: Eliminate", "Buy +1 eliminate ability for 450 cores.")
+                        ("Buy: Eliminate", "Buy 1 Eliminate for 450 reserve.")
                     }
-                    ShopItem::Upgrade => ("Buy: Upgrade", "Buy +1 upgrade ability for 900 cores."),
-                    ShopItem::Life => ("Buy: +1 Life", "Buy +1 extra life for 800 cores."),
+                    ShopItem::Upgrade => ("Buy: Upgrade", "Buy 1 Level up for 900 reserve."),
+                    ShopItem::Life => ("Buy: +1 Life", "Buy 1 extra life for 800 reserve."),
                     _ => ("", ""),
                 },
             };

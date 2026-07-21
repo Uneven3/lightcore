@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use crate::core::grid::GravityBlockSet;
 use crate::core::prelude::*;
 pub(crate) use crate::core::run::CoreReserve;
+use crate::core::run::RunState;
 use crate::state::MatchFrameSet;
 use crate::state::{MatchPhase, Overlay, Screen};
 
@@ -67,6 +68,7 @@ impl Plugin for GameplayPlugin {
             .add_observer(spawning::on_spawn_complete)
             .add_observer(shop::on_shop_purchase_requested)
             .add_observer(shop::on_special_move_toggle_requested)
+            .add_observer(shop::on_boon_sell_requested)
             .add_observer(lifecycle::on_level_reward_purchase_requested)
             .add_systems(OnEnter(MatchPhase::Loading), lifecycle::setup_match)
             .add_systems(OnEnter(Screen::LevelMenu), lifecycle::teardown_match)
@@ -99,7 +101,7 @@ impl Plugin for GameplayPlugin {
                     input::highlight_selected,
                 )
                     .chain()
-                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+                    .run_if(crate::state::match_active),
             )
             .add_systems(OnExit(MatchPhase::Playing), shop::reset_shop)
             // Pausing used to leave `Playing` (disarming any armed booster via the OnExit above);
@@ -172,57 +174,11 @@ impl Plugin for GameplayPlugin {
 // `gameplay/` (and a couple, like `DragState`, are also read by `visuals` for rendering
 // purposes) — see CONSTITUTION.md, Decision 1, for why this whole pipeline is one Plugin.
 
-/// Which game the player picked from the level menu. Set by `menu`, read by the systems that
-/// diverge between modes (board setup and the HUD). `Classic(level)` is one of the 4 isolated
-/// modes shown in the level menu (Clásico/Ingredientes/Jalea/Contrarreloj — levels 1-4, each a
-/// distinct `LevelGoal`); completing or restarting one repeats that same level, there's no 1→2→3→4
-/// progression anymore. `ConsumeAll` is the "Blackhole" sandbox — runs the same Classic gameplay
-/// pipeline with no win/lose yet, a bench for iterating the feel (tier growth + a final clear-the-
-/// board win condition are deferred). Renamed from `GameMode::Blackhole` to free that name for
-/// `LightKind::Blackhole`, the tier-6 power that actually clears the board.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum GameMode {
-    Classic(u32),
-    Run(u32),
-    ConsumeAll,
-    /// VFX test bench: the board spawns with *random* `LightKind`s (powers everywhere) so adjacent
-    /// powers can be swapped to exercise every combo animation. Same unbounded, no-win/lose loop as
-    /// `ConsumeAll` (infinite moves, Esc returns to the menu); unlike `ConsumeAll` it has no
-    /// clear-the-board win — it's purely a place to watch interactions.
-    Sandbox,
-    /// One specific combo interaction, isolated and guaranteed on the very first move: the board is
-    /// a fixed (not random) layout — every cell is `Normal` except one adjacent pair of `LightKind`s
-    /// placed at a known spot, positioned so swapping them immediately fires the intended
-    /// `ComboKind` (see `gameplay::lifecycle::DEBUG_SCENARIOS`). Where `Sandbox` is "watch whatever
-    /// combo happens to come up", this is "watch THIS exact combo, right now" — for tuning the feel
-    /// of one interaction at a time instead of hunting for it on a random board. Same unbounded,
-    /// no-win/lose loop as `Sandbox`/`ConsumeAll`.
-    Debug(u8),
-    TeleportTest,
-}
-
-impl Default for GameMode {
-    fn default() -> Self {
-        GameMode::Classic(1)
-    }
-}
-
-impl GameMode {
-    /// Sandbox modes run the Classic pipeline with infinite moves and no win/lose (Esc/Space just
-    /// returns to the menu). Used to gate the unbounded-loop branches shared by `ConsumeAll` and
-    /// `Sandbox`. Note: the clear-the-board *win* is still `ConsumeAll`-only (see
-    /// `lifecycle::check_board_consumed`).
-    pub(crate) fn is_sandbox(self) -> bool {
-        matches!(
-            self,
-            GameMode::ConsumeAll | GameMode::Sandbox | GameMode::Debug(_) | GameMode::TeleportTest
-        )
-    }
-
-    pub(crate) fn is_run(self) -> bool {
-        matches!(self, GameMode::Run(_))
-    }
-}
+/// `GameMode` is a domain concept (which ruleset a match runs under), so it lives in `core::mode`
+/// to keep the dependency direction one-way — `core::run` reads it without depending upward on
+/// this pipeline. Re-exported here so the many `crate::gameplay::GameMode` / `super::GameMode` call
+/// sites across gameplay, menu and ui keep resolving unchanged.
+pub(crate) use crate::core::mode::GameMode;
 
 #[derive(Resource, Default)]
 pub(crate) struct Score(pub(crate) u32);
@@ -339,6 +295,38 @@ pub(crate) struct DragState {
 pub(crate) struct PowerComboParams<'w> {
     pub(crate) queue: ResMut<'w, PowerActivationQueue>,
     pub(crate) super_combo: ResMut<'w, SuperComboPending>,
+}
+
+/// The economy resources every removal-wave path mutates, bundled as one nested `SystemParam` so
+/// `swap.rs` and `chain.rs` embed it instead of re-declaring the same six `ResMut`s, and build a
+/// [`rewards::EconomyState`] through [`EconomyParams::state`] instead of repeating the struct
+/// literal at each call site.
+#[derive(SystemParam)]
+pub(crate) struct EconomyParams<'w> {
+    pub(crate) score: ResMut<'w, Score>,
+    pub(crate) reserve: ResMut<'w, CoreReserve>,
+    pub(crate) collected_cores: ResMut<'w, CollectedCores>,
+    pub(crate) stats: ResMut<'w, StatsBook>,
+    pub(crate) moves: ResMut<'w, MovesLeft>,
+    pub(crate) run: ResMut<'w, RunState>,
+    pub(crate) level: Res<'w, LevelConfig>,
+}
+
+impl EconomyParams<'_> {
+    /// Borrows the bundle as the `&mut`-of-fields view the shared `rewards` helpers consume. Must
+    /// stay a temporary at the call site (`&mut params.state()`) so the borrow of `self` is
+    /// released the moment the helper returns.
+    pub(crate) fn state(&mut self) -> rewards::EconomyState<'_> {
+        rewards::EconomyState {
+            score: &mut self.score,
+            reserve: &mut self.reserve,
+            collected_cores: &mut self.collected_cores,
+            stats: &mut self.stats,
+            moves: &mut self.moves,
+            run: &mut self.run,
+            color_values: self.level.color_values,
+        }
+    }
 }
 
 /// Groups the resources that need resetting on level change/restart to stay under Bevy's

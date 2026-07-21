@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 
 use crate::core::light::LightColor;
+use crate::core::locale::{Language, TrKey};
 use crate::gameplay::{CollectedCores, Score};
 use crate::state::{MatchPhase, Overlay, Screen};
 
@@ -57,13 +58,14 @@ impl InternalResolution {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Native => "Resolucion interna: Nativa",
-            Self::High => "Resolucion interna: Alta",
-            Self::Medium => "Resolucion interna: Media",
-            Self::Low => "Resolucion interna: Baja",
-        }
+    pub(crate) fn label(self, lang: Language) -> String {
+        let value = lang.tr(match self {
+            Self::Native => TrKey::ResNative,
+            Self::High => TrKey::ResHigh,
+            Self::Medium => TrKey::ResMedium,
+            Self::Low => TrKey::ResLow,
+        });
+        format!("{}: {}", lang.tr(TrKey::InternalResolution), value)
     }
 
     fn target_height(self, native: UVec2) -> u32 {

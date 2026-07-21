@@ -100,7 +100,7 @@ impl Plugin for VisualsPlugin {
             .add_systems(
                 Update,
                 motion::update_drag_constrained
-                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+                    .run_if(crate::state::match_active),
             )
             .add_systems(
                 Update,
@@ -113,7 +113,7 @@ impl Plugin for VisualsPlugin {
                 Update,
                 motion::update_move_drag_preview
                     .after(motion::sync_transforms)
-                    .run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+                    .run_if(crate::state::match_active),
             )
             .add_systems(
                 Update,

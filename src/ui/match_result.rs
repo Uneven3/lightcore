@@ -357,14 +357,7 @@ fn spawn_game_over(
     let can_retry = mode.is_run() && run.active && run.lives > 0;
     let ends_run = mode.is_run() && run.active && run.lives == 0;
     let life_cost = ShopItem::Life.cost(&run).unwrap_or_default();
-    let title = match (lang, ends_run, can_retry) {
-        (Language::English, true, _) => "Out of lives",
-        (Language::English, _, true) => "Level failed",
-        (Language::English, _, _) => "Game over",
-        (_, true, _) => "Sin vidas",
-        (_, _, true) => "Nivel fallido",
-        _ => "Fin de partida",
-    };
+    let title = game_over_title(lang, ends_run, can_retry);
     let continue_hint = game_over_continue_hint(lang, can_retry, ends_run, reserve.0 >= life_cost);
     let details = format!(
         "{}\n{}",
@@ -405,6 +398,19 @@ fn spawn_game_over(
             },
         );
     });
+}
+
+/// Shared Game Over headline — spawned once and refreshed live, so both paths (`spawn_game_over`
+/// and `refresh_game_over_life_offer`) stay in lockstep instead of carrying two copies that drift.
+fn game_over_title(lang: Language, ends_run: bool, can_retry: bool) -> &'static str {
+    match (lang, ends_run, can_retry) {
+        (Language::English, true, _) => "Out of lives",
+        (Language::English, _, true) => "Level failed",
+        (Language::English, _, _) => "Game over",
+        (_, true, _) => "Sin vidas",
+        (_, _, true) => "Nivel fallido",
+        _ => "Fin de partida",
+    }
 }
 
 fn game_over_continue_hint(
@@ -541,14 +547,7 @@ fn refresh_game_over_life_offer(
     let affordable = reserve.0 >= cost;
 
     for mut title in &mut titles {
-        title.0 = match (lang, ends_run, can_retry) {
-            (Language::English, true, _) => "Out of lives".to_string(),
-            (Language::English, _, true) => "Level failed".to_string(),
-            (_, true, _) => "Sin vidas".to_string(),
-            (_, _, true) => "Nivel fallido".to_string(),
-            (Language::English, _, _) => "Game over".to_string(),
-            _ => "Fin de partida".to_string(),
-        };
+        title.0 = game_over_title(lang, ends_run, can_retry).to_string();
     }
     for mut hint in &mut hints {
         hint.0 = game_over_continue_hint(lang, can_retry, ends_run, affordable).to_string();

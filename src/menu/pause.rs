@@ -4,7 +4,7 @@ use super::{BTN_IDLE, MenuActivated, MenuButton, OptionsReturn, activated, butto
 use crate::core::locale::TrKey;
 use crate::input::InputActions;
 use crate::settings::UserSettings;
-use crate::state::{MatchPhase, Overlay, Screen};
+use crate::state::{Overlay, Screen};
 
 /// In-match pause overlay. `pause` (Esc / Start) from `Playing` opens it; the board is left intact
 /// behind a dimming panel, so Options can be tuned with the board visible. Buttons: Reanudar
@@ -18,7 +18,7 @@ impl Plugin for PausePlugin {
             .add_systems(OnExit(Overlay::Paused), despawn_pause)
             .add_systems(
                 Update,
-                open_pause.run_if(in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))),
+                open_pause.run_if(crate::state::match_active),
             )
             .add_systems(
                 Update,

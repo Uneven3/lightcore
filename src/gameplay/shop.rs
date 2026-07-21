@@ -159,6 +159,13 @@ pub(crate) struct ShopPurchaseRequested(pub(crate) ShopItem);
 #[derive(Event, Clone, Copy)]
 pub(crate) struct SpecialMoveToggleRequested(pub(crate) ShopItem);
 
+/// Semantic command emitted by the boon HUD once a sale is confirmed (its two-tap confirmation is
+/// UI state and stays in `ui`). Gameplay owns the economy transaction — mirroring how purchases go
+/// through `ShopPurchaseRequested` — so authoritative `RunState`/`CoreReserve` mutation never lives
+/// in a UI system.
+#[derive(Event, Clone, Copy)]
+pub(crate) struct BoonSellRequested(pub(crate) BoonKind);
+
 /// Spend only from the booster reserve — `Score` is the level's goal progress (and, for a Run,
 /// what gets recorded to `CampaignProgress`), so buying a booster never claws that back. `reserve`
 /// is the run's persistent wallet (see `RunState`'s doc comment on `lifecycle::setup_match`).
@@ -232,6 +239,18 @@ pub(crate) fn on_shop_purchase_requested(
     inventory.add(item);
     spend(&mut reserve, &mut spent, cost);
     shop.open = false;
+}
+
+/// Applies a confirmed boon sale: refunds the most recently purchased rank into the reserve and
+/// drops the boon one level. Gameplay owns this transaction; the UI only decides *when* to confirm.
+pub(crate) fn on_boon_sell_requested(
+    trigger: On<BoonSellRequested>,
+    mut run: ResMut<RunState>,
+    mut reserve: ResMut<CoreReserve>,
+) {
+    if let Some(refund) = run.sell(trigger.0) {
+        reserve.0 = reserve.0.saturating_add(refund);
+    }
 }
 
 /// Arms one already-owned special move. The counter is only decremented by `shop_targeting` after

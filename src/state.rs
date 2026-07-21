@@ -77,9 +77,19 @@ pub(crate) enum Overlay {
     /// In-match pause (Reanudar / Opciones / Salir al menú). The board is NOT torn down — it stays
     /// visible (and breathing) behind the dim panel, so graphics can be tuned live in Options.
     Paused,
-    /// Settings screen (Bloom/shake/partículas/volumen).
+    /// Tabbed settings screen (Audio/Graphics/Interface). The technical visual/timing sliders live
+    /// in a collapsible section inside its Graphics tab, so there is no separate advanced overlay.
     Options,
-    /// Technical visual/timing controls, reached from the regular Options screen. Kept as a
-    /// separate overlay so it has its own back navigation.
-    AdvancedOptions,
+}
+
+/// Shared run condition: the match is live and directly interactive — the `Playing` phase with no
+/// overlay covering it. Replaces the `in_state(MatchPhase::Playing).and_then(in_state(Overlay::None))`
+/// literal that gameplay, visuals, ui and pause each repeated. `MatchPhase` is a sub-state (absent
+/// outside `Screen::Match`), so the `Option` mirrors `in_state`'s tolerance for a missing state
+/// resource — an absent phase reads as "not playing", never a panic.
+pub(crate) fn match_active(
+    phase: Option<Res<State<MatchPhase>>>,
+    overlay: Res<State<Overlay>>,
+) -> bool {
+    matches!(phase, Some(p) if *p.get() == MatchPhase::Playing) && *overlay.get() == Overlay::None
 }

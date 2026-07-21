@@ -32,11 +32,29 @@ label = "Lightcore"
 icon = "@mipmap/ic_launcher"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 
-[package.metadata.android.application.activity]
+# cargo-apk2 requires the activity as an array of tables (it supports multiple activities);
+# the single-table form worked with the older cargo-apk but errors as "expected a sequence".
+[[package.metadata.android.application.activity]]
+# bevy's `android-native-activity` feature runs inside Android's NativeActivity; cargo-apk2
+# (unlike cargo-apk) does not default this, so it must be named explicitly.
+name = "android.app.NativeActivity"
 orientation = "portrait"
 launch_mode = "singleTask"
 config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|uiMode"
 exported = true
+
+# NativeActivity must be told which native library holds `android_main` (from bevy's `#[bevy_main]`);
+# it is `liblightcore.so` → lib_name "lightcore". cargo-apk injected this automatically, cargo-apk2
+# does not, so without it the app installs but crashes on launch (no library to load).
+[[package.metadata.android.application.activity.meta_data]]
+name = "android.app.lib_name"
+value = "lightcore"
+
+# Make the app launchable from the home screen (MAIN + LAUNCHER). cargo-apk added this implicitly;
+# cargo-apk2 does not, so without it the app installs but has no icon to tap.
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
 
 [dependencies]
 bevy = { workspace = true }
