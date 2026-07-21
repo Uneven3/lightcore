@@ -1,2 +1,7 @@
+[build]
+# Keep Lightcore final artifacts local to the Lightcore project while dependency
+# intermediates are shared by the root workspace build-dir.
+target-dir = "target"
+
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
